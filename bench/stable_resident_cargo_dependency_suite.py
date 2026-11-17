@@ -72,7 +72,7 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
             root_native_frozen=False, idle_authorized=False,
             expected_compiler_sha256=None, expected_driver_sha256=None,
             expected_cargo_sha256=None, expected_client_sha256=None, runner=None,
-            evict_inputs=False):
+            evict_inputs=False, decoder_cache=False):
     if root_native_frozen is not True or idle_authorized is not True:
         raise ValueError('Root native freeze and idle authorization required before execution')
     if type(repetitions) is not int or repetitions < 2 or repetitions % 2:
@@ -98,7 +98,7 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
     report = dict(schema=SCHEMA, verdict='incomplete', claim=CLAIM,
                   provenance=dict(attestation=attested, expected=expected, host=host,
                                   root_native_frozen=True, idle_authorized=True,
-                                  repetitions=repetitions, timeout=timeout, evict_inputs=evict_inputs,
+                                  repetitions=repetitions, timeout=timeout, evict_inputs=evict_inputs, decoder_cache=decoder_cache,
                                   original_b64=shared.native.encoded(original),
                                   helpers={Path(module.__file__).name: shared.native.digest(Path(module.__file__))
                                            for module in (acceptance, shared, safety, shared.native, shared.dogfood)},
@@ -118,7 +118,7 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
                 try:
                     pair['arms'][mode] = acceptance.capture_arm(
                         compiler, cargo, fixture, arm, mode, workload, timeout, invoke,
-                        require_resident_root=True, owned_batch=True, evict_inputs=evict_inputs)
+                        require_resident_root=True, owned_batch=True, evict_inputs=evict_inputs, decoder_cache=decoder_cache)
                 finally:
                     receipt = arm / 'receipt.json'
                     if receipt.exists():
@@ -203,12 +203,18 @@ def validate(report):
                 if mode == 'on':
                     if provenance.get('evict_inputs', False):
                         acceptance.validate_input_watch(row['trace'])
-                    acceptance.validate_owned_batch(stage, row['trace'], previous_root)
-                    previous_root = acceptance.validate_root_transition(stage, residency, previous_root)
+                    decoder_cache = provenance.get('decoder_cache', False)
+                    acceptance.validate_owned_batch(stage, row['trace'], previous_root, decoder_cache)
+                    prior_root = previous_root
+                    previous_root = acceptance.validate_root_transition(stage, residency, previous_root, decoder_cache)
                     if previous_root is not None and stage['name'] != 'dependency-error':
                         roots = [e for e in row['trace'] if e.get('event') == 'complete'
                                  and e.get('crate_name') == 'dependency_fallback_root']
                         previous_root['owned_revisions'] = roots[0]['result']['owned']['revisions']
+                        if decoder_cache:
+                            acceptance.validate_decoders(stage, roots[0]['result'], prior_root)
+                            previous_root['decoder_retired'] = roots[0]['result']['decoder']['retired']
+                            previous_root['decoder_hits'] = roots[0]['result']['decoder']['hits']
                 cargo = row['cargo']
                 wall = cargo['invocation_wall_seconds']
                 if type(wall) not in (int, float) or not math.isfinite(wall) or wall <= 0:
@@ -226,6 +232,8 @@ def validate(report):
                         or env.get('JUSTRUST_RUSTC_RESIDENT_FRONTEND') != '0'
                         or env.get('JUSTRUST_CARGO_RESIDENT_OWNED') != '1'
                         or env.get('JUSTRUST_CARGO_RESIDENT_EXTERNAL') != '1'
+                        or env.get('JUSTRUST_CARGO_RESIDENT_DECODERS', '0') != (
+                            '1' if provenance.get('decoder_cache', False) else '0')
                         or env.get('JUSTRUST_CARGO_RESIDENT_EVICT', '0') != (
                             '1' if provenance.get('evict_inputs', False) else '0')):
                     raise ValueError('Invocation environment mismatch')
@@ -279,6 +287,7 @@ def main():
     parser.add_argument('--timeout', type=float, default=180)
     parser.add_argument('--root-native-frozen', action='store_true')
     parser.add_argument('--idle-authorized', action='store_true')
+    parser.add_argument('--decoder-cache', action='store_true')
     parser.add_argument('--evict-inputs', action='store_true')
     print(json.dumps(capture(**vars(parser.parse_args()))['summary']))
 

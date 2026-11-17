@@ -192,13 +192,16 @@ def validate_trace(stage, events, mode, require_resident_root=False):
         else 'no resident complete events'))
 
 
-def validate_root_transition(stage, residency, previous):
+def validate_root_transition(stage, residency, previous, decoder_cache=False):
     """Require stable worker generations on root-only changes, new keys on dep changes."""
     current = residency.get('root')
     if current is None:
         return previous
     if previous is not None:
-        if stage['root_only']:
+        if stage['root_only'] and decoder_cache and previous.get('decoder_retired'):
+            if current['pid'] == previous['pid']:
+                raise AssertionError('Retired decoder owner was reused')
+        elif stage['root_only']:
             if (current['key'], current['pid']) != (previous['key'], previous['pid']):
                 raise AssertionError('Root-only edit/error/recovery replaced the resident worker')
             # Request IDs belong to each short-lived Cargo client, not the
@@ -209,7 +212,7 @@ def validate_root_transition(stage, residency, previous):
     return current
 
 
-def validate_owned_batch(stage, events, previous):
+def validate_owned_batch(stage, events, previous, decoder_cache=False):
     roots = [event for event in events if event.get('event') == 'complete'
              and event.get('crate_name') == 'dependency_fallback_root']
     if stage['name'] == 'dependency-error':
@@ -224,8 +227,28 @@ def validate_owned_batch(stage, events, previous):
             or owned['contexts'] < 1):
         raise AssertionError('Actual retained compiler batch telemetry missing')
     if (stage['root_only'] and previous is not None
+            and not (decoder_cache and previous.get('decoder_retired'))
             and owned['revisions'] <= previous.get('owned_revisions', 0)):
         raise AssertionError('Owned compiler revision did not advance')
+
+
+def validate_decoders(stage, result, previous):
+    stats = result.get('decoder', {})
+    if stats.get('enabled') is not True or result.get('owned', {}).get('external_decoders') is not True:
+        raise AssertionError('Managed decoder retention was not enabled')
+    for name in ('hits', 'misses', 'rejected', 'publications', 'retained_entries'):
+        if type(stats.get(name)) is not int or stats[name] < 0:
+            raise AssertionError('Malformed managed decoder counters')
+    if type(stats.get('retired')) is not bool:
+        raise AssertionError('Malformed decoder retirement')
+    if stage['expectation'] == 'error':
+        if stats['retired'] is not True or result.get('retire') is not True:
+            raise AssertionError('Failed revision did not retire its decoder owner')
+    elif stats['retired']:
+        raise AssertionError('Successful fixture rejected decoder retention')
+    elif stage['root_only'] and previous and not previous.get('decoder_retired'):
+        if stats['hits'] <= previous.get('decoder_hits', 0):
+            raise AssertionError('Root edit did not increase actual managed decoder hits')
 
 
 def validate_input_watch(trace):
@@ -237,7 +260,7 @@ def validate_input_watch(trace):
 
 
 def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
-                require_resident_root=False, owned_batch=False, evict_inputs=False):
+                require_resident_root=False, owned_batch=False, evict_inputs=False, decoder_cache=False):
     arm.mkdir(mode=0o700)
     workers = shared.private_directory(arm / 'workers')
     trace = arm / 'trace.jsonl'
@@ -249,6 +272,7 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
         # The owned compiler's lifecycle is separate from the snapshot-only
         # frontend experiment. Compare the same disabled setting in both arms.
         env['JUSTRUST_RUSTC_RESIDENT_FRONTEND'] = '0'
+    env['JUSTRUST_CARGO_RESIDENT_DECODERS'] = '1' if decoder_cache else '0'
     env['JUSTRUST_CARGO_RESIDENT_EVICT'] = '1' if evict_inputs else '0'
     report = dict(mode=mode, verdict='incomplete', observations=[])
     try:
@@ -285,14 +309,19 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
             if evict_inputs and mode == 'on':
                 validate_input_watch(row['trace'])
             if owned_batch and mode == 'on':
-                validate_owned_batch(stage, row['trace'], previous_root)
+                validate_owned_batch(stage, row['trace'], previous_root, decoder_cache)
             if require_resident_root and mode == 'on':
-                previous_root = validate_root_transition(stage, row['residency'], previous_root)
+                prior_root = previous_root
+                previous_root = validate_root_transition(stage, row['residency'], previous_root, decoder_cache)
                 if owned_batch and previous_root is not None:
                     roots = [event for event in row['trace'] if event.get('event') == 'complete'
                              and event.get('crate_name') == 'dependency_fallback_root']
                     if roots:
                         previous_root['owned_revisions'] = roots[0]['result']['owned']['revisions']
+                        if decoder_cache:
+                            validate_decoders(stage, roots[0]['result'], prior_root)
+                            previous_root['decoder_retired'] = roots[0]['result']['decoder']['retired']
+                            previous_root['decoder_hits'] = roots[0]['result']['decoder']['hits']
         report['verdict'] = 'passed'
     except BaseException as error:
         report.update(verdict='failed', error=f'{type(error).__name__}: {error}')

@@ -369,6 +369,27 @@ class DependencyAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'normal-off'):
             subject.validate_trace(stage, [event], 'off', True)
 
+    def test_decoder_hits_and_failed_owner_retirement_required(self):
+        stage = dict(expectation='success', root_only=True)
+        result = dict(owned=dict(external_decoders=True), retire=False,
+                      decoder=dict(enabled=True, hits=3, misses=1, rejected=0,
+                                   publications=2, retained_entries=1, retired=False))
+        subject.validate_decoders(stage, result, dict(decoder_hits=2))
+        with self.assertRaisesRegex(AssertionError, 'actual managed decoder hits'):
+            subject.validate_decoders(stage, result, dict(decoder_hits=3))
+        stage['expectation'] = 'error'
+        with self.assertRaisesRegex(AssertionError, 'retire its decoder owner'):
+            subject.validate_decoders(stage, result, None)
+        result['decoder']['retired'] = True
+        result['retire'] = True
+        subject.validate_decoders(stage, result, None)
+        previous = dict(key='a' * 64, pid=44, decoder_retired=True)
+        current = dict(root=dict(key='a' * 64, pid=45))
+        subject.validate_root_transition(dict(root_only=True), current, previous, True)
+        current['root']['pid'] = 44
+        with self.assertRaisesRegex(AssertionError, 'Retired decoder owner'):
+            subject.validate_root_transition(dict(root_only=True), current, previous, True)
+
     def test_timeout_and_long_socket_paths_rejected(self):
         for timeout in (0, float('inf'), float('nan')):
             with self.assertRaises(ValueError):

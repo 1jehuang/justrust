@@ -535,12 +535,15 @@ fn serve_requests(
                 // Incremental control uses fresh query state with the active
                 // source revision view, never external live typed queries.
                 return crate::catch_fatal_errors(|| {
-                    rustc_interface::resident::with_resident_compiler_batch_options(
+                    rustc_interface::resident::with_resident_compiler_batch_options_and_decoders(
                         config,
                         rustc_interface::resident::ResidentBatchOptions {
                             incremental_control: true,
                             ..Default::default()
                         },
+                        owned_selection(
+                            std::env::var_os("JUSTRUST_CARGO_RESIDENT_DECODERS").as_deref(),
+                        ),
                         move |batch, config| {
                             serve_requests(
                                 listener,
@@ -671,7 +674,11 @@ fn serve_requests(
         }
         let watch_changed = watch.as_ref().is_some_and(|watch| watch.changed().unwrap_or(true));
         let owned_counts = batch.map(|batch| batch.counts());
+        let decoder_enabled = batch.is_some()
+            && owned_selection(std::env::var_os("JUSTRUST_CARGO_RESIDENT_DECODERS").as_deref());
+        let decoder = batch.map(|batch| batch.decoder_stats());
         let retire = revision == 64
+            || decoder_enabled && decoder.is_some_and(|stats| stats.retired)
             || watch_changed
             || external_changed
             || rss.is_none_or(|rss| rss >= RSS_LIMIT)
@@ -680,7 +687,7 @@ fn serve_requests(
             let (revisions, contexts) = batch.counts();
             let live = batch.live_stats();
             json!({"enabled":true,"revisions":revisions,"contexts":contexts,
-                "live_queries":false,"external_decoders":false,"incremental_control":true,
+                "live_queries":false,"external_decoders":decoder_enabled,"incremental_control":true,
                 "retained_entries":live.retained_entries,
                 "retained_estimated_bytes":live.retained_estimated_bytes})
         });
@@ -694,6 +701,13 @@ fn serve_requests(
             "frontend":{"graph_hits":graph.hits,"graph_misses":graph.misses,"graph_bytes":graph.retained_bytes,
                 "archive_hits":archive.hits,"archive_misses":archive.misses,"archive_bytes":archive.current_bytes,
                 "value_loads":archive.value_loads,"typeck_loads":archive.typeck_loads,"mir_loads":archive.mir_loads}});
+        if let Some(stats) = decoder {
+            reply["decoder"] = json!({"enabled":decoder_enabled,"hits":stats.hits,
+                "misses":stats.misses,"rejected":stats.rejected,
+                "publications":stats.publications,"retained_entries":stats.retained_entries,
+                "retired":stats.retired,"retirement_requests":stats.retirement_requests,
+                "selection_nanos":stats.selection_nanos,"publication_nanos":stats.publication_nanos});
+        }
         if let Some(owned_stats) = owned_stats {
             reply["owned"] = owned_stats;
         }

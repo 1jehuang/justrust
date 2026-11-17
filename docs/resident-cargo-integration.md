@@ -317,6 +317,29 @@ The comprehensive published baseline stopped at point 8 because remote CPU
 samples were too short for its provenance gate. That result is invalid for a
 general speed comparison, and the tenfold target remains unmet.
 
+## Managed external decoder Cargo experiment (2026-11-17)
+
+`JUSTRUST_CARGO_RESIDENT_DECODERS=1`, together with the explicit owned compiler
+mode, connects the managed native decoder scope to actual Cargo requests. It
+never enables live typed queries. Decoder retirement is honored after flushing
+the actual result, including failed revisions. The dependency oracle requires
+increasing real hit counters on root-only edits, a retired owner after errors,
+and a new process for recovery. All other content and scheduler gates remain.
+
+The frozen hosted candidate passed native check/build, 28 driver tests,
+38 Python tests and the actual-client n=2 dependency suite with strict decoder
+hit assertions. Each root first missed 23 decoders, then reported 23 hits on
+its edit and 46 cumulative hits on its error. Recovery used a new owner.
+Exact original: `bench/stable-resident-cargo-decoders-20261117-1352`, driver
+`abc47ade0885457b9ce81ce613b0bb610769c28901159f15037182395f5b4ce8`.
+
+This is correctness and overhead attribution, not a speedup. First publication
+cost approximately 40–49 ms, repeated selection approximately 15 ms, and final
+live-worker RSS approximately 643 MB. This mode remains default-off and is not
+recommended for ordinary compiles. Useful decoder hits alone do not justify
+activation. Lower publication/selection cost and representative real-project
+measurements are still required, as is actual useful typed-query reuse.
+
 ## Performance status and next gate
 
 The focused gate above adds actual-client timing evidence, but no tenfold,
