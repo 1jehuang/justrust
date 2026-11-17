@@ -3,6 +3,7 @@
 import base64
 import copy
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -67,9 +68,10 @@ class OwnLoopTests(unittest.TestCase):
         return run, calls
 
     def capture(self, root, commands=('check', 'build'), *, diagnostic_on_only=False,
-                repetitions=2, **runner_options):
+                repetitions=2, macro_shm=False, **runner_options):
         source, options, attestation = self.prepare(root)
-        options.update(diagnostic_on_only=diagnostic_on_only, repetitions=repetitions)
+        options.update(diagnostic_on_only=diagnostic_on_only, repetitions=repetitions,
+                       macro_shm=macro_shm)
         original = source.read_bytes()
         stat = source.stat()
         runner, calls = self.runner(**runner_options)
@@ -375,6 +377,92 @@ class OwnLoopTests(unittest.TestCase):
                     bad['provenance']['attestation'][change]['sha256'] = 'c' * 64
                 with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'Provenance mismatch'):
                     suite.compare(before, bad, **approval)
+
+    def test_macro_shm_mode_is_explicit_and_overrides_inheritance_in_both_arms(self):
+        for mode in (False, True):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                with patch.dict(os.environ, JUSTRUST_CARGO_RESIDENT_MACRO_SHM='0' if mode else '1'):
+                    report, calls, _ = self.capture(Path(directory), macro_shm=mode)
+                self.assertIs(report['provenance']['macro_shm'], mode)
+                self.assertEqual(len(calls), 40)
+                self.assertEqual({env['JUSTRUST_CARGO_RESIDENT_MACRO_SHM']
+                                  for _, _, _, env in calls}, {'1' if mode else '0'})
+                self.assertEqual(set(suite.validate(report)), {'check', 'build'})
+        for value in (None, 0, 1, '1'):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'Macro SHM'):
+                suite.capture(None, None, None, None, macro_shm=value)
+
+    def test_macro_shm_provenance_and_environment_tampering_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report, _, _ = self.capture(Path(directory))
+            for value in (None, 0, 1, '0', True):
+                bad = copy.deepcopy(report)
+                if value is None:
+                    bad['provenance'].pop('macro_shm')
+                else:
+                    bad['provenance']['macro_shm'] = value
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    suite.validate(bad)
+            for mode in ('off', 'on'):
+                for value in (None, '1', True):
+                    bad = copy.deepcopy(report)
+                    env = bad['repetitions'][0]['arms'][mode]['observations'][0]['cargo']['invocation']['environment']
+                    if value is None:
+                        env.pop('JUSTRUST_CARGO_RESIDENT_MACRO_SHM')
+                    else:
+                        env['JUSTRUST_CARGO_RESIDENT_MACRO_SHM'] = value
+                    with self.subTest(mode=mode, value=value), self.assertRaisesRegex(ValueError, 'environment mismatch'):
+                        suite.validate(bad)
+
+    def test_macro_shm_compare_requires_exact_explicit_modes_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            before, _, _ = self.capture(Path(directory))
+            after = copy.deepcopy(before)
+            after['provenance']['macro_shm'] = True
+            for pair in after['repetitions']:
+                for arm in pair['arms'].values():
+                    for row in arm['observations']:
+                        row['cargo']['invocation']['environment']['JUSTRUST_CARGO_RESIDENT_MACRO_SHM'] = '1'
+            with self.assertRaisesRegex(ValueError, 'Provenance mismatch'):
+                suite.compare(before, after)
+            approval = dict(expected_before_macro_shm=False, expected_after_macro_shm=True)
+            self.assertEqual(set(suite.compare(before, after, **approval)), {'check', 'build'})
+            for overrides in (dict(expected_after_macro_shm=None), dict(expected_before_macro_shm=None),
+                              dict(expected_before_macro_shm=True), dict(expected_after_macro_shm=False),
+                              dict(expected_before_macro_shm=0), dict(expected_after_macro_shm=1)):
+                with self.subTest(overrides=overrides), self.assertRaisesRegex(ValueError, 'macro SHM mode mismatch'):
+                    suite.compare(before, after, **(approval | overrides))
+            for name in ('compiler', 'driver', 'cargo', 'client'):
+                bad = copy.deepcopy(after)
+                bad['provenance']['attestation'][name]['sha256'] = 'c' * 64
+                bad['provenance']['expected'][name + '_sha256'] = 'c' * 64
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'Provenance mismatch'):
+                    suite.compare(before, bad, **approval)
+            bad = copy.deepcopy(after)
+            for pair in bad['repetitions']:
+                for arm in pair['arms'].values():
+                    for row in arm['observations']:
+                        row['cargo']['invocation']['environment']['RUSTC'] = '/unauthorized/compiler'
+            with self.assertRaisesRegex(ValueError, 'environment mismatch'):
+                suite.compare(before, bad, **approval)
+            changed_compiler = copy.deepcopy(after)
+            hashes = {}
+            for name, digest in (('compiler', 'a' * 64), ('driver', 'b' * 64)):
+                changed_compiler['provenance']['attestation'][name].update(sha256=digest, path='/new/' + name)
+                changed_compiler['provenance']['expected'][name + '_sha256'] = digest
+                hashes['expected_before_' + name + '_sha256'] = before['provenance']['expected'][name + '_sha256']
+                hashes['expected_after_' + name + '_sha256'] = digest
+            for pair in changed_compiler['repetitions']:
+                for arm in pair['arms'].values():
+                    for row in arm['observations']:
+                        row['cargo']['invocation']['environment']['RUSTC'] = '/new/compiler'
+            self.assertEqual(set(suite.compare(before, changed_compiler, **approval, **hashes)), {'check', 'build'})
+            partial = dict(hashes)
+            partial.pop('expected_after_driver_sha256')
+            with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+                suite.compare(before, changed_compiler, **approval, **partial)
+            with self.assertRaisesRegex(ValueError, 'Provenance mismatch'):
+                suite.compare(before, changed_compiler, **hashes)
 
     def test_console_summary_does_not_emit_raw_receipt_or_mutate_it(self):
         report = dict(schema=suite.SCHEMA, verdict='passed', claim=suite.CLAIM,
