@@ -587,6 +587,31 @@ original readback. This is native decoder correctness and telemetry only. It doe
 not prove external typed-query reuse, natural Typeck hits, hosted acceptance, a
 speedup or default readiness.
 
+### Focused decoder baseline: correctness is not a speedup
+
+The attested `bench/suite.py stable-native-decoder` diagnostic measures ordinary
+std rlib producer invocation wall time with independent fresh consumer oracles.
+Fresh, persistent-process control and decoder-enabled arms are counterbalanced.
+Other retention caches remain disabled. Two CPU-affinity-pinned captures with
+32 items, six edits and three repetitions (18 timed invocations per arm) used the
+exact frozen 0620 launcher and driver above, the same boot and workload inputs.
+
+| Capture | Fresh median | Process control | Decoder enabled | Decoder/control |
+| --- | ---: | ---: | ---: | ---: |
+| `0630-before-a` | 29.898 ms | 16.856 ms | 172.072 ms | 10.2082x |
+| `0630-before-b` | 26.482 ms | 15.677 ms | 121.051 ms | 7.7216x |
+
+`bench/suite.py compare` accepted the matching capture provenance. The complete
+originals are stored as
+`bench/stable-resident-decoder-suite-20261117-0630-before-{a,b}`, with exact
+authenticated JSON readback and unchanged original bytes verified. The smaller
+`0623-diagnostic` original is also retained separately. These measurements show
+substantial overhead, not an optimization result or a general performance ceiling.
+They motivate eliminating repeated metadata copying and byte comparisons through
+actual immutable owned decoder input storage. That proposed optimization requires
+its own native correctness and attested before/after gates. No production default,
+external typed-query admission or broad synthetic performance claim changes.
+
 ## Native Cargo routing boundary
 
 **Update, 2026-11-17:** explicit std-only native Cargo and actual justrust client
