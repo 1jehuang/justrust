@@ -1459,6 +1459,22 @@ def load_scheduler_hints(path: Path) -> tuple[bytes, dict]:
         raise ValueError("cannot read a valid bounded cost hint table") from error
 
 
+RESIDENT_VALUE_CONTROLS = (
+    "JUSTRUST_CARGO_RESIDENT", "JUSTRUST_CARGO_RESIDENT_OWNED",
+    "JUSTRUST_CARGO_RESIDENT_EXTERNAL", "JUSTRUST_CARGO_RESIDENT_MACROS",
+    "JUSTRUST_CARGO_RESIDENT_MACRO_SHM", "JUSTRUST_CARGO_RESIDENT_MACRO_SPINS",
+    "JUSTRUST_RUSTC_RESIDENT_FRONTEND",
+)
+RESIDENT_PATH_CONTROLS = (
+    "JUSTRUST_CARGO_RESIDENT_DIR", "JUSTRUST_CARGO_RESIDENT_TRACE",
+)
+UNSUPPORTED_RESIDENT_CONTROLS = (
+    # These are not the native Cargo own-loop control names.
+    "JUSTRUST_CARGO_RESIDENT_PROC_MACROS", "JUSTRUST_RUSTC_RESIDENT_MACRO_SHM",
+    "JUSTRUST_RUSTC_RESIDENT_MACRO_SHM_SPINS",
+)
+
+
 OPTIMIZATION_CONTROLS = (
     "JUSTRUST_SHADOW",
     "JUSTRUST_LOCALCACHE", "JUSTRUST_LOCALCACHE_TARGET_BOUND",
@@ -1473,6 +1489,7 @@ OPTIMIZATION_CONTROLS = (
     "JCODE_FRONTEND_THREADS", "JCODE_PARALLEL_FRONTEND",
     "RUST_TEST_THREADS",
     "JUSTRUST_TEST_PARALLEL", "JUSTRUST_TEST_JOBS", "JUSTRUST_TEST_SPLIT",
+    *RESIDENT_VALUE_CONTROLS,
 )
 
 
@@ -1480,12 +1497,22 @@ def synthetic_stack_controls() -> dict[str, str]:
     """Explicit single-stack suite controls, not implicit versus baselines.
 
     Paths belong only in the private child environment. Published provenance
-    uses optimization_env(), which replaces the optional hint path with a hash.
+    uses optimization_env(), which hashes hints and marks private resident paths.
     Remote routing and run IDs remain owned by the runner. Local policy is
     caller-controlled for this local single-stack workload only, never for
     implicit versus baselines. Do not write the persistent policy files.
     """
-    names = (*OPTIMIZATION_CONTROLS, "JUSTRUST_CARGO_CRITICAL_PATH_COSTS",
+    for name in UNSUPPORTED_RESIDENT_CONTROLS:
+        if name in os.environ:
+            raise ValueError(f"unsupported resident control: {name}")
+    if os.environ.get("JUSTRUST_CARGO_RESIDENT_OWNED") == "1":
+        for name in ("JUSTRUST_RUSTC_RESIDENT_TYPED", "JUSTRUST_RUSTC_RESIDENT_DECODERS",
+                     "JUSTRUST_RUSTC_RESIDENT_LEXER", "JUSTRUST_RUSTC_RESIDENT_AST",
+                     "JUSTRUST_RUSTC_RESIDENT_VALUES", "JUSTRUST_RUSTC_RESIDENT_FRONTEND"):
+            if os.environ.get(name, "0") != "0":
+                raise ValueError(f"unsupported owned resident experiment: {name}")
+    names = (*OPTIMIZATION_CONTROLS, *RESIDENT_PATH_CONTROLS,
+             "JUSTRUST_CARGO_CRITICAL_PATH_COSTS",
              "JUSTRUST_NO_UPDATE", "JUSTRUST_TOOLCHAIN_AUTO_INSTALL",
              "JUSTRUST_LOCAL", "JUSTRUST_LOCAL_REASON")
     return {name: os.environ[name] for name in names if name in os.environ}
@@ -1494,6 +1521,9 @@ def synthetic_stack_controls() -> dict[str, str]:
 def optimization_env() -> dict:
     """Only public performance controls, never credential-bearing environment."""
     controls = {name: os.environ[name] for name in OPTIMIZATION_CONTROLS if name in os.environ}
+    for name in RESIDENT_PATH_CONTROLS:
+        if name in os.environ:
+            controls[f"{name}_DECLARED"] = "1"
     hint_path = os.environ.get("JUSTRUST_CARGO_CRITICAL_PATH_COSTS")
     if hint_path:
         try:
