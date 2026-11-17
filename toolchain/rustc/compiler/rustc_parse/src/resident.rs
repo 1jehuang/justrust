@@ -259,7 +259,7 @@ mod tests {
         create_default_session_globals_then(|| {
             with_resident_lexer_cache(true, || {
                 let psess = ParseSess::new();
-                for text in ["(", "([)]", "// comment\nfn f() {}", "r#value", "\"text\""] {
+                for text in ["(", "([)]", "/// doc\nfn f() {}", "r#value", "\"text\""] {
                     let source = psess
                         .source_map()
                         .new_source_file(FileName::anon_source_code(text), text.to_owned());
@@ -345,6 +345,36 @@ mod tests {
                 assert!(lookup(&psess, &oldest.unwrap(), &StripTokens::Nothing).is_none());
                 assert!(!should_capture(&" ".repeat(MAX_SOURCE + 1)));
                 assert_eq!(stats().rejected, 1);
+            });
+        });
+    }
+
+    #[test]
+    fn ordinary_comments_and_attributes_replay_only_real_identifiers() {
+        create_default_session_globals_then(|| {
+            with_resident_lexer_cache(true, || {
+                let first = ParseSess::new();
+                let text = "#[inline] pub fn value() -> u64 { /* comment_only /* nested */ */ 7 // ignored_name\n}";
+                let source = first
+                    .source_map()
+                    .new_source_file(FileName::anon_source_code(text), text.to_owned());
+                let fresh =
+                    source_file_to_stream(&first, source.clone(), None, StripTokens::Nothing)
+                        .unwrap_or_else(|_| panic!("valid ordinary syntax"));
+                let next = session(first.clone_source_map());
+                let cached = source_file_to_stream(&next, source, None, StripTokens::Nothing)
+                    .unwrap_or_else(|_| panic!("ordinary syntax cache"));
+                assert_eq!(fresh, cached);
+                assert_eq!(stats().hits, 1);
+                assert_eq!(
+                    *first.symbol_gallery.symbols.lock(),
+                    *next.symbol_gallery.symbols.lock()
+                );
+                assert!(!next.symbol_gallery.symbols.lock().keys().any(|symbol| {
+                    matches!(symbol.as_str(), "comment_only" | "nested" | "ignored_name")
+                }));
+                assert!(next.buffered_lints.lock().is_empty());
+                assert!(next.raw_identifier_spans.get(0).is_none());
             });
         });
     }
