@@ -612,6 +612,41 @@ actual immutable owned decoder input storage. That proposed optimization require
 its own native correctness and attested before/after gates. No production default,
 external typed-query admission or broad synthetic performance claim changes.
 
+### Immutable decoder input ownership
+
+`9d624e385` changes metadata snapshots to strongly retained immutable `Arc<[u8]>`
+allocations. Only successful complete publication initializes the native bundle's
+`OnceLock`. A later selected decoder actually reads those owned bytes, rather than
+merely remembering the address of a mutable mapped artifact. Snapshot capture can
+clone an Arc without copying only when the actual blob has the same allocation
+and length. Incoming artifacts still require exact byte and numeric-map equality;
+source, translation and allocation-universe checks remain unchanged. Bulk snapshot
+allocation is fallible and budgeted. The existing native `slice_owned` wrapper
+retains its ordinary small infallible owner allocation and compiler OOM behavior.
+
+Driver checking, matching compiler/std builds, all 36 metadata tests plus two
+doctests and all 23 interface tests pass (`512644jlaf`). Those include actual
+loaded std decoding, dependency metadata replacement retirement and fresh-owner
+recovery, allocation identities and managed failure retirement. Eight new tests
+cover exact allocation reuse, changed mutable input, numeric/source gates,
+budgets, allocation failure, publication atomicity and actual blob substitution.
+
+The explicitly frozen local candidate has launcher SHA256
+`8cb4b7089e2e70cbd4832fdf53a24ef2e27db676dcc3632c2501134e6f3dd567`
+and driver SHA256
+`db3e40e8ab956191671df4873ec5b4a646bb4196dee21a2779fc4ead3837b152`.
+Strict ordinary std executable acceptance, error reply/EOF retirement and
+new-process recovery pass, as do default-off native guards and shipping-module
+dogfood. Exact unchanged originals are archived with authenticated JSON readback:
+
+- `bench/stable-resident-immutable-decoder-20261117-0641-native`
+- `bench/stable-resident-immutable-decoder-20261117-0642-default-guard`
+- `bench/stable-resident-immutable-decoder-20261117-0642-default-dogfood`
+
+This establishes correctness for the scoped ownership optimization. Performance
+must be measured separately; external typed admission and production defaults
+remain unchanged.
+
 ## Native Cargo routing boundary
 
 **Update, 2026-11-17:** explicit std-only native Cargo and actual justrust client
