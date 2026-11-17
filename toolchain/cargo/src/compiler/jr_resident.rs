@@ -71,6 +71,7 @@ mod linux {
     pub(super) fn eligible(cmd: &ProcessBuilder) -> bool {
         cmd.get_env("JUSTRUST_CARGO_RESIDENT_DIR").is_some()
             && Path::new(cmd.get_program()).is_absolute()
+            && cmd.is_jr_native_compiler()
             && cmd.is_unwrapped()
             && !cmd.has_jr_query_launch()
             && cmd.get_arg0().is_none()
@@ -560,6 +561,7 @@ mod linux {
         use super::*;
         fn test_command() -> ProcessBuilder {
             let mut cmd = ProcessBuilder::new("/owned/bin/rustc");
+            cmd.jr_native_compiler(true);
             cmd.env("JUSTRUST_CARGO_RESIDENT_DIR", "/private");
             for name in RECORDING {
                 cmd.env_remove(name);
@@ -722,6 +724,17 @@ mod linux {
         }
 
         #[test]
+        fn arbitrary_compiler_launchers_are_not_probed() {
+            let mut cmd = test_command();
+            assert!(eligible(&cmd));
+            cmd.jr_native_compiler(false);
+            assert!(!eligible(&cmd));
+            cmd.jr_native_compiler(true);
+            cmd.program("/launcher/bin/rustc");
+            assert!(!eligible(&cmd));
+        }
+
+        #[test]
         fn observation_is_normalized_but_incompatible_recording_refused() {
             let mut cmd = test_command();
             cmd.env("JUSTRUST_RUN_DIR", "/run/one")
@@ -767,6 +780,7 @@ mod linux {
         #[test]
         fn wrapper_is_never_unwrapped() {
             let mut cmd = ProcessBuilder::new("/owned/bin/rustc");
+            cmd.jr_native_compiler(true);
             cmd.env("JUSTRUST_CARGO_RESIDENT_DIR", "/private");
             cmd.args(&["--jobs-backend=1", "--jobs-linker=1", "main.rs"]);
             let cmd = cmd.wrapped(Some("wrapper"));

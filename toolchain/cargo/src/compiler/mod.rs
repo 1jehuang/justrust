@@ -342,6 +342,8 @@ fn rustc(
     let direct_native = exec.as_ref().type_id() == std::any::TypeId::of::<DefaultExecutor>()
         && build_runner.bcx.rustc().jr_query_binding_schema().is_some()
         && rustc.is_unwrapped();
+    #[cfg(target_os = "linux")]
+    rustc.jr_native_compiler(direct_native);
     let receipt_schema = build_runner
         .bcx
         .rustc()

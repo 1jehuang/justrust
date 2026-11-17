@@ -49,6 +49,8 @@ pub struct ProcessBuilder {
     stderr: Option<Stdio>,
     #[cfg(target_os = "linux")]
     jr_query_launch: Option<jr_query_binding::Launch>,
+    #[cfg(target_os = "linux")]
+    jr_native_compiler: bool,
 }
 
 impl fmt::Display for ProcessBuilder {
@@ -83,6 +85,19 @@ impl ProcessBuilder {
     #[cfg(target_os = "linux")]
     pub fn jr_query_launch(&mut self, launch: jr_query_binding::Launch) {
         self.jr_query_launch = Some(launch);
+    }
+
+    /// Mark only the direct compiler whose owned capability Cargo has probed.
+    /// This private launch state never changes the logical environment or args.
+    #[cfg(target_os = "linux")]
+    pub fn jr_native_compiler(&mut self, native: bool) {
+        self.jr_native_compiler = native;
+    }
+
+    /// Whether Cargo recognized this executable as a direct owned compiler.
+    #[cfg(target_os = "linux")]
+    pub fn is_jr_native_compiler(&self) -> bool {
+        self.jr_native_compiler
     }
 
     /// Whether this command already carries per-process native observation.
@@ -142,12 +157,18 @@ impl ProcessBuilder {
             stderr: None,
             #[cfg(target_os = "linux")]
             jr_query_launch: None,
+            #[cfg(target_os = "linux")]
+            jr_native_compiler: false,
         }
     }
 
     /// (chainable) Sets the executable for the process.
     pub fn program<T: AsRef<OsStr>>(&mut self, program: T) -> &mut ProcessBuilder {
         self.program = program.as_ref().to_os_string();
+        #[cfg(target_os = "linux")]
+        {
+            self.jr_native_compiler = false;
+        }
         self
     }
 
