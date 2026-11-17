@@ -280,6 +280,83 @@ mod external_tests {
     with_api!(test_server, Self::TokenStream, Self::Span, Self::Symbol);
 
     #[test]
+    fn pure_concatenation_failures_stay_inside_extend() {
+        // Even concatenation of already converted streams or punctuation is a
+        // fallible bridge operation. Deferring it past Extend changes which
+        // catch_unwind observes the failure and when user destructors run.
+        for streams in [false, true] {
+            for negotiated in [false, true] {
+                fn invoke(input: crate::TokenStream, streams: bool) -> crate::TokenStream {
+                    struct ObserveDrop<'a>(&'a std::cell::RefCell<Vec<&'static str>>);
+
+                    impl Drop for ObserveDrop<'_> {
+                        fn drop(&mut self) {
+                            self.0.borrow_mut().push("drop");
+                        }
+                    }
+
+                    let events = std::cell::RefCell::new(Vec::new());
+                    let mut output = input.clone();
+                    let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                        let _guard = ObserveDrop(&events);
+                        if streams {
+                            output.extend([input.clone()]);
+                        } else {
+                            output.extend([crate::TokenTree::Punct(crate::Punct::new(
+                                '+',
+                                crate::Spacing::Joint,
+                            ))]);
+                        }
+                        events.borrow_mut().push("after extend");
+                    }));
+                    assert!(result.is_err(), "concatenation failure escaped Extend");
+                    assert_eq!(*events.borrow(), ["drop"]);
+                    // The eager implementation takes the destination before
+                    // dispatch. Failure must not replay its consumed handles.
+                    assert!(output.is_empty());
+                    input
+                }
+                let client = if streams {
+                    client::Client::expand1(|input| invoke(input, true))
+                } else {
+                    client::Client::expand1(|input| invoke(input, false))
+                };
+                let mut failures = 0;
+                let result = run1_external(TestServer, vec![9], |dispatcher, input| {
+                    Ok(client.run_external_bytes(
+                        input,
+                        |request| {
+                            assert_ne!(request.first(), Some(&DROP_BATCH_TAG));
+                            let mut reader = &request[..];
+                            let method = ApiTags::decode(&mut reader, &mut ());
+                            if matches!(
+                                method,
+                                ApiTags::ts_concat_trees | ApiTags::ts_concat_streams
+                            ) {
+                                failures += 1;
+                                let mut response = Buffer::new();
+                                Result::<(), PanicMessage>::Err(PanicMessage::StaticStr(
+                                    "pure concatenation transport failure",
+                                ))
+                                .encode(&mut response, &mut ());
+                                return response.to_vec();
+                            }
+                            if negotiated {
+                                dispatcher.dispatch_bytes(request)
+                            } else {
+                                dispatcher.dispatch(Buffer::from(request)).to_vec()
+                            }
+                        },
+                        false,
+                    ))
+                });
+                assert_eq!(result.unwrap_or_else(|_| panic!("failure escaped client")), vec![9]);
+                assert_eq!(failures, 1);
+            }
+        }
+    }
+
+    #[test]
     fn legacy_and_unknown_trailers_never_receive_envelopes() {
         let mut extended_capability = DROP_BATCH_CAPABILITY.to_vec();
         extended_capability.push(0);
