@@ -357,7 +357,19 @@ fn account_lines(state: &State, width: usize) -> Vec<Line<'static>> {
 
 fn account(f: &mut Frame, area: Rect, state: &State, lines: Vec<Line<'static>>) {
     let s = &state.snapshot;
-    let status = if s.hosted_error.is_some() {
+    let status = if state.account_cached {
+        vec![
+            span("◌ ", WARN),
+            strong(
+                if s.hosted_error.is_some() {
+                    "cached · offline"
+                } else {
+                    "cached · refreshing"
+                },
+                WARN,
+            ),
+        ]
+    } else if s.hosted_error.is_some() {
         vec![span("● ", BAD), strong("offline", BAD)]
     } else if state.refreshing {
         vec![span("◌ ", ACCENT), strong("refreshing", ACCENT)]
@@ -370,7 +382,12 @@ fn account(f: &mut Frame, area: Rect, state: &State, lines: Vec<Line<'static>>) 
         .hosted_at
         .map(|at| {
             format!(
-                "updated {} ago",
+                "{} {} ago",
+                if state.account_cached {
+                    "cached"
+                } else {
+                    "updated"
+                },
                 crate::status::dur((crate::paths::now() - at).max(0.0))
             )
         })
@@ -502,20 +519,35 @@ fn version_lines(v: &Versions, width: usize) -> Vec<Line<'static>> {
 }
 
 fn versions_card(v: &Versions) -> Card {
-    let status = match (v.currency(), v.drives_toolchain()) {
-        (_, Some(false)) => vec![span("▲ ", BAD), strong("update required", BAD)],
-        (Currency::Behind(_), _) => vec![span("▲ ", WARN), strong("update available", WARN)],
-        (Currency::Current, _) => vec![span("● ", GOOD), strong("up to date", GOOD)],
-        (Currency::Ahead, _) => vec![span("● ", ACCENT), strong("ahead of release", ACCENT)],
-        (Currency::Unknown, _) if v.error.is_some() => {
-            vec![span("● ", BAD), strong("unreachable", BAD)]
+    let status = if v.cached {
+        vec![
+            span("◌ ", WARN),
+            strong(
+                if v.error.is_some() {
+                    "cached · offline"
+                } else {
+                    "cached · refreshing"
+                },
+                WARN,
+            ),
+        ]
+    } else {
+        match (v.currency(), v.drives_toolchain()) {
+            (_, Some(false)) => vec![span("▲ ", BAD), strong("update required", BAD)],
+            (Currency::Behind(_), _) => vec![span("▲ ", WARN), strong("update available", WARN)],
+            (Currency::Current, _) => vec![span("● ", GOOD), strong("up to date", GOOD)],
+            (Currency::Ahead, _) => vec![span("● ", ACCENT), strong("ahead of release", ACCENT)],
+            (Currency::Unknown, _) if v.error.is_some() => {
+                vec![span("● ", BAD), strong("unreachable", BAD)]
+            }
+            (Currency::Unknown, _) => vec![span("◌ ", ACCENT), strong("checking", ACCENT)],
         }
-        (Currency::Unknown, _) => vec![span("◌ ", ACCENT), strong("checking", ACCENT)],
     };
     let footer =
         v.at.map(|at| {
             format!(
-                "checked {} ago",
+                "{} {} ago",
+                if v.cached { "cached" } else { "checked" },
                 crate::status::dur((crate::paths::now() - at).max(0.0))
             )
         })
@@ -770,10 +802,13 @@ fn selected_lines(state: &State, width: usize) -> Vec<Line<'static>> {
 fn history(f: &mut Frame, area: Rect, state: &State) {
     let rows = state.rows();
     let active = &state.snapshot.active;
-    let note = match active.len() {
+    let mut note = match active.len() {
         0 => count(rows.len() as i64),
         n => format!("{} · {n} building", count(rows.len() as i64)),
     };
+    if state.local_cached || state.history_cached {
+        note.push_str(" · cached, refreshing");
+    }
     let inner = Card::new("Runs")
         .note(note)
         .status(filter_status(state))
@@ -1816,6 +1851,32 @@ mod tests {
         assert!(screen(&state, 140, 40).contains("(enter to type)"));
         // The popup never exceeds a small terminal.
         screen(&state, 24, 8);
+    }
+
+    #[test]
+    fn cached_account_history_profiles_and_versions_remain_visible_and_labeled() {
+        let mut state = State {
+            account_cached: true,
+            history_cached: true,
+            local_cached: true,
+            refreshing: true,
+            ..Default::default()
+        };
+        state.snapshot.account = Some(crate::remote_hosted::Me {
+            email: Some("cached-account".into()),
+            ..Default::default()
+        });
+        state.snapshot.hosted_at = Some(crate::paths::now() - 20.0);
+        state.versions = versions("0.1.0-alpha.26", "0.1.0-alpha.26");
+        state.versions.cached = true;
+        let text = screen(&state, 180, 55);
+        assert!(text.contains("cached-account"), "{text}");
+        assert!(text.contains("cached · refreshing"), "{text}");
+        assert!(text.contains("cached, refreshing"), "{text}");
+        assert!(text.contains("jr-ac20de5e7921"), "{text}");
+        state.snapshot.hosted_error = Some("offline".into());
+        state.versions.error = Some("offline".into());
+        assert!(screen(&state, 180, 55).contains("cached · offline"));
     }
 
     #[test]

@@ -224,7 +224,7 @@ pub(crate) struct Snapshot {
     pub hosted_at: Option<f64>,
 }
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RunRow {
     pub id: String,
     pub start: f64,
@@ -245,20 +245,21 @@ pub(crate) struct RunRow {
     pub compile: Option<CompileTimes>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct HostedSnapshot {
     pub account: crate::remote_hosted::Me,
     pub runs: Vec<RunRow>,
     pub history_error: Option<String>,
+    #[serde(skip)]
+    pub cache_scope: Option<String>,
 }
 
 /// An independent local update. The caller retains last-good hosted data.
-pub(crate) fn local_snapshot(cache: &mut TimeCache) -> Snapshot {
+pub(crate) fn local_snapshot(
+    cache: &mut TimeCache,
+    history_ready: impl FnOnce(&[RunRow]),
+) -> Snapshot {
     let mut snapshot = Snapshot::default();
-    match crate::status::collect() {
-        Ok(status) => snapshot.active = status.active,
-        Err(error) => snapshot.local_error = Some(format!("Active builds: {error:#}")),
-    }
     let rows = (|| -> Result<Vec<RunRow>> {
         let path = crate::paths::index_file()?;
         let mut file = match File::open(&path) {
@@ -271,21 +272,17 @@ pub(crate) fn local_snapshot(cache: &mut TimeCache) -> Snapshot {
     })();
     match rows {
         Ok(mut rows) => {
-            if let Ok(dir) = crate::paths::runs_dir() {
-                for row in &mut rows {
-                    (row.time, row.compile) = *cache.entry(row.id.clone()).or_insert_with(|| {
-                        let run = dir.join(&row.id);
-                        (
-                            read_summary(&run.join("summary.json"))
-                                .ok()
-                                .and_then(|bytes| times(&bytes)),
-                            read_summary(&run.join("units.jsonl"))
-                                .ok()
-                                .and_then(|bytes| compile_times(&bytes)),
-                        )
-                    });
+            for row in &mut rows {
+                if let Some((time, compile)) = cache.get(&row.id) {
+                    row.time = *time;
+                    row.compile = *compile;
                 }
-                cache.retain(|id, _| rows.iter().any(|row| &row.id == id));
+            }
+            // The index is small. Never hold its rows behind a directory scan
+            // or hundreds of summary/unit parses needed by the profile cards.
+            history_ready(&rows);
+            if let Ok(dir) = crate::paths::runs_dir() {
+                enrich_rows(&mut rows, cache, &dir);
             }
             snapshot.runs = rows;
         }
@@ -297,26 +294,79 @@ pub(crate) fn local_snapshot(cache: &mut TimeCache) -> Snapshot {
             });
         }
     }
+    match crate::status::collect() {
+        Ok(status) => snapshot.active = status.active,
+        Err(error) => {
+            let message = format!("Active builds: {error:#}");
+            snapshot.local_error = Some(match snapshot.local_error.take() {
+                Some(previous) => format!("{previous}\n{message}"),
+                None => message,
+            });
+        }
+    }
     snapshot
+}
+
+fn enrich_rows(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path) {
+    let missing = rows
+        .iter()
+        .filter(|row| !cache.contains_key(&row.id))
+        .count();
+    if missing > 0 {
+        let workers = std::thread::available_parallelism()
+            .map_or(1, usize::from)
+            .min(4)
+            .min(missing);
+        let chunk = rows.len().div_ceil(workers).max(1);
+        let known = &*cache;
+        std::thread::scope(|scope| {
+            for rows in rows.chunks_mut(chunk) {
+                scope.spawn(move || {
+                    for row in rows {
+                        if known.contains_key(&row.id) {
+                            continue;
+                        }
+                        let run = dir.join(&row.id);
+                        row.time = read_summary(&run.join("summary.json"))
+                            .ok()
+                            .and_then(|bytes| times(&bytes));
+                        row.compile = read_summary(&run.join("units.jsonl"))
+                            .ok()
+                            .and_then(|bytes| compile_times(&bytes));
+                    }
+                });
+            }
+        });
+    }
+    for row in rows.iter() {
+        cache.insert(row.id.clone(), (row.time, row.compile));
+    }
+    let ids: std::collections::HashSet<_> = rows.iter().map(|row| row.id.as_str()).collect();
+    cache.retain(|id, _| ids.contains(id.as_str()));
 }
 
 /// At most two concurrent authenticated GETs, regardless of the run count.
 /// Publish account information immediately, without waiting on run history.
 pub(crate) fn fetch_hosted(
     account_ready: impl FnOnce(crate::remote_hosted::Me),
+    history_ready: impl FnOnce(&[RunRow]) + Send,
 ) -> Result<HostedSnapshot> {
     let credentials = crate::remote_hosted::creds()?;
-    fetch_hosted_with(
+    let mut snapshot = fetch_hosted_with(
         || crate::remote_hosted::me(&credentials),
         || {
             let records = get(&credentials, "build/records?kind=run&summary=1&limit=50")?;
             let rows = records["records"]
                 .as_array()
                 .context("hosted records response is missing records array")?;
-            Ok(rows.iter().take(50).filter_map(hosted_row).collect())
+            let rows: Vec<_> = rows.iter().take(50).filter_map(hosted_row).collect();
+            history_ready(&rows);
+            Ok(rows)
         },
         account_ready,
-    )
+    )?;
+    snapshot.cache_scope = super::cache::scope_for(&credentials);
+    Ok(snapshot)
 }
 
 fn fetch_hosted_with(
@@ -339,8 +389,76 @@ fn fetch_hosted_with(
             account,
             runs,
             history_error,
+            cache_scope: None,
         })
     })
+}
+
+#[test]
+#[ignore = "uses local run history, hosted credentials and the real network"]
+fn full_dashboard_data_latency_probe() {
+    let started = std::time::Instant::now();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let snapshot = local_snapshot(&mut TimeCache::new(), |rows| {
+                eprintln!(
+                    "dashboard-full local_history_visible_ms={} rows={}",
+                    started.elapsed().as_millis(),
+                    rows.len()
+                )
+            });
+            eprintln!(
+                "dashboard-full local_history_profiles_ms={} rows={} profiled={}",
+                started.elapsed().as_millis(),
+                snapshot.runs.len(),
+                snapshot.runs.iter().filter(|r| r.compile.is_some()).count()
+            );
+            assert!(snapshot.local_error.is_none(), "{:?}", snapshot.local_error);
+        });
+        scope.spawn(|| {
+            let hosted = fetch_hosted(
+                |_| {
+                    eprintln!(
+                        "dashboard-full account_ms={}",
+                        started.elapsed().as_millis()
+                    )
+                },
+                |_| {
+                    eprintln!(
+                        "dashboard-full hosted_history_visible_ms={}",
+                        started.elapsed().as_millis()
+                    )
+                },
+            )
+            .expect("hosted data");
+            eprintln!(
+                "dashboard-full hosted_history_ms={} rows={}",
+                started.elapsed().as_millis(),
+                hosted.runs.len()
+            );
+            assert!(hosted.history_error.is_none(), "{:?}", hosted.history_error);
+        });
+        scope.spawn(|| {
+            let versions = fetch_versions(&Versions::local(), |_| {
+                eprintln!(
+                    "dashboard-full service_versions_visible_ms={}",
+                    started.elapsed().as_millis()
+                )
+            });
+            eprintln!(
+                "dashboard-full versions_ms={} service={} machine_components={} machine_note={:?}",
+                started.elapsed().as_millis(),
+                versions.live.is_some(),
+                versions.machine.len(),
+                versions.machine_note
+            );
+            assert!(versions.error.is_none(), "{:?}", versions.error);
+        });
+    });
+    eprintln!(
+        "dashboard-full all_complete_ms={}",
+        started.elapsed().as_millis()
+    );
 }
 
 #[test]
@@ -348,12 +466,15 @@ fn fetch_hosted_with(
 fn hosted_dashboard_latency_probe() {
     for sample in 1..=3 {
         let start = std::time::Instant::now();
-        let snapshot = fetch_hosted(|_| {
-            eprintln!(
-                "dashboard sample={sample} account_ms={}",
-                start.elapsed().as_millis()
-            )
-        })
+        let snapshot = fetch_hosted(
+            |_| {
+                eprintln!(
+                    "dashboard sample={sample} account_ms={}",
+                    start.elapsed().as_millis()
+                )
+            },
+            |_| {},
+        )
         .expect("authenticated dashboard refresh");
         assert!(
             snapshot.history_error.is_none(),
@@ -531,7 +652,7 @@ pub(crate) fn fetch_detail(row: &RunRow, logs: bool) -> Result<String> {
 }
 
 /// What the hosted service says is live (`GET <build base>/version`).
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Live {
     /// The release clients are told to run.
     pub release: Option<String>,
@@ -587,7 +708,7 @@ pub(crate) enum Currency {
 
 /// Every version that decides how a build behaves: this client, the release
 /// and compiler the service names, and what the build machine really runs.
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Versions {
     pub client: String,
     /// A published release artifact, not a source build of the same number.
@@ -601,6 +722,8 @@ pub(crate) struct Versions {
     pub machine_note: Option<String>,
     /// When the service was last asked, `None` before the first answer.
     pub at: Option<f64>,
+    #[serde(default)]
+    pub cached: bool,
 }
 
 impl Versions {
@@ -642,6 +765,12 @@ impl Versions {
     pub(crate) fn report(&self) -> String {
         use std::fmt::Write;
         let mut o = String::from("Justrust Personal Dashboard · Versions\n\n");
+        if self.cached {
+            let _ = writeln!(
+                o,
+                "Cached information from the last successful load; refreshing in the background.\n"
+            );
+        }
         let _ = writeln!(
             o,
             "Client\n  justrust {} ({})\n  {}",
@@ -793,27 +922,126 @@ fn machine_versions() -> (Vec<(String, String)>, Option<String>) {
 
 /// Network: the service's version document and the build machine's probe.
 /// `last` keeps the previous answers visible when one of them fails.
-pub(crate) fn fetch_versions(last: &Versions) -> Versions {
-    let mut versions = Versions::local();
-    match fetch_live() {
-        Ok(live) => versions.live = Some(live),
-        Err(error) => {
-            versions.live = last.live.clone();
-            versions.error = Some(error.to_string());
+pub(crate) fn fetch_versions(last: &Versions, service_ready: impl FnOnce(Versions)) -> Versions {
+    fetch_versions_with(last, fetch_live, machine_versions, service_ready)
+}
+
+fn fetch_versions_with(
+    last: &Versions,
+    service: impl FnOnce() -> Result<Live>,
+    machine: impl FnOnce() -> (Vec<(String, String)>, Option<String>) + Send,
+    service_ready: impl FnOnce(Versions),
+) -> Versions {
+    std::thread::scope(|scope| {
+        let machine = scope.spawn(machine);
+        let mut versions = Versions::local();
+        match service() {
+            Ok(live) => versions.live = Some(live),
+            Err(error) => {
+                versions.live = last.live.clone();
+                versions.error = Some(error.to_string());
+            }
         }
-    }
-    (versions.machine, versions.machine_note) = machine_versions();
-    if versions.machine.is_empty() && !last.machine.is_empty() {
         versions.machine = last.machine.clone();
-    }
-    versions.at = Some(crate::paths::now());
-    versions
+        versions.machine_note = last.machine_note.clone();
+        versions.cached = versions.error.is_some() && last.live.is_some();
+        versions.at = if versions.error.is_none() {
+            Some(crate::paths::now())
+        } else {
+            last.at
+        };
+        service_ready(versions.clone());
+        (versions.machine, versions.machine_note) = machine
+            .join()
+            .unwrap_or_else(|_| (Vec::new(), Some("machine inventory worker failed".into())));
+        if versions.machine.is_empty() && !last.machine.is_empty() {
+            versions.machine = last.machine.clone();
+        }
+        versions
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn service_versions_publish_while_machine_inventory_is_blocked() {
+        let (started, wait_started) = std::sync::mpsc::channel();
+        let (published, wait_published) = std::sync::mpsc::channel();
+        let timeout = std::time::Duration::from_secs(5);
+        let versions = fetch_versions_with(
+            &Versions::local(),
+            || {
+                wait_started
+                    .recv_timeout(timeout)
+                    .expect("machine runs concurrently");
+                Ok(Live {
+                    release: Some("1.2.3".into()),
+                    ..Default::default()
+                })
+            },
+            move || {
+                started.send(()).unwrap();
+                wait_published
+                    .recv_timeout(timeout)
+                    .expect("service visible before machine finishes");
+                (vec![("rustc".into(), "machine-rustc".into())], None)
+            },
+            |versions| {
+                assert_eq!(versions.live.unwrap().release.as_deref(), Some("1.2.3"));
+                published.send(()).unwrap();
+            },
+        );
+        assert_eq!(versions.machine("rustc"), Some("machine-rustc"));
+    }
+
+    #[test]
+    fn failed_version_refresh_keeps_original_timestamp_and_cached_indicator() {
+        let last = Versions {
+            live: Some(Live::default()),
+            at: Some(123.0),
+            ..Default::default()
+        };
+        let versions = fetch_versions_with(
+            &last,
+            || bail!("offline"),
+            || (Vec::new(), None),
+            |partial| {
+                assert!(partial.cached);
+                assert_eq!(partial.at, Some(123.0));
+            },
+        );
+        assert!(versions.cached);
+        assert_eq!(versions.at, Some(123.0));
+        assert_eq!(versions.error.as_deref(), Some("offline"));
+    }
+
+    #[test]
+    fn cached_profile_rows_need_no_summary_or_unit_files() {
+        let time = Some([1.0; BUCKETS]);
+        let compile = Some([2.0; PARTS]);
+        let mut rows = vec![RunRow {
+            id: "saved".into(),
+            time,
+            compile,
+            ..Default::default()
+        }];
+        let mut cache = TimeCache::from([
+            ("saved".into(), (time, compile)),
+            ("expired".into(), (None, None)),
+        ]);
+        enrich_rows(
+            &mut rows,
+            &mut cache,
+            Path::new("a-dashboard-fixture-with-no-run-files"),
+        );
+        assert_eq!(rows[0].time, time);
+        assert_eq!(rows[0].compile, compile);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache["saved"], (time, compile));
+    }
 
     #[test]
     fn hosted_requests_overlap_and_account_is_published_before_history() {

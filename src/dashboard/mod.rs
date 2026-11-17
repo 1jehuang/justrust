@@ -1,5 +1,6 @@
 //! Human-only dashboard. No build, billing, cancellation or configuration mutations.
 //! Network and disk work stay off the terminal thread. Existing commands never enter it.
+mod cache;
 mod data;
 mod view;
 
@@ -237,6 +238,36 @@ struct State {
     refreshing: bool,
     cwd: String,
     versions: data::Versions,
+    account_cached: bool,
+    history_cached: bool,
+    local_cached: bool,
+}
+
+const LOCAL_CACHE_SCOPE: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+/// Only completed display data is restored. Never restore active builds or
+/// mark a cached answer as connected, freshly checked, or authoritative.
+fn restore_cached(state: &mut State, scope: Option<&str>) {
+    if let Some(saved) = cache::load::<Vec<RunRow>>(LOCAL_CACHE_SCOPE, "local") {
+        state.snapshot.runs = saved.data;
+        state.local_cached = !state.snapshot.runs.is_empty();
+    }
+    let Some(scope) = scope else { return };
+    if let Some(saved) = cache::load::<data::HostedSnapshot>(scope, "hosted") {
+        state.snapshot.account = Some(saved.data.account);
+        state.hosted_runs = saved.data.runs;
+        state.snapshot.hosted_at = Some(saved.at);
+        state.account_cached = true;
+        state.history_cached = true;
+    }
+    if let Some(saved) = cache::load::<data::Versions>(scope, "versions") {
+        let local = data::Versions::local();
+        state.versions = saved.data;
+        state.versions.client = local.client;
+        state.versions.release_build = local.release_build;
+        state.versions.service = local.service;
+        state.versions.cached = true;
+    }
 }
 
 impl State {
@@ -453,6 +484,9 @@ impl State {
 }
 
 enum Update {
+    LocalHistory(Vec<RunRow>),
+    HostedHistory(Vec<RunRow>),
+    ResetHosted,
     Local(Snapshot),
     Account(crate::remote_hosted::Me),
     Hosted(Result<data::HostedSnapshot>),
@@ -469,13 +503,31 @@ impl Drop for TerminalGuard {
     }
 }
 
-fn hosted_worker(tx: mpsc::Sender<Update>) -> SyncSender<()> {
+fn hosted_worker(tx: mpsc::Sender<Update>, mut previous_scope: Option<String>) -> SyncSender<()> {
     let (refresh, requests) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
         loop {
-            let result = data::fetch_hosted(|account| {
-                let _ = tx.send(Update::Account(account));
-            });
+            let scope = cache::scope();
+            if scope != previous_scope {
+                if tx.send(Update::ResetHosted).is_err() {
+                    break;
+                }
+                previous_scope = scope;
+            }
+            let result = data::fetch_hosted(
+                |account| {
+                    let _ = tx.send(Update::Account(account));
+                },
+                |rows| {
+                    let _ = tx.send(Update::HostedHistory(rows.to_vec()));
+                },
+            );
+            if let Ok(hosted) = &result
+                && hosted.history_error.is_none()
+                && let Some(scope) = &hosted.cache_scope
+            {
+                let _ = cache::save(scope, "hosted", crate::paths::now(), hosted);
+            }
             if tx.send(Update::Hosted(result)).is_err() {
                 break;
             }
@@ -489,12 +541,33 @@ fn hosted_worker(tx: mpsc::Sender<Update>) -> SyncSender<()> {
 }
 
 /// Versions change rarely: ask once a minute, and on a manual refresh.
-fn versions_worker(tx: mpsc::Sender<Update>) -> SyncSender<()> {
+fn versions_worker(
+    tx: mpsc::Sender<Update>,
+    mut last: data::Versions,
+    mut last_scope: Option<String>,
+) -> SyncSender<()> {
     let (refresh, requests) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
-        let mut last = data::Versions::local();
         loop {
-            last = data::fetch_versions(&last);
+            let scope = cache::scope();
+            if scope != last_scope {
+                last = data::Versions::local();
+                last_scope = scope.clone();
+            }
+            last = data::fetch_versions(&last, |versions| {
+                if scope == cache::scope() {
+                    let _ = tx.send(Update::Versions(versions));
+                }
+            });
+            if scope != cache::scope() {
+                continue;
+            }
+            if last.error.is_none()
+                && scope == cache::scope()
+                && let Some(scope) = scope
+            {
+                let _ = cache::save(&scope, "versions", crate::paths::now(), &last);
+            }
             if tx.send(Update::Versions(last.clone())).is_err() {
                 break;
             }
@@ -510,17 +583,43 @@ fn versions_worker(tx: mpsc::Sender<Update>) -> SyncSender<()> {
 fn apply_updates(state: &mut State, updates: &Receiver<Update>) {
     for update in updates.try_iter() {
         match update {
-            Update::Account(account) => state.snapshot.account = Some(account),
+            Update::LocalHistory(rows) => {
+                state.snapshot.runs = rows;
+                state.local_cached = false;
+            }
+            Update::HostedHistory(rows) => {
+                state.hosted_runs = rows;
+                state.history_cached = false;
+                state.snapshot.hosted_at = Some(crate::paths::now());
+            }
+            Update::ResetHosted => {
+                state.snapshot.account = None;
+                state.hosted_runs.clear();
+                state.snapshot.hosted_at = None;
+                state.snapshot.hosted_error = None;
+                state.account_cached = false;
+                state.history_cached = false;
+                state.versions = data::Versions::local();
+                state.detail = None;
+                state.detail_request = state.detail_request.wrapping_add(1);
+            }
+            Update::Account(account) => {
+                state.snapshot.account = Some(account);
+                state.account_cached = false;
+            }
             Update::Local(local) => {
                 state.snapshot.active = local.active;
                 state.snapshot.runs = local.runs;
                 state.snapshot.local_error = local.local_error;
+                state.local_cached = false;
             }
             Update::Hosted(Ok(hosted)) => {
                 state.snapshot.account = Some(hosted.account);
+                state.account_cached = false;
                 if hosted.history_error.is_none() {
                     state.hosted_runs = hosted.runs;
                     state.snapshot.hosted_at = Some(crate::paths::now());
+                    state.history_cached = false;
                 }
                 state.snapshot.hosted_error = hosted.history_error;
                 state.refreshing = false;
@@ -548,28 +647,43 @@ pub(crate) fn run() -> Result<()> {
             "`justrust interactive dashboard` requires a terminal on stdin and stdout. For agents use `justrust status --json`, `justrust runs --json`, or `justrust show ID --json`."
         );
     }
-    let (tx, updates) = mpsc::channel();
-    let refresh = hosted_worker(tx.clone());
-    let refresh_versions = versions_worker(tx.clone());
-    let local_tx = tx.clone();
-    std::thread::spawn(move || {
-        let mut times = data::TimeCache::new();
-        loop {
-            if local_tx
-                .send(Update::Local(data::local_snapshot(&mut times)))
-                .is_err()
-            {
-                break;
-            }
-            std::thread::sleep(Duration::from_secs(2));
-        }
-    });
     let mut state = State {
         cwd: std::env::current_dir()?.to_string_lossy().into_owned(),
         refreshing: true,
         versions: data::Versions::local(),
         ..Default::default()
     };
+    let scope = cache::scope();
+    restore_cached(&mut state, scope.as_deref());
+    let (tx, updates) = mpsc::channel();
+    let refresh = hosted_worker(tx.clone(), scope.clone());
+    let refresh_versions = versions_worker(tx.clone(), state.versions.clone(), scope);
+    let local_tx = tx.clone();
+    let mut times: data::TimeCache = state
+        .snapshot
+        .runs
+        .iter()
+        .map(|row| (row.id.clone(), (row.time, row.compile)))
+        .collect();
+    let mut saved_rows = state.snapshot.runs.clone();
+    std::thread::spawn(move || {
+        loop {
+            let local = data::local_snapshot(&mut times, |rows| {
+                let _ = local_tx.send(Update::LocalHistory(rows.to_vec()));
+            });
+            if local.local_error.is_none()
+                && local.runs != saved_rows
+                && cache::save(LOCAL_CACHE_SCOPE, "local", crate::paths::now(), &local.runs)
+                    .is_some()
+            {
+                saved_rows = local.runs.clone();
+            }
+            if local_tx.send(Update::Local(local)).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    });
     let mut terminal = ratatui::try_init()?;
     let _guard = TerminalGuard;
     let mut last_refresh = Instant::now();
@@ -1063,6 +1177,51 @@ mod tests {
     }
 
     #[test]
+    fn progressive_history_updates_are_independent_of_account_readiness() {
+        let mut state = State {
+            refreshing: true,
+            history_cached: true,
+            local_cached: true,
+            ..Default::default()
+        };
+        let (tx, rx) = mpsc::channel();
+        tx.send(Update::LocalHistory(vec![row("local-ready", 1.0)]))
+            .unwrap();
+        tx.send(Update::HostedHistory(vec![row("cloud-ready", 2.0)]))
+            .unwrap();
+        apply_updates(&mut state, &rx);
+        assert_eq!(state.snapshot.runs[0].id, "local-ready");
+        assert_eq!(state.hosted_runs[0].id, "cloud-ready");
+        assert!(state.snapshot.account.is_none());
+        assert!(!state.local_cached && !state.history_cached);
+        assert!(state.refreshing);
+    }
+
+    #[test]
+    fn account_scope_change_clears_cached_private_data_and_pending_detail() {
+        let mut state = State {
+            account_cached: true,
+            history_cached: true,
+            detail: Some("previous account".into()),
+            detail_request: 1,
+            ..Default::default()
+        };
+        state.snapshot.account = Some(Default::default());
+        state.hosted_runs.push(row("previous", 1.0));
+        state.snapshot.runs.push(row("local", 1.0));
+        let (tx, rx) = mpsc::channel();
+        tx.send(Update::ResetHosted).unwrap();
+        tx.send(Update::Detail(1, Ok("old in-flight detail".into())))
+            .unwrap();
+        apply_updates(&mut state, &rx);
+        assert!(state.snapshot.account.is_none());
+        assert!(state.hosted_runs.is_empty());
+        assert!(state.detail.is_none());
+        assert!(!state.account_cached && !state.history_cached);
+        assert_eq!(state.snapshot.runs[0].id, "local");
+    }
+
+    #[test]
     fn progressive_account_update_preserves_history_and_refresh_state() {
         let mut state = State {
             refreshing: true,
@@ -1101,5 +1260,65 @@ mod tests {
         assert_eq!(s.detail.as_deref(), Some("current"));
         assert_eq!(s.hosted_runs.len(), 1);
         assert_eq!(s.snapshot.hosted_error.as_deref(), Some("offline"));
+    }
+}
+#[test]
+#[ignore = "loads real account data and primes the private dashboard display cache"]
+fn full_dashboard_cached_data_latency_probe() {
+    let scope = cache::scope().expect("authenticated cache namespace");
+    let local = data::local_snapshot(&mut data::TimeCache::new(), |_| {});
+    assert!(local.local_error.is_none(), "{:?}", local.local_error);
+    let hosted = data::fetch_hosted(|_| {}, |_| {}).expect("live hosted history and account");
+    assert!(hosted.history_error.is_none(), "{:?}", hosted.history_error);
+    let versions = data::fetch_versions(&data::Versions::local(), |_| {});
+    assert!(versions.error.is_none(), "{:?}", versions.error);
+    let at = crate::paths::now();
+    cache::save(LOCAL_CACHE_SCOPE, "local", at, &local.runs).expect("private local cache");
+    cache::save(&scope, "hosted", at, &hosted).expect("private hosted cache");
+    cache::save(&scope, "versions", at, &versions).expect("private versions cache");
+    for sample in 1..=3 {
+        let started = Instant::now();
+        let mut state = State {
+            versions: data::Versions::local(),
+            refreshing: true,
+            ..Default::default()
+        };
+        restore_cached(&mut state, Some(&scope));
+        state.reconcile_selection();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(180, 55)).unwrap();
+        terminal.draw(|frame| view::draw(frame, &state)).unwrap();
+        assert_eq!(state.snapshot.runs.len(), local.runs.len());
+        assert_eq!(state.hosted_runs.len(), hosted.runs.len());
+        assert!(state.snapshot.account.is_some());
+        assert!(state.versions.live.is_some());
+        assert_eq!(state.versions.machine, versions.machine);
+        assert!(state.account_cached && state.history_cached && state.versions.cached);
+        eprintln!(
+            "dashboard-full-cache sample={sample} restored_rendered_ms={} local_rows={} hosted_rows={} profile_rows={} machine_components={}",
+            started.elapsed().as_millis(),
+            state.snapshot.runs.len(),
+            state.hosted_runs.len(),
+            state
+                .snapshot
+                .runs
+                .iter()
+                .filter(|r| r.compile.is_some())
+                .count(),
+            state.versions.machine.len()
+        );
+        let mut times = state
+            .snapshot
+            .runs
+            .iter()
+            .map(|row| (row.id.clone(), (row.time, row.compile)))
+            .collect();
+        let refresh_started = Instant::now();
+        let refreshed = data::local_snapshot(&mut times, |_| {});
+        assert!(refreshed.local_error.is_none());
+        eprintln!(
+            "dashboard-full-cache sample={sample} local_revalidated_ms={}",
+            refresh_started.elapsed().as_millis()
+        );
     }
 }
