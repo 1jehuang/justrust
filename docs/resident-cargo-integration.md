@@ -1,5 +1,41 @@
 # Native resident Cargo integration, 2026-11-17
 
+## Production-hosted external-input followthrough, 12:35 UTC
+
+The std-only boundary described below is the earlier baseline. Explicitly setting
+`JUSTRUST_CARGO_RESIDENT_EXTERNAL=1` now admits bounded Rust dependency closures
+in the native Cargo worker. Both Cargo and the compiler capture actual BLAKE3
+file contents, including matching `.rlib`/`.rmeta` pairs and dependency search
+directory membership. The compiler independently recaptures the invocation's
+inputs before accepting it and verifies them again after execution. Dependency
+content changes rotate the worker identity. Unsupported dynamic/proc-macro and
+native-library closures still fall back. The feature remains opt-in.
+
+The full 20-stage dependency acceptance passed through the published alpha.36
+client on the authenticated production build machine. Root-only edits, compiler
+errors and recovery kept the same root worker PID and key. Dependency signature,
+constant and body changes changed the key and produced the expected new runtime
+values. A failed dependency did not execute a stale root test. Original evidence:
+`justrust records show bench stable-resident-external-20261117-1234`.
+
+All compiler builds, Cargo builds and execution in this followthrough ran
+directly on that hosted machine, retaining the native build cache there. There
+was no local native-build/transfer cycle or separate canary. The first native
+bootstrap took 185.1 seconds, subsequent native rebuilds approximately 42–45
+seconds, and a warm Cargo-only rebuild 6.1 seconds. These describe iteration
+costs, not an application speedup. Hosted regression gates passed 17 driver
+tests, 13 Cargo resident tests, 5 Cargo source-identity tests, 9 bootstrap identity
+tests and 8 shared manifest tests.
+
+The successful pair has compiler driver SHA-256
+`aecf67115b17f5c8b7d9d5030176245bb3ae6ef9f7245bbdf9b61be3045ee545`
+and Cargo SHA-256
+`711d32d0644faf2e1164c7a21c55f3ebf0f5d2b71eaa70f127ba6d604410b4a8`.
+Neither replaced the default toolchain. This proves dependency-bearing native
+worker reuse, not retained external typed queries, a representative justrust
+repository speedup, or the requested 10× improvement. A matched comprehensive
+performance comparison and broader admission remain unfinished.
+
 ## What is now connected
 
 An explicit experimental `justrust cargo test` invocation can use native

@@ -201,8 +201,8 @@ def validate_root_transition(stage, residency, previous):
         if stage['root_only']:
             if (current['key'], current['pid']) != (previous['key'], previous['pid']):
                 raise AssertionError('Root-only edit/error/recovery replaced the resident worker')
-            if current['request'] <= previous['request']:
-                raise AssertionError('Root resident request id did not advance')
+            # Request IDs belong to each short-lived Cargo client, not the
+            # persistent worker. The same ID can legitimately recur across edits.
         elif stage['name'] in ('dependency-signature', 'dependency-const', 'dependency-body'):
             if current['key'] == previous['key']:
                 raise AssertionError('Dependency content change did not invalidate root identity')
@@ -215,6 +215,8 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
     workers = shared.private_directory(arm / 'workers')
     trace = arm / 'trace.jsonl'
     env = safety.safe_environment(shared.environment(compiler, fixture, mode, workers, trace))
+    if require_resident_root:
+        env['JUSTRUST_CARGO_RESIDENT_EXTERNAL'] = '1'
     report = dict(mode=mode, verdict='incomplete', observations=[])
     try:
         previous_dependency = None

@@ -278,10 +278,9 @@ class DependencyAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'replaced the resident worker'):
             self.capture(runner, require_resident_root=True)
 
-    def test_required_root_rejects_replayed_request(self):
+    def test_required_root_allows_client_scoped_request_id_reset(self):
         runner, _ = self.mock_runner(resident_root=True, stale_request=True)
-        with self.assertRaisesRegex(AssertionError, 'did not advance'):
-            self.capture(runner, require_resident_root=True)
+        self.assertEqual(self.capture(runner, require_resident_root=True)['verdict'], 'passed')
 
     def test_required_dependency_transition_requires_actual_same_path_bytes(self):
         rows = subject.stages('nonce')
@@ -318,9 +317,9 @@ class DependencyAcceptanceTests(unittest.TestCase):
 
     def test_required_root_error_and_recovery_must_use_same_worker(self):
         rows = subject.stages('nonce')
-        previous = dict(key='a' * 64, pid=101, request=1)
+        previous = dict(key='a' * 64, pid=101, request=2)
         for index in (1, 2, 3, 9):
-            current = dict(key='a' * 64, pid=101, request=2)
+            current = dict(key='a' * 64, pid=101, request=1)
             self.assertEqual(subject.validate_root_transition(rows[index], {'root': current}, previous), current)
             for changed in ({**current, 'key': 'b' * 64}, {**current, 'pid': 102}):
                 with self.assertRaisesRegex(AssertionError, 'replaced the resident worker'):
