@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Mock-only tests. Coordinator runs these after the comprehensive baseline."""
 import base64
+import argparse
+import copy
 import json
 from pathlib import Path
 import tempfile
@@ -36,6 +38,65 @@ def completion(pid=42, key='a' * 64, status=0):
 
 
 class ProcMacroOracleTests(unittest.TestCase):
+    def test_macro_configuration_rejects_noncanonical_values(self):
+        for value in ('00', '01', '+1', '-0', '-1', ' 1', '1 ', '1.0', '257', ''):
+            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
+                subject.canonical_spins(value)
+        for value in ('0', '1', '256'):
+            self.assertEqual(subject.canonical_spins(value), int(value))
+        for shm, spins in ((0, 0), ('1', 0), (True, True), (True, '1'),
+                           (True, 1.0), (True, -1), (True, 257), (False, 1)):
+            with self.subTest(shm=shm, spins=spins), self.assertRaises(ValueError):
+                subject.macro_options(shm, spins)
+
+    def test_macro_provenance_rejects_tampered_mode_and_spins(self):
+        environment = subject.macro_options(True, 256)
+        report = dict(provenance=dict(macro_shm=True, macro_spins=256), workload=[{}],
+                      arms={mode: dict(mode=mode, macro_environment=dict(environment),
+                                       observations=[dict(macro_environment=dict(environment))])
+                            for mode in ('off', 'on')})
+        subject.validate_provenance(report)
+        for mode in ('off', 'on'):
+            for key, value in (('JUSTRUST_CARGO_RESIDENT_MACRO_SHM', '0'),
+                               ('JUSTRUST_CARGO_RESIDENT_MACRO_SPINS', '0256'),
+                               ('JUSTRUST_CARGO_RESIDENT_MACRO_SPINS', 256)):
+                for per_request in (False, True):
+                    changed = copy.deepcopy(report)
+                    arm = changed['arms'][mode]
+                    target = arm['observations'][0] if per_request else arm
+                    target['macro_environment'][key] = value
+                    with self.assertRaises(AssertionError):
+                        subject.validate_provenance(changed)
+            changed = copy.deepcopy(report)
+            changed['arms'][mode]['mode'] = 'on' if mode == 'off' else 'off'
+            with self.assertRaises(AssertionError):
+                subject.validate_provenance(changed)
+
+    def test_actual_runner_environment_overrides_inherited_transport_both_arms(self):
+        rows = subject.stages('unique')[:1]
+        for mode in ('off', 'on'):
+            for options in ({}, dict(macro_shm=True, macro_spins=256)):
+                with self.subTest(mode=mode, options=options), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    fixture = root / 'fixture'
+                    (fixture / 'src').mkdir(parents=True)
+                    calls = []
+                    expected = subject.macro_options(**options)
+                    def invoke(argv, timeout, *, cwd, env):
+                        calls.append(dict(env))
+                        self.assertEqual({key: env[key] for key in expected}, expected)
+                        return record(rows[0])
+                    with mock.patch.object(subject.shared, 'environment', return_value={
+                            key: 'inherited-invalid' for key in expected}), \
+                            mock.patch.object(subject.safety, 'safe_environment', side_effect=lambda env: env), \
+                            mock.patch.object(subject.dependency, 'metadata', return_value=[
+                                artifact(False), dict(target=dict(name='dependency_fallback_root'), fresh=False)]):
+                        report = subject.capture_arm(root / 'compiler', root / 'cargo', fixture,
+                                                     root / 'arm', mode, rows, 10, invoke, **options)
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual(report['macro_environment'], expected)
+                    self.assertEqual(report['observations'][0]['macro_environment'], expected)
+
     def test_workload_has_forced_edits_two_calls_and_recoveries(self):
         rows = subject.stages('unique')
         self.assertEqual(len({s['root'] for s in rows}), len(rows))
@@ -112,6 +173,8 @@ class ProcMacroOracleTests(unittest.TestCase):
             self.assertEqual(env['JUSTRUST_CARGO_RESIDENT_MACROS'], '1')
             self.assertEqual(env['JUSTRUST_CARGO_RESIDENT_DECODERS'], '0')
             self.assertEqual(env['JUSTRUST_RUSTC_RESIDENT_FRONTEND'], '0')
+            self.assertEqual(env['JUSTRUST_CARGO_RESIDENT_MACRO_SHM'], '0')
+            self.assertEqual(env['JUSTRUST_CARGO_RESIDENT_MACRO_SPINS'], '0')
             path = Path(env['JR_PM_FILE'])
             self.assertEqual(path.read_text() if path.exists() else None, stage['file'])
             return record(stage)

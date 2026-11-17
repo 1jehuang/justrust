@@ -129,8 +129,41 @@ def validate_artifacts(observations, previous):
     return current
 
 
+def macro_options(macro_shm=False, macro_spins=0):
+    if type(macro_shm) is not bool:
+        raise ValueError('macro_shm must be a bool')
+    if type(macro_spins) is not int or not 0 <= macro_spins <= 256:
+        raise ValueError('macro_spins must be an integer in 0..256')
+    if macro_spins and not macro_shm:
+        raise ValueError('Nonzero macro_spins requires macro_shm')
+    return dict(JUSTRUST_CARGO_RESIDENT_MACRO_SHM='1' if macro_shm else '0',
+                JUSTRUST_CARGO_RESIDENT_MACRO_SPINS=str(macro_spins))
+
+
+def canonical_spins(value):
+    if not re.fullmatch(r'0|[1-9][0-9]*', value) or int(value) > 256:
+        raise argparse.ArgumentTypeError('Expected canonical decimal integer in 0..256')
+    return int(value)
+
+
+def validate_provenance(report):
+    provenance = report['provenance']
+    expected = macro_options(provenance['macro_shm'], provenance['macro_spins'])
+    if set(report['arms']) != {'off', 'on'}:
+        raise AssertionError('Missing off/on macro arms')
+    for mode, arm in report['arms'].items():
+        if arm['mode'] != mode or arm['macro_environment'] != expected:
+            raise AssertionError('Macro transport provenance mismatch')
+        if len(arm['observations']) != len(report['workload']):
+            raise AssertionError('Missing macro request provenance')
+        for row in arm['observations']:
+            if row['macro_environment'] != expected:
+                raise AssertionError('Macro request environment provenance mismatch')
+
+
 def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
-                require_resident_root=False):
+                require_resident_root=False, macro_shm=False, macro_spins=0):
+    macro_environment = macro_options(macro_shm, macro_spins)
     arm.mkdir(mode=0o700)
     trace = arm / 'trace.jsonl'
     env = safety.safe_environment(shared.environment(
@@ -141,7 +174,9 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
                    JUSTRUST_CARGO_RESIDENT_MACROS='1',
                    JUSTRUST_CARGO_RESIDENT_DECODERS='0',
                    JUSTRUST_RUSTC_RESIDENT_FRONTEND='0')
-    report = dict(mode=mode, verdict='incomplete', observations=[])
+    env.update(macro_environment)
+    report = dict(mode=mode, verdict='incomplete', observations=[],
+                  macro_environment=dict(macro_environment))
     previous_macro = previous_root = None
     previous_environment = object()
     try:
@@ -162,6 +197,9 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
                        inputs={k: stage[k] for k in ('env', 'file', 'token')})
             report['observations'].append(row)
             try:
+                row['macro_environment'] = {key: env[key] for key in macro_environment}
+                if row['macro_environment'] != macro_environment:
+                    raise AssertionError('Macro transport environment changed')
                 row['cargo'] = runner([cargo, 'test', '--offline', '--lib', '--message-format=json',
                                        '--', '--nocapture', '--test-threads=1'], timeout, cwd=fixture, env=env)
             finally:
@@ -193,7 +231,9 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
 def capture(compiler, cargo, output, *, justrust, root_native_frozen=False,
             idle_authorized=False, timeout=180, require_resident_root=False,
             expected_compiler_sha256=None, expected_driver_sha256=None,
-            expected_cargo_sha256=None, expected_client_sha256=None, runner=None):
+            expected_cargo_sha256=None, expected_client_sha256=None, runner=None,
+            macro_shm=False, macro_spins=0):
+    macro_options(macro_shm, macro_spins)
     if root_native_frozen is not True or idle_authorized is not True:
         raise ValueError('Root native freeze and idle authorization required before execution')
     if not math.isfinite(timeout) or timeout <= 0:
@@ -212,6 +252,7 @@ def capture(compiler, cargo, output, *, justrust, root_native_frozen=False,
         'No retained typed-state or performance claim.', provenance=dict(
             attestation=attestation, expected=expected, root_native_frozen=True, idle_authorized=True,
             require_resident_root=require_resident_root, timeout=timeout,
+            macro_shm=macro_shm, macro_spins=macro_spins,
             harness_sha256=shared.native.digest(Path(__file__)),
             helpers={Path(m.__file__).name: shared.native.digest(Path(m.__file__))
                      for m in (dependency, shared, safety, shared.native, shared.dogfood)}))
@@ -241,7 +282,8 @@ def capture(compiler, cargo, output, *, justrust, root_native_frozen=False,
             arm = root / ('000-' + mode)
             try:
                 report['arms'][mode] = capture_arm(compiler, cargo, fixture, arm, mode, workload,
-                                                   timeout, invoke, require_resident_root)
+                                                   timeout, invoke, require_resident_root,
+                                                   macro_shm=macro_shm, macro_spins=macro_spins)
             finally:
                 receipt = arm / 'receipt.json'
                 if receipt.exists():
@@ -249,6 +291,7 @@ def capture(compiler, cargo, output, *, justrust, root_native_frozen=False,
         for off, on in zip(report['arms']['off']['observations'], report['arms']['on']['observations']):
             if off['semantics'] != on['semantics']:
                 raise AssertionError('Exact off/on diagnostics and runtime disagree')
+        validate_provenance(report)
         if attestation != safety.attest(compiler, cargo, client, expected):
             raise AssertionError('Frozen candidate changed during acceptance')
         report['verdict'] = 'passed'
@@ -269,6 +312,8 @@ def main():
     for name in ('root-native-frozen', 'idle-authorized', 'require-resident-root'):
         parser.add_argument('--' + name, action='store_true')
     parser.add_argument('--timeout', type=float, default=180)
+    parser.add_argument('--macro-shm', action='store_true', default=False)
+    parser.add_argument('--macro-spins', type=canonical_spins, default=0)
     report = capture(**vars(parser.parse_args()))
     print(json.dumps(dict(verdict=report['verdict'], claim=report['claim'])))
 
