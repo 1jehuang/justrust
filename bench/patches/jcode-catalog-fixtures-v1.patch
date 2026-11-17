@@ -1,0 +1,94 @@
+--- a/crates/jcode-base/src/provider/tests/catalog_subscription.rs
++++ b/crates/jcode-base/src/provider/tests/catalog_subscription.rs
+@@ -142,32 +142,33 @@
+ 
+ #[test]
+ fn test_anthropic_live_catalog_replaces_static_fallback_list() {
+-    let _guard = crate::storage::lock_test_env();
+-    crate::env::remove_var("ANTHROPIC_API_KEY");
+-    crate::auth::claude::set_active_account_override(Some("work".to_string()));
+-
+-    // Use a model the static classifier does not recognize so this exercises
+-    // the generic catalog-driven path (>=1M cached limit => synthesized [1m]
+-    // alias). The id must carry no parseable version, because any versioned
+-    // Claude id is now classified statically (>=5.0 => native 1M, which
+-    // deliberately gets no redundant [1m] alias).
+-    populate_context_limits(
+-        [("claude-nebula-preview".to_string(), 1_048_576)]
+-            .into_iter()
+-            .collect(),
+-    );
+-    populate_anthropic_models(vec!["claude-nebula-preview".to_string()]);
+-    let models = known_anthropic_model_ids();
+-
+-    assert_eq!(
+-        models,
+-        vec![
+-            "claude-nebula-preview".to_string(),
+-            "claude-nebula-preview[1m]".to_string()
+-        ]
+-    );
+-
+-    crate::auth::claude::set_active_account_override(None);
++    with_clean_provider_test_env(|| {
++        crate::env::remove_var("ANTHROPIC_API_KEY");
++        crate::auth::claude::set_active_account_override(Some("work".to_string()));
++
++        // Use a model the static classifier does not recognize so this exercises
++        // the generic catalog-driven path (>=1M cached limit => synthesized [1m]
++        // alias). The id must carry no parseable version, because any versioned
++        // Claude id is now classified statically (>=5.0 => native 1M, which
++        // deliberately gets no redundant [1m] alias).
++        populate_context_limits(
++            [("claude-nebula-preview".to_string(), 1_048_576)]
++                .into_iter()
++                .collect(),
++        );
++        populate_anthropic_models(vec!["claude-nebula-preview".to_string()]);
++        let models = known_anthropic_model_ids();
++
++        assert_eq!(
++            models,
++            vec![
++                "claude-nebula-preview".to_string(),
++                "claude-nebula-preview[1m]".to_string()
++            ]
++        );
++
++        crate::auth::claude::set_active_account_override(None);
++    });
+ }
+ 
+ #[test]
+--- a/crates/jcode-provider-openai-runtime/src/openai_tests/models_state.rs
++++ b/crates/jcode-provider-openai-runtime/src/openai_tests/models_state.rs
+@@ -4,12 +4,6 @@
+     jcode_base::auth::codex::set_active_account_override(Some(
+         "openai-supports-codex-models".to_string(),
+     ));
+-    jcode_base::provider::populate_account_models(vec![
+-        "gpt-5.6-sol".to_string(),
+-        "gpt-5.1-codex".to_string(),
+-        "gpt-5.1-codex-mini".to_string(),
+-        "gpt-5.2-codex".to_string(),
+-    ]);
+ 
+     let creds = CodexCredentials {
+         access_token: "test".to_string(),
+@@ -20,6 +14,16 @@
+     };
+ 
+     let provider = OpenAIProvider::new(creds);
++    // Validation uses the loaded credential scope, not the OAuth account slot.
++    jcode_base::provider::populate_account_models_for_scope(
++        &provider.catalog_scope(),
++        vec![
++            "gpt-5.6-sol".to_string(),
++            "gpt-5.1-codex".to_string(),
++            "gpt-5.1-codex-mini".to_string(),
++            "gpt-5.2-codex".to_string(),
++        ],
++    );
+     assert!(provider.available_models().contains(&"gpt-5.2-codex"));
+     assert!(provider.available_models().contains(&"gpt-5.1-codex-mini"));
+     assert!(provider.available_models().contains(&"gpt-5.6-sol"));
