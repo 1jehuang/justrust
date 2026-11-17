@@ -920,10 +920,14 @@ fn record(
         .env_remove("JUSTRUST_RECORD_PHASE_TRACE")
         .env("RUSTC", recording_rustc)
         .env("JUSTRUST_REAL_RUSTC", &real_rustc)
-        .env("JUSTRUST_RUN_DIR", &run_dir)
-        .env("JUSTRUST_RUN_ID", id)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    apply_recording_run_env(
+        &mut cmd,
+        recording_rustc == real_rustc.as_path(),
+        &run_dir,
+        id,
+    );
     unify_features(&mut cmd);
     if opts.agent && std::env::var_os("CARGO_TERM_VERBOSE").is_none() {
         // Makes cargo say why each unit was rebuilt ("Dirty foo: the file
@@ -1813,6 +1817,19 @@ fn unify_features(cmd: &mut Command) {
     }
 }
 
+/// Per-process shim destinations are not compiler inputs in the explicit native
+/// experiment. Omit them at the Cargo boundary in BOTH its off/on controls,
+/// rather than silently stripping observable environment inside the worker.
+fn apply_recording_run_env(cmd: &mut Command, native: bool, run_dir: &Path, id: &str) {
+    if native {
+        cmd.env_remove("JUSTRUST_RUN_DIR")
+            .env_remove("JUSTRUST_RUN_ID");
+    } else {
+        cmd.env("JUSTRUST_RUN_DIR", run_dir)
+            .env("JUSTRUST_RUN_ID", id);
+    }
+}
+
 /// The resident experiment must enter the owned compiler directly. Its native
 /// Cargo path owns transport and lifetime accounting, so the one-process shim
 /// must not add per-invocation phase files or wrap the resident worker. This is
@@ -1839,6 +1856,30 @@ fn resident_recording_compiler<'a>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_recording_omits_only_unused_shim_destinations_at_cargo_boundary() {
+        use std::ffi::OsStr;
+        use std::path::Path;
+        for native in [false, true] {
+            let mut cmd = std::process::Command::new("cargo");
+            cmd.env("USER_BUILD_INPUT", "preserved");
+            super::apply_recording_run_env(&mut cmd, native, Path::new("/run/123"), "123");
+            let env = cmd.get_envs().collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(
+                env[OsStr::new("USER_BUILD_INPUT")],
+                Some(OsStr::new("preserved"))
+            );
+            assert_eq!(
+                env[OsStr::new("JUSTRUST_RUN_DIR")],
+                (!native).then_some(OsStr::new("/run/123"))
+            );
+            assert_eq!(
+                env[OsStr::new("JUSTRUST_RUN_ID")],
+                (!native).then_some(OsStr::new("123"))
+            );
+        }
+    }
+
     #[test]
     fn resident_recording_is_explicit_and_owned_only() {
         use std::ffi::OsStr;
