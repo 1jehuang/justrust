@@ -2,11 +2,45 @@
 
 Justrust uses the same webhook approach as Jcode's release channel. The notifier
 was adapted from Jcode's MIT-licensed `scripts/post_discord_release.py` and tests.
-It labels messages `justrust`, includes release notes and a release link, disables
-mentions, and records a hidden per-tag marker in the GitHub release body to avoid
+It labels messages `justrust`, includes concise release highlights and a release
+link, disables mentions, and records a hidden per-tag marker in the GitHub release body to avoid
 duplicate announcements on normal retries. A post followed by a marker-write
 failure needs manual inspection before retrying, since exactly-once delivery
 across GitHub and Discord is not guaranteed.
+
+## Highlights
+
+An authored `## Highlights` section takes precedence over the rest of the release
+body. When GitHub auto-generated notes contain only a comparison link, the
+notifier reads that exact release comparison and selects up to five shipped
+client changes from commit subjects and their actual changed files. It omits
+release-version bookkeeping, test/benchmark/documentation-only changes, and the
+unpublished compiler experiments under `toolchain/`. It makes no inferred
+performance claims. If no client highlights can be found, announcement fails
+with a request for authored highlights rather than publishing another bare link.
+
+Hidden availability and announcement markers are never copied into Discord.
+Messages remain within Discord's length limit and always retain the release link.
+
+Preview the actual announcement without webhook credentials or public writes:
+
+```sh
+GH_TOKEN="$(gh auth token)" python3 scripts/post_discord_release.py \
+  --repository 1jehuang/justrust --tag v0.1.0-alpha.33 --preview
+```
+
+## Updating an existing announcement
+
+Supply the existing Discord message ID in the workflow's optional `message_id`
+input. The notifier fetches that webhook message and verifies its product,
+release tag and release URL before editing it in place. It never creates a new
+message in this mode, and it still disables mentions. Successful posts/edits also
+record a hidden message-ID marker alongside the original per-tag marker so later
+repairs do not require searching the workflow logs. For older posts, the original
+workflow log contains the message ID printed after posting.
+
+The CLI equivalent is `--edit-message-id ID`. A normal retry without that option
+continues to skip already-announced tags.
 
 ## Activation
 
