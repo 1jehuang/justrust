@@ -265,6 +265,15 @@ fn ast_selection(value: Option<&std::ffi::OsStr>) -> Result<bool, String> {
     }
 }
 
+fn decoder_selection(value: Option<&std::ffi::OsStr>) -> Result<bool, String> {
+    match value {
+        None => Ok(false),
+        Some(value) if value == "0" => Ok(false),
+        Some(value) if value == "1" => Ok(true),
+        Some(_) => Err("invalid native external decoder experiment selection".into()),
+    }
+}
+
 /// Actual common native owners. Persistence and typed queries require separate
 /// explicit development selections, never a production compiler default change.
 fn serve_owned(mut response: File) -> Result<(), String> {
@@ -277,6 +286,8 @@ fn serve_owned(mut response: File) -> Result<(), String> {
         Some(_) => return Err("invalid native lexer experiment selection".into()),
     };
     let ast_cache = ast_selection(std::env::var_os("JUSTRUST_RUSTC_RESIDENT_AST").as_deref())?;
+    let external_decoders =
+        decoder_selection(std::env::var_os("JUSTRUST_RUSTC_RESIDENT_DECODERS").as_deref())?;
     for name in ["JUSTRUST_RUSTC_RESIDENT_VALUES", "JUSTRUST_RUSTC_RESIDENT_FRONTEND"] {
         if std::env::var_os(name).is_some_and(|value| value == "1") {
             return Err(format!("{name} cannot be combined with the native owned batch"));
@@ -304,7 +315,7 @@ fn serve_owned(mut response: File) -> Result<(), String> {
         return Err("owned batch requires a source input".into());
     }
     crate::catch_fatal_errors(|| {
-        rustc_interface::resident::with_resident_compiler_batch_options(
+        rustc_interface::resident::with_resident_compiler_batch_options_and_decoders(
             config,
             rustc_interface::resident::ResidentBatchOptions {
                 live_queries,
@@ -313,6 +324,7 @@ fn serve_owned(mut response: File) -> Result<(), String> {
                 lexer_cache,
                 ast_cache,
             },
+            external_decoders,
             move |batch, config| {
                 let mut first = Some((config, first_callbacks, registered_lints));
                 let mut id = first_id;
@@ -390,6 +402,19 @@ fn serve_owned(mut response: File) -> Result<(), String> {
                     // batch.run has returned through normal revision finalization.
                     let rss = rustc_data_structures::profiling::get_resident_set_size();
                     let mut reply = owned_completion(Some(status), rss, revisions, contexts);
+                    let decoder = batch.decoder_stats();
+                    reply["decoder"] = json!({
+                        "hits": decoder.hits,
+                        "misses": decoder.misses,
+                        "rejected": decoder.rejected,
+                        "publications": decoder.publications,
+                        "retained_entries": decoder.retained_entries,
+                        "retired": decoder.retired,
+                        "retirement_requests": decoder.retirement_requests,
+                    });
+                    if decoder.retired && reply["owned"]["retirement_reason"].is_null() {
+                        reply["owned"]["retirement_reason"] = json!("external_decoder");
+                    }
                     let live = batch.live_stats();
                     reply["live"] = json!({
                         "identity_begin_rejections": live.identity_begin_rejections,
@@ -428,7 +453,7 @@ fn serve_owned(mut response: File) -> Result<(), String> {
                     serde_json::to_writer(&mut response, &reply).map_err(|e| e.to_string())?;
                     response.write_all(b"\n").map_err(|e| e.to_string())?;
                     response.flush().map_err(|e| e.to_string())?;
-                    if owned_retirement(rss, revisions, contexts).is_some() {
+                    if decoder.retired || owned_retirement(rss, revisions, contexts).is_some() {
                         // Do not read another request. Returning from this callback
                         // drops the actual batch owners before process termination.
                         return Ok(());
@@ -463,9 +488,20 @@ fn frozen_semantic_invocation(args: &[String]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        OWNED_RSS_BUDGET_BYTES, ast_selection, owned_completion, owned_retirement, request,
-        typed_selection,
+        OWNED_RSS_BUDGET_BYTES, ast_selection, decoder_selection, owned_completion,
+        owned_retirement, request, typed_selection,
     };
+
+    #[test]
+    fn decoder_selection_is_explicit_and_defaults_off() {
+        use std::ffi::OsStr;
+        assert!(!decoder_selection(None).unwrap());
+        assert!(!decoder_selection(Some(OsStr::new("0"))).unwrap());
+        assert!(decoder_selection(Some(OsStr::new("1"))).unwrap());
+        for invalid in ["", "true", "control", "leaf", "2", " 1"] {
+            assert!(decoder_selection(Some(OsStr::new(invalid))).is_err());
+        }
+    }
 
     #[test]
     fn ast_selection_is_explicit_and_defaults_off() {
