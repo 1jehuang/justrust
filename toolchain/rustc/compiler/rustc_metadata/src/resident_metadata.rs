@@ -406,6 +406,14 @@ pub struct ExternalSourceSnapshot {
     files: Vec<ExternalSourceMapping>,
 }
 
+/// Observations of already-decoded entries, not a complete source universe or
+/// authorization to reuse typed compiler state. The wrapped snapshot is private
+/// and deliberately cannot be converted to the complete-capture result.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ObservedExternalSourceSnapshot {
+    snapshot: ExternalSourceSnapshot,
+}
+
 #[derive(Debug)]
 struct ExternalSourceMapping {
     current_crate: u32,
@@ -432,6 +440,85 @@ impl PartialEq for ExternalSourceMapping {
 }
 
 impl Eq for ExternalSourceMapping {}
+
+/// Sparse imports preserve their actual metadata indices, including holes and
+/// an undecoded tail. Count and charge only populated entries, without cloning.
+fn validate_observed_source_inputs(
+    current_crate: u32,
+    expected: usize,
+    imports: &[Option<ImportedSourceFile>],
+    limits: ExternalSourceSnapshotLimits,
+    files: &mut usize,
+    bytes: &mut usize,
+) -> Result<(), ExternalSourceSnapshotError> {
+    use ExternalSourceSnapshotError::*;
+    if imports.len() > expected {
+        return Err(IncompleteImports);
+    }
+    let (mut new_files, mut new_bytes) = (*files, *bytes);
+    for (index, import) in imports.iter().enumerate() {
+        let Some(import) = import else { continue };
+        new_files = new_files.checked_add(1).ok_or(FileBudget)?;
+        if new_files > limits.max_files {
+            return Err(FileBudget);
+        }
+        let source = &import.translated_source_file;
+        let len = source.normalized_source_len.to_u32();
+        if current_crate == 0
+            || source.cnum.as_u32() != current_crate
+            || u32::try_from(index).is_err()
+            || import.original_start_pos.0.checked_add(len) != Some(import.original_end_pos.0)
+            || source.start_pos.0.checked_add(len).is_none()
+            || !matches!(
+                &*source.external_src.read(),
+                ExternalSource::Foreign { metadata_index, .. } if *metadata_index as usize == index
+            )
+        {
+            return Err(UnsupportedMapping);
+        }
+        new_bytes = new_bytes
+            .checked_add(source.unnormalized_source_len.max(len) as usize)
+            .ok_or(SourceByteBudget)?;
+        if new_bytes > limits.max_declared_source_bytes {
+            return Err(SourceByteBudget);
+        }
+    }
+    *files = new_files;
+    *bytes = new_bytes;
+    Ok(())
+}
+
+/// Revalidate under the import lock before retaining any Arc from this crate.
+/// The caller caps limits at first-pass totals and reserves that many entries.
+fn retain_observed_source_inputs(
+    current_crate: u32,
+    expected: usize,
+    imports: &[Option<ImportedSourceFile>],
+    limits: ExternalSourceSnapshotLimits,
+    files: &mut Vec<ExternalSourceMapping>,
+    bytes: &mut usize,
+) -> Result<(), ExternalSourceSnapshotError> {
+    let mut count = files.len();
+    validate_observed_source_inputs(current_crate, expected, imports, limits, &mut count, bytes)?;
+    if count > files.capacity() {
+        return Err(ExternalSourceSnapshotError::FileBudget);
+    }
+    for (index, import) in imports.iter().enumerate() {
+        let Some(import) = import else { continue };
+        let source = &import.translated_source_file;
+        files.push(ExternalSourceMapping {
+            current_crate,
+            metadata_index: index as u32,
+            original_start: import.original_start_pos.0,
+            original_end: import.original_end_pos.0,
+            current_start: source.start_pos.0,
+            current_end: source.start_pos.0 + source.normalized_source_len.to_u32(),
+            declared_bytes: source.unnormalized_source_len,
+            source: Arc::clone(source),
+        });
+    }
+    Ok(())
+}
 
 /// Validate the complete map and all totals before any source Arc is retained.
 fn validate_source_inputs(
@@ -516,6 +603,52 @@ struct ExternalCrateMetadata {
 }
 
 impl CStore {
+    /// Observe only actual already-decoded entries, without queries or imports.
+    /// Exact metadata for every loaded crate is still retained. Missing sources
+    /// are observations of absence, never evidence of complete source coverage.
+    pub fn capture_observed_external_sources(
+        &self,
+        limits: ExternalSourceSnapshotLimits,
+    ) -> Result<ObservedExternalSourceSnapshot, ExternalSourceSnapshotError> {
+        let metadata = self
+            .capture_external_metadata(limits.metadata)
+            .map_err(ExternalSourceSnapshotError::Metadata)?;
+        let (mut count, mut bytes) = (0, 0);
+        for (cnum, data) in self.iter_crate_data() {
+            data.with_resident_source_inputs(|expected, imports| {
+                validate_observed_source_inputs(
+                    cnum.as_u32(),
+                    expected,
+                    imports,
+                    limits,
+                    &mut count,
+                    &mut bytes,
+                )
+            })?;
+        }
+        let mut files = Vec::new();
+        files.try_reserve_exact(count).map_err(|_| ExternalSourceSnapshotError::Allocation)?;
+        let retention_limits = ExternalSourceSnapshotLimits {
+            max_files: count,
+            max_declared_source_bytes: bytes,
+            ..limits
+        };
+        let mut retained_bytes = 0;
+        for (cnum, data) in self.iter_crate_data() {
+            data.with_resident_source_inputs(|expected, imports| {
+                retain_observed_source_inputs(
+                    cnum.as_u32(),
+                    expected,
+                    imports,
+                    retention_limits,
+                    &mut files,
+                    &mut retained_bytes,
+                )
+            })?;
+        }
+        Ok(ObservedExternalSourceSnapshot { snapshot: ExternalSourceSnapshot { metadata, files } })
+    }
+
     /// Capture only already imported source mappings, paired with the exact
     /// loaded metadata snapshot. No queries, decoding, or forced imports occur.
     /// An incompletely imported crate is rejected rather than silently omitted.
@@ -978,6 +1111,150 @@ mod tests {
             Err(SourceByteBudget)
         );
         assert_eq!((files, bytes), (0, 0));
+    }
+
+    #[test]
+    fn observed_empty_and_sparse_inputs_do_not_claim_complete_coverage() {
+        let zero = ExternalSourceSnapshotLimits {
+            max_files: 0,
+            max_declared_source_bytes: 0,
+            ..source_limits()
+        };
+        for (expected, imports) in [(0, &[][..]), (7, &[][..]), (7, &[None, None][..])] {
+            assert_eq!(
+                validate_observed_source_inputs(1, expected, imports, zero, &mut 0, &mut 0),
+                Ok(())
+            );
+        }
+        let imports = [None, Some(imported(1)), None, Some(imported(3))];
+        let (mut count, mut bytes) = (0, 0);
+        validate_observed_source_inputs(1, 9, &imports, source_limits(), &mut count, &mut bytes)
+            .unwrap();
+        assert_eq!((count, bytes), (2, 6));
+        let mut files = Vec::with_capacity(count);
+        let capacity = files.capacity();
+        retain_observed_source_inputs(1, 9, &imports, source_limits(), &mut files, &mut 0).unwrap();
+        assert_eq!(files.capacity(), capacity);
+        assert_eq!(files.iter().map(|f| f.metadata_index).collect::<Vec<_>>(), [1, 3]);
+        assert!(Arc::ptr_eq(
+            &files[0].source,
+            &imports[1].as_ref().unwrap().translated_source_file
+        ));
+        assert_eq!(
+            validate_source_inputs(1, 9, &imports, source_limits(), &mut 0, &mut 0),
+            Err(ExternalSourceSnapshotError::IncompleteImports)
+        );
+        let observed = ObservedExternalSourceSnapshot {
+            snapshot: ExternalSourceSnapshot { metadata: snapshot(&[1, 2, 3], &[1]), files },
+        };
+        assert_eq!(observed.snapshot.metadata, snapshot(&[1, 2, 3], &[1]));
+    }
+
+    #[test]
+    fn observed_sources_reject_malformed_populated_entries_and_excess_slots() {
+        use ExternalSourceSnapshotError::*;
+        let check = |import| {
+            validate_observed_source_inputs(
+                1,
+                4,
+                &[None, Some(import)],
+                source_limits(),
+                &mut 0,
+                &mut 0,
+            )
+        };
+        assert_eq!(check(imported(0)), Err(UnsupportedMapping));
+        let mut wrong_owner = imported(1);
+        Arc::get_mut(&mut wrong_owner.translated_source_file).unwrap().cnum = CrateNum::from_u32(2);
+        assert_eq!(check(wrong_owner), Err(UnsupportedMapping));
+        let mut wrong_end = imported(1);
+        wrong_end.original_end_pos.0 += 1;
+        assert_eq!(check(wrong_end), Err(UnsupportedMapping));
+        let mut overflow = imported(1);
+        overflow.original_start_pos = BytePos(u32::MAX);
+        assert_eq!(check(overflow), Err(UnsupportedMapping));
+        let mut overflow = imported(1);
+        Arc::get_mut(&mut overflow.translated_source_file).unwrap().start_pos = BytePos(u32::MAX);
+        assert_eq!(check(overflow), Err(UnsupportedMapping));
+        let mut not_foreign = imported(1);
+        Arc::get_mut(&mut not_foreign.translated_source_file).unwrap().external_src =
+            FreezeLock::new(ExternalSource::Unneeded);
+        assert_eq!(check(not_foreign), Err(UnsupportedMapping));
+        assert_eq!(
+            validate_observed_source_inputs(1, 0, &[None], source_limits(), &mut 0, &mut 0),
+            Err(IncompleteImports)
+        );
+        assert_eq!(
+            validate_observed_source_inputs(
+                0,
+                1,
+                &[Some(imported(0))],
+                source_limits(),
+                &mut 0,
+                &mut 0
+            ),
+            Err(UnsupportedMapping)
+        );
+    }
+
+    #[test]
+    fn observed_budgets_and_second_pass_growth_fail_before_arc_retention() {
+        use ExternalSourceSnapshotError::*;
+        let imports = [None, Some(imported(1)), None, Some(imported(3))];
+        for (limits, error) in [
+            (ExternalSourceSnapshotLimits { max_files: 1, ..source_limits() }, FileBudget),
+            (
+                ExternalSourceSnapshotLimits { max_declared_source_bytes: 5, ..source_limits() },
+                SourceByteBudget,
+            ),
+        ] {
+            let (mut count, mut bytes) = (0, 0);
+            assert_eq!(
+                validate_observed_source_inputs(1, 8, &imports, limits, &mut count, &mut bytes),
+                Err(error)
+            );
+            assert_eq!((count, bytes), (0, 0));
+            let mut files = Vec::with_capacity(2);
+            assert_eq!(
+                retain_observed_source_inputs(1, 8, &imports, limits, &mut files, &mut 0),
+                Err(error)
+            );
+            assert!(files.is_empty());
+        }
+        let mut files = Vec::new();
+        assert_eq!(
+            retain_observed_source_inputs(1, 8, &imports, source_limits(), &mut files, &mut 0),
+            Err(FileBudget)
+        );
+        for import in imports.iter().flatten() {
+            assert_eq!(Arc::strong_count(&import.translated_source_file), 1);
+        }
+        let unlimited = ExternalSourceSnapshotLimits {
+            max_files: usize::MAX,
+            max_declared_source_bytes: usize::MAX,
+            ..source_limits()
+        };
+        assert_eq!(
+            validate_observed_source_inputs(1, 8, &imports, unlimited, &mut usize::MAX, &mut 0),
+            Err(FileBudget)
+        );
+        assert_eq!(
+            validate_observed_source_inputs(1, 8, &imports, unlimited, &mut 0, &mut usize::MAX),
+            Err(SourceByteBudget)
+        );
+        let mut long = imported(1);
+        Arc::get_mut(&mut long.translated_source_file).unwrap().unnormalized_source_len = 7;
+        assert_eq!(
+            validate_observed_source_inputs(
+                1,
+                8,
+                &[None, Some(long)],
+                source_limits(),
+                &mut 0,
+                &mut 0
+            ),
+            Err(SourceByteBudget)
+        );
     }
 
     #[test]
