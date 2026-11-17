@@ -374,6 +374,15 @@ The fresh report `bench/stable-resident-metadata-20261117-0100-observed-kinds`
 passes and names only `mir`; its exact original JSON readback is verified.
 The separate strict Typeck receipt remains failed and unchanged.
 
+A subsequent natural-demand diagnostic adds ordinary path-statement,
+unused-result and must-use-call lint consumers without changing compiler query
+execution. `bench/stable-resident-typeck-demand-20261117-0351` preserves all
+20 cases and the strict failed verdict: fresh/resident diagnostics and outputs
+match, disabled controls stay zero, and actual Typeck hits remain zero. MIR
+reuse cannot satisfy that gate. The untouched original receipt passed exact
+authenticated JSON readback. These additional source fixtures do not establish
+a natural Typeck reuse opportunity or justify forcing extra query work.
+
 ## Native Cargo routing boundary
 
 **Update, 2026-11-17:** explicit std-only native Cargo and actual justrust client
