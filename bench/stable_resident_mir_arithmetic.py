@@ -99,7 +99,20 @@ def cases():
     ]
 
 
-def arguments(root):
+def producer_artifacts(output_profile):
+    if output_profile == "diagnostic":
+        return ("fixture.o", "fixture.ll", "fixture.mir")
+    if output_profile == "objects":
+        return ("fixture.o",)
+    raise ValueError("Unknown producer output profile")
+
+
+def arguments(root, output_profile="diagnostic"):
+    artifacts = producer_artifacts(output_profile)
+    suffixes = {"fixture.o": "obj", "fixture.ll": "llvm-ir", "fixture.mir": "mir"}
+    emission = "--emit=" + ",".join(
+        suffixes[name] + "=" + str(root / name) for name in artifacts
+    )
     return [
         str(root / "fixture.rs"),
         "--crate-name=arithmetic_fixture",
@@ -111,12 +124,7 @@ def arguments(root):
         "-Cpanic=abort",
         "-Coverflow-checks=off",
         "-Cincremental=" + str(root / "incremental"),
-        "--emit=obj="
-        + str(root / "fixture.o")
-        + ",llvm-ir="
-        + str(root / "fixture.ll")
-        + ",mir="
-        + str(root / "fixture.mir"),
+        emission,
     ]
 
 
@@ -172,12 +180,14 @@ def run_consumer(root, evidence, prefix, expected, timeout, env, record):
     validate_consumer(record["consumer_run"], expected)
 
 
-def capture_mode(compiler, root, evidence, mode, timeout):
+def capture_mode(compiler, root, evidence, mode, timeout, output_profile="diagnostic"):
+    artifacts = producer_artifacts(output_profile)
     evidence.mkdir(mode=0o700)
     env = typed.environment(mode)
-    argv = arguments(root)
+    argv = arguments(root, output_profile)
     result = dict(
         mode=mode,
+        output_profile=output_profile,
         observations=[],
         argv=argv,
         cwd=str(root),
@@ -224,7 +234,6 @@ def capture_mode(compiler, root, evidence, mode, timeout):
                 )
                 if bank.exists():
                     bank.rename(active)
-                artifacts = ("fixture.ll", "fixture.mir", "fixture.o")
                 for artifact in artifacts:
                     (root / artifact).unlink(missing_ok=True)
                 try:
@@ -304,11 +313,13 @@ def capture_mode(compiler, root, evidence, mode, timeout):
             (evidence / "receipt.json").write_text(json.dumps(result, indent=2) + "\n")
 
 
-def capture(compiler, root, timeout=180):
+def capture(compiler, root, timeout=180, output_profile="diagnostic"):
+    producer_artifacts(output_profile)
     compiler, root = Path(compiler).resolve(), Path(root).resolve()
     report = dict(
         schema=1,
         scope="native-primitive-mir-arithmetic",
+        output_profile=output_profile,
         verdict="incomplete",
         claim=CLAIM,
         modes=[],
@@ -328,7 +339,9 @@ def capture(compiler, root, timeout=180):
             (workspace / name).write_bytes(data)
         for mode in ("control", "leaf"):
             report["modes"].append(
-                capture_mode(compiler, workspace, root / mode, mode, timeout)
+                capture_mode(
+                    compiler, workspace, root / mode, mode, timeout, output_profile
+                )
             )
         for control, native in zip(*(m["observations"] for m in report["modes"])):
             for engine in ("fresh", "resident"):
@@ -371,6 +384,12 @@ def main():
     parser.add_argument("--compiler", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--timeout", type=float, default=180)
+    parser.add_argument(
+        "--output-profile",
+        choices=("diagnostic", "objects"),
+        default="diagnostic",
+        help="diagnostic forces LLVM/MIR output; objects tests ordinary object-only demand without relaxing hit gates",
+    )
     args = parser.parse_args()
     if not 0 < args.timeout < float("inf"):
         parser.error("timeout must be finite and positive")
@@ -378,7 +397,7 @@ def main():
     args.output.mkdir(mode=0o700, parents=True, exist_ok=False)
     print("Private original evidence: " + str(args.output.resolve()), flush=True)
     try:
-        report = capture(args.compiler, args.output, args.timeout)
+        report = capture(args.compiler, args.output, args.timeout, args.output_profile)
         print(
             json.dumps(dict(verdict=report["verdict"], claim=report["claim"]), indent=2)
         )

@@ -106,7 +106,7 @@ class MockNative:
 
 
 class ArithmeticTests(unittest.TestCase):
-    def capture_mock(self, root, mode="leaf", fault=None):
+    def capture_mock(self, root, mode="leaf", fault=None, output_profile="diagnostic"):
         workspace, evidence = root / "workspace", root / mode
         workspace.mkdir()
         for name, data in arithmetic.sources().items():
@@ -123,7 +123,7 @@ class ArithmeticTests(unittest.TestCase):
             arithmetic.typed, "TypedResident", side_effect=start
         ), patch.object(arithmetic.shared, "run", side_effect=native.run):
             result = arithmetic.capture_mode(
-                Path("/frozen/compiler"), workspace, evidence, mode, 1
+                Path("/frozen/compiler"), workspace, evidence, mode, 1, output_profile
             )
         return result, native
 
@@ -151,6 +151,28 @@ class ArithmeticTests(unittest.TestCase):
         self.assertNotEqual(cases[1][1]["module_b.rs"], cases[2][1]["module_b.rs"])
         self.assertEqual(cases[3][1]["module_b.rs"], cases[4][1]["module_b.rs"])
         self.assertNotEqual(cases[3][1]["module_a.rs"], cases[4][1]["module_a.rs"])
+
+    def test_object_only_profile_does_not_force_ir_or_relax_hits(self):
+        argv = arithmetic.arguments(Path("/work"), "objects")
+        self.assertEqual(argv[-1], "--emit=obj=/work/fixture.o")
+        self.assertEqual(arithmetic.producer_artifacts("objects"), ("fixture.o",))
+        self.assertNotIn("llvm-ir", " ".join(argv))
+        self.assertNotIn("mir=", " ".join(argv))
+        with self.assertRaisesRegex(ValueError, "Unknown producer"):
+            arithmetic.arguments(Path("/work"), "unknown")
+        with tempfile.TemporaryDirectory() as temporary:
+            report, _ = self.capture_mock(Path(temporary), output_profile="objects")
+            self.assertEqual(report["output_profile"], "objects")
+            self.assertEqual(report["verdict"], "passed")
+            for row in report["observations"]:
+                for engine in ("fresh", "resident"):
+                    self.assertNotIn("fixture.ll", row[engine])
+                    self.assertNotIn("fixture.mir", row[engine])
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(AssertionError, "positive actual"):
+                self.capture_mock(
+                    Path(temporary), fault="no-cross-hit", output_profile="objects"
+                )
 
     def test_independent_wraparound_oracle(self):
         rows = arithmetic.expected_output(7, 9).splitlines()
