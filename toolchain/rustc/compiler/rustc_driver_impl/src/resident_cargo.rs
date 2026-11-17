@@ -1,5 +1,6 @@
 //! Cargo's serial native compiler worker. Environment/cwd are launch-time inputs.
-//! This retains only the existing owned frontend snapshots, never live typed state.
+//! The default path retains snapshots only. Explicit owned selection scopes real
+//! SessionGlobals and compiler owners across serial Cargo requests, without typed reuse.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -378,21 +379,81 @@ unsafe fn serve() -> Result<(), String> {
     }
     rustc_data_structures::jobserver::initialize(1, |_| {});
     rustc_session::resident::enable_process();
+    serve_requests(
+        listener,
+        None,
+        None,
+        owned_selection(std::env::var_os("JUSTRUST_CARGO_RESIDENT_OWNED").as_deref()),
+    )
+}
+
+type PreparedRequest = (UnixStream, Request, crate::PreparedCompiler, crate::TimePassesCallbacks);
+
+/// Preparation is admission, not execution. In particular help/version requests
+/// and callback-owned configurations must fall back before the R/C boundary.
+#[allow(rustc::bad_opt_access)]
+fn owned_supported(prepared: &crate::PreparedCompiler) -> bool {
+    prepared.has_input
+        && !prepared.help_only
+        && prepared.config.query_admission.is_none()
+        && prepared.config.make_frontend_admission.is_none()
+        && prepared.config.file_loader.is_none()
+        && prepared.config.opts.jobs.frontend.is_none()
+}
+
+fn owned_selection(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
+}
+
+fn disabled_experiment(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_none_or(|value| value == "0")
+}
+
+fn owned_capacity_exhausted(counts: Option<(usize, usize)>) -> bool {
+    counts.is_some_and(|(revisions, contexts)| revisions >= 64 || contexts >= 64)
+}
+
+fn owned_environment_supported() -> bool {
+    // The Cargo experiment does not inherit the isolated typed/decoder/cache
+    // experiments. They have different admission and lifetime contracts.
+    [
+        "JUSTRUST_RUSTC_RESIDENT_TYPED",
+        "JUSTRUST_RUSTC_RESIDENT_DECODERS",
+        "JUSTRUST_RUSTC_RESIDENT_LEXER",
+        "JUSTRUST_RUSTC_RESIDENT_AST",
+        "JUSTRUST_RUSTC_RESIDENT_VALUES",
+        "JUSTRUST_RUSTC_RESIDENT_FRONTEND",
+    ]
+    .iter()
+    .all(|name| disabled_experiment(std::env::var_os(name).as_deref()))
+}
+
+fn serve_requests(
+    listener: UnixListener,
+    batch: Option<&rustc_interface::resident::ResidentCompilerBatch<'_>>,
+    mut pending: Option<PreparedRequest>,
+    owned: bool,
+) -> Result<(), String> {
     let mut frozen = None;
     let mut revision = 0;
     loop {
-        if !poll_read(listener.as_raw_fd(), IDLE_MS)? {
-            return Ok(());
-        }
-        let (mut peer, _) = listener.accept().map_err(|e| e.to_string())?;
-        peer.set_read_timeout(Some(Duration::from_secs(60))).map_err(|e| e.to_string())?;
-        peer.set_write_timeout(Some(Duration::from_secs(60))).map_err(|e| e.to_string())?;
-        let request = receive(&mut peer);
-        let Ok(Request { id, args, outputs: fds, external, mut external_verify_nanos }) = request
-        else {
-            let _ = peer.write_all(b"F");
-            continue;
-        };
+        let (mut peer, request, mut prepared) =
+            if let Some((peer, request, prepared, callbacks)) = pending.take() {
+                (peer, request, Some((prepared, callbacks)))
+            } else {
+                if !poll_read(listener.as_raw_fd(), IDLE_MS)? {
+                    return Ok(());
+                }
+                let (mut peer, _) = listener.accept().map_err(|e| e.to_string())?;
+                peer.set_read_timeout(Some(Duration::from_secs(60))).map_err(|e| e.to_string())?;
+                peer.set_write_timeout(Some(Duration::from_secs(60))).map_err(|e| e.to_string())?;
+                let Ok(request) = receive(&mut peer) else {
+                    let _ = peer.write_all(b"F");
+                    continue;
+                };
+                (peer, request, None)
+            };
+        let Request { id, args, outputs: fds, external, mut external_verify_nanos } = request;
         if frozen.as_ref().is_some_and(|(old, inputs)| old != &args || inputs != &external) {
             peer.write_all(b"F").map_err(|e| e.to_string())?;
             continue;
@@ -402,9 +463,100 @@ unsafe fn serve() -> Result<(), String> {
             let _ = peer.write_all(b"F");
             return Ok(());
         }
+        if owned {
+            if !owned_environment_supported() {
+                peer.write_all(b"F").map_err(|e| e.to_string())?;
+                continue;
+            }
+            if prepared.is_none() {
+                let mut argv = vec!["jr-rustc-resident-cargo".to_owned()];
+                argv.extend(args.iter().cloned());
+                let mut callbacks = crate::TimePassesCallbacks::default();
+                // Stdio is still /dev/null, so a refused preparation cannot leak
+                // speculative diagnostics into Cargo's eventual fallback output.
+                let candidate = crate::catch_fatal_errors(|| {
+                    crate::prepare_compiler(&argv, &mut callbacks, None)
+                });
+                match candidate {
+                    Ok(Some(candidate)) if owned_supported(&candidate) => {
+                        prepared = Some((candidate, callbacks));
+                    }
+                    _ => {
+                        peer.write_all(b"F").map_err(|e| e.to_string())?;
+                        continue;
+                    }
+                }
+            }
+            if batch.is_none() {
+                let (first, callbacks) =
+                    prepared.take().expect("owned admission prepared compiler");
+                let crate::PreparedCompiler { config, has_input, help_only, registered_lints } =
+                    first;
+                // Keep the accept loop inside this continuation. The actual
+                // compiler arena and SessionGlobals outlive every admitted RPC.
+                // Incremental control uses fresh query state with the active
+                // source revision view, never external live typed queries.
+                return crate::catch_fatal_errors(|| {
+                    rustc_interface::resident::with_resident_compiler_batch_options(
+                        config,
+                        rustc_interface::resident::ResidentBatchOptions {
+                            incremental_control: true,
+                            ..Default::default()
+                        },
+                        move |batch, config| {
+                            serve_requests(
+                                listener,
+                                Some(&batch),
+                                Some((
+                                    peer,
+                                    Request {
+                                        id,
+                                        args,
+                                        outputs: fds,
+                                        external,
+                                        external_verify_nanos,
+                                    },
+                                    crate::PreparedCompiler {
+                                        config,
+                                        has_input,
+                                        help_only,
+                                        registered_lints,
+                                    },
+                                    callbacks,
+                                )),
+                                true,
+                            )
+                        },
+                    )
+                })
+                .map_err(|_| "Cargo owned batch construction failed".to_owned())?;
+            }
+        }
+        // Batch construction and preparation can be lengthy. Re-capture the
+        // complete actual invocation immediately before offering commit, not
+        // merely the paths selected by the peer's manifest.
+        if owned && external.is_some() {
+            let verify_start = Instant::now();
+            let actual = std::env::current_dir()
+                .map_err(|e| e.to_string())
+                .and_then(|cwd| jr_resident_inputs::capture(&args, &cwd));
+            external_verify_nanos = external_verify_nanos.saturating_add(
+                u64::try_from(verify_start.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            );
+            if actual.as_ref().ok() != Some(&external) {
+                peer.write_all(b"F").map_err(|e| e.to_string())?;
+                return Ok(());
+            }
+        }
         peer.write_all(b"R").map_err(|e| e.to_string())?;
         let mut commit = [0];
         if peer.read_exact(&mut commit).is_err() || commit != *b"C" {
+            // An uncommitted initial owned request has nevertheless selected
+            // immutable SessionGlobals. Retire rather than admit a different
+            // invocation into that universe without a frozen committed argv.
+            if batch.is_some() {
+                return Ok(());
+            }
             continue;
         }
         // All failures from here are committed failures, never fallback permission.
@@ -421,10 +573,33 @@ unsafe fn serve() -> Result<(), String> {
         let mut callbacks = crate::TimePassesCallbacks::default();
         let result = lease
             .with_current(|| {
-                crate::catch_fatal_errors(|| crate::compiler_entrypoint(&argv, &mut callbacks))
+                crate::catch_fatal_errors(|| {
+                    if let Some(batch) = batch {
+                        let (prepared, initial_callbacks) =
+                            prepared.take().expect("owned preflight");
+                        callbacks = initial_callbacks;
+                        batch.run(prepared.config, |compiler, domain| {
+                            crate::run_compiler_pipeline_with_live_identity(
+                                compiler,
+                                Some(domain),
+                                &mut callbacks,
+                                prepared.has_input,
+                                prepared.help_only,
+                                prepared.registered_lints,
+                                None,
+                            );
+                        });
+                    } else {
+                        crate::compiler_entrypoint(&argv, &mut callbacks);
+                    }
+                })
             })
             .map_err(|e| format!("scheduler selection failed: {e:?}"))?;
         let status = if result.is_ok() { 0 } else { 1 };
+        if let Some(batch) = batch {
+            batch.finish_live_revision(status == 0);
+            batch.finish_decoder_revision(status == 0);
+        }
         if let Some(format) = callbacks.time_passes {
             rustc_data_structures::profiling::print_time_passes_entry(
                 "total",
@@ -450,8 +625,20 @@ unsafe fn serve() -> Result<(), String> {
                 u64::try_from(verify_start.elapsed().as_nanos()).unwrap_or(u64::MAX),
             );
         }
-        let retire = revision == 64 || external_changed || rss.is_none_or(|rss| rss >= RSS_LIMIT);
-        let reply = json!({"id":id,"status":status,"pid":std::process::id(),
+        let owned_counts = batch.map(|batch| batch.counts());
+        let retire = revision == 64
+            || external_changed
+            || rss.is_none_or(|rss| rss >= RSS_LIMIT)
+            || owned_capacity_exhausted(owned_counts);
+        let owned_stats = batch.map(|batch| {
+            let (revisions, contexts) = batch.counts();
+            let live = batch.live_stats();
+            json!({"revisions":revisions,"contexts":contexts,
+                "live_queries":false,"external_decoders":false,"incremental_control":true,
+                "retained_entries":live.retained_entries,
+                "retained_estimated_bytes":live.retained_estimated_bytes})
+        });
+        let mut reply = json!({"id":id,"status":status,"pid":std::process::id(),
             "external_inputs_verified":external.is_some(),"external_inputs_changed":external_changed,
             "external_verify_nanos":external_verify_nanos,
             "elapsed_seconds":start.elapsed().as_secs_f64(),"resident_hits":hits,
@@ -459,6 +646,9 @@ unsafe fn serve() -> Result<(), String> {
             "frontend":{"graph_hits":graph.hits,"graph_misses":graph.misses,"graph_bytes":graph.retained_bytes,
                 "archive_hits":archive.hits,"archive_misses":archive.misses,"archive_bytes":archive.current_bytes,
                 "value_loads":archive.value_loads,"typeck_loads":archive.typeck_loads,"mir_loads":archive.mir_loads}});
+        if let Some(owned_stats) = owned_stats {
+            reply["owned"] = owned_stats;
+        }
         serde_json::to_writer(&mut peer, &reply).map_err(|e| e.to_string())?;
         peer.write_all(b"\n").map_err(|e| e.to_string())?;
         if retire {
@@ -470,6 +660,54 @@ unsafe fn serve() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owned_selection_is_strictly_opt_in() {
+        use std::ffi::OsStr;
+        assert!(!owned_selection(None));
+        assert!(owned_selection(Some(OsStr::new("1"))));
+        for value in ["", "0", "true", "01", "1 ", "live", "control"] {
+            assert!(!owned_selection(Some(OsStr::new(value))), "{value}");
+        }
+    }
+
+    #[test]
+    fn owned_does_not_inherit_isolated_cache_experiments() {
+        use std::ffi::OsStr;
+        assert!(disabled_experiment(None));
+        assert!(disabled_experiment(Some(OsStr::new("0"))));
+        for value in ["", "1", "control", "selective-leaf", "false"] {
+            assert!(!disabled_experiment(Some(OsStr::new(value))), "{value}");
+        }
+    }
+
+    #[test]
+    fn owned_retires_before_either_native_capacity_is_exhausted() {
+        assert!(!owned_capacity_exhausted(None));
+        assert!(!owned_capacity_exhausted(Some((0, 0))));
+        assert!(!owned_capacity_exhausted(Some((63, 63))));
+        for counts in [(64, 0), (0, 64), (64, 64), (65, 1), (1, 65)] {
+            assert!(owned_capacity_exhausted(Some(counts)), "{counts:?}");
+        }
+    }
+
+    #[test]
+    fn owned_preflight_rejects_help_and_accepts_real_serial_compilation() {
+        let mut callbacks = crate::TimePassesCallbacks::default();
+        let argv = ["jr-rustc", "a.rs", "--jobs-backend=1", "--jobs-linker=1"].map(str::to_owned);
+        let mut prepared = crate::prepare_compiler(&argv, &mut callbacks, None).unwrap();
+        assert!(owned_supported(&prepared));
+        prepared.has_input = false;
+        assert!(!owned_supported(&prepared));
+        prepared.has_input = true;
+        prepared.help_only = true;
+        assert!(!owned_supported(&prepared));
+        prepared.help_only = false;
+        // A custom source owner is not admitted merely because argv was serial.
+        prepared.config.file_loader = Some(Box::new(rustc_span::source_map::RealFileLoader));
+        assert!(!owned_supported(&prepared));
+    }
+
     #[test]
     fn external_manifest_is_opt_in_exact_and_content_verified() {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
