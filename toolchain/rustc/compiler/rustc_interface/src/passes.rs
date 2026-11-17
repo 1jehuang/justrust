@@ -135,15 +135,41 @@ impl LintStoreExpand for LintStoreExpandImpl<'_> {
     }
 }
 
+/// Diagnostic-only, disjoint wall-time intervals within one resolver provider.
+/// The request-scoped native collector owns gating, bounded storage and reporting.
+/// Phase timers never subtract from provider-exclusive query measurements.
+/// An unwind retains the unfinished interval under `resolver::interrupted_phase`.
+struct ResolverPhaseCosts(Option<rustc_query_impl::provider_stats::PhaseTimer>);
+
+impl ResolverPhaseCosts {
+    fn new() -> Self {
+        Self(rustc_query_impl::provider_stats::phase("resolver::interrupted_phase"))
+    }
+
+    fn finish(&mut self, name: &'static str) {
+        if let Some(timer) = self.0.take() {
+            timer.finish_as(name);
+            self.0 = rustc_query_impl::provider_stats::phase("resolver::interrupted_phase");
+        }
+    }
+
+    fn finish_last(mut self, name: &'static str) {
+        if let Some(timer) = self.0.take() {
+            timer.finish_as(name);
+        }
+    }
+}
+
 /// Runs the "early phases" of the compiler: initial `cfg` processing,
 /// syntax expansion, secondary `cfg` expansion, synthesis of a test
 /// harness if one is to be provided, injection of a dependency on the
 /// standard library and prelude, and name resolution.
-#[instrument(level = "trace", skip(krate, resolver))]
+#[instrument(level = "trace", skip(krate, resolver, costs))]
 fn configure_and_expand(
     mut krate: ast::Crate,
     pre_configured_attrs: &[ast::Attribute],
     resolver: &mut Resolver<'_, '_>,
+    costs: &mut ResolverPhaseCosts,
 ) -> ast::Crate {
     let tcx = resolver.tcx();
     let sess = tcx.sess;
@@ -169,6 +195,7 @@ fn configure_and_expand(
             features,
         )
     });
+    costs.finish("resolver::expansion_setup");
 
     // Expand all macros
     krate = sess.time("macro_expand_crate", || {
@@ -224,6 +251,9 @@ fn configure_and_expand(
         ecx.num_standard_library_imports = num_standard_library_imports;
         // Expand macros now!
         let krate = sess.time("expand_crate", || ecx.monotonic_expander().expand_crate(krate));
+        // Includes on-demand module parsing and macro-time name resolution,
+        // not just proc-macro execution. Final resolution is measured below.
+        costs.finish("resolver::macro_expansion_and_module_parsing");
 
         if ecx.nb_macro_errors > 0 {
             sess.dcx().abort_if_errors();
@@ -258,6 +288,8 @@ fn configure_and_expand(
 
         krate
     });
+
+    costs.finish("resolver::expansion_cleanup");
 
     sess.time("maybe_building_test_harness", || {
         rustc_builtin_macros::test_harness::inject(&mut krate, sess, features, resolver)
@@ -319,9 +351,13 @@ fn configure_and_expand(
 
     // Done with macro expansion!
 
+    costs.finish("resolver::harness_and_ast_validation");
+
     resolver.resolve_crate(&krate);
+    costs.finish("resolver::final_name_resolution");
 
     CStore::from_tcx(tcx).report_session_incompatibilities(tcx, &krate);
+    costs.finish("resolver::session_incompatibilities");
     krate
 }
 
@@ -816,10 +852,14 @@ fn resolver_for_lowering_raw<'tcx>(
     tcx: TyCtxt<'tcx>,
     (): (),
 ) -> (&'tcx Steal<ResolverAstLowering<'tcx>>, &'tcx Steal<ast::Crate>, &'tcx ResolverGlobalCtxt) {
+    let mut costs = ResolverPhaseCosts::new();
     let arenas = WorkerLocal::new(|_| Resolver::arenas());
     let _ = tcx.registered_attr_tools(()); // Uses `crate_for_resolver`.
     let _ = tcx.registered_lint_tools(()); // Uses `crate_for_resolver`.
     let (krate, pre_configured_attrs) = tcx.crate_for_resolver(()).steal();
+    // Root parsing normally precedes this provider. This interval only counts
+    // AST acquisition/configuration actually performed by this invocation.
+    costs.finish("resolver::resolver_ast_acquisition");
     let mut resolver = Resolver::new(
         tcx,
         &pre_configured_attrs,
@@ -827,7 +867,8 @@ fn resolver_for_lowering_raw<'tcx>(
         krate.spans.inject_use_span,
         &arenas,
     );
-    let krate = configure_and_expand(krate, &pre_configured_attrs, &mut resolver);
+    costs.finish("resolver::resolver_construction");
+    let krate = configure_and_expand(krate, &pre_configured_attrs, &mut resolver, &mut costs);
 
     // Don't mutate the cstore or stable crate id map from here on.
     tcx.untracked().freeze_cstore();
@@ -836,12 +877,19 @@ fn resolver_for_lowering_raw<'tcx>(
         global_ctxt: untracked_resolutions,
         ast_lowering: untracked_resolver_for_lowering,
     } = resolver.into_outputs();
+    costs.finish("resolver::freeze_and_resolver_outputs");
 
-    (
+    let result: (
+        &'tcx Steal<ResolverAstLowering<'tcx>>,
+        &'tcx Steal<ast::Crate>,
+        &'tcx ResolverGlobalCtxt,
+    ) = (
         tcx.arena.alloc(Steal::new(untracked_resolver_for_lowering)),
         tcx.arena.alloc(Steal::new(krate)),
         tcx.arena.alloc(untracked_resolutions),
-    )
+    );
+    costs.finish_last("resolver::arena_allocation");
+    result
 }
 
 pub fn write_dep_info(tcx: TyCtxt<'_>) {

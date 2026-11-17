@@ -899,7 +899,12 @@ fn serve_requests(
                     "green_recompute_exclusive_nanos":row.green_recompute_exclusive_nanos})
                 })
                 .collect();
-            reply["query_cost"] = json!({"enabled":true,"rows":rows});
+            let phases: Vec<_> = query_cost
+                .phases()
+                .into_iter()
+                .map(|row| json!({"name":row.name,"count":row.count,"nanos":row.nanos}))
+                .collect();
+            reply["query_cost"] = json!({"enabled":true,"rows":rows,"phases":phases});
         }
         if let Some(stats) = macro_stats {
             let callback_wire_tags: Vec<_> = stats

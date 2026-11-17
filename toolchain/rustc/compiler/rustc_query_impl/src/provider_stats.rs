@@ -44,9 +44,18 @@ pub struct Row {
     pub green_recompute_exclusive_nanos: u64,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PhaseRow {
+    pub name: &'static str,
+    pub count: u64,
+    /// Inclusive wall time, separate from provider exclusive accounting.
+    pub nanos: u64,
+}
+
 #[derive(Default)]
 struct Collector {
     rows: Mutex<BTreeMap<&'static str, Row>>,
+    phases: Mutex<BTreeMap<&'static str, PhaseRow>>,
 }
 
 impl Collector {
@@ -91,6 +100,12 @@ pub fn begin(enabled: bool) -> Guard {
 }
 
 impl Guard {
+    pub fn phases(&self) -> Vec<PhaseRow> {
+        self.collector
+            .as_ref()
+            .map_or_else(Vec::new, |c| c.phases.lock().values().cloned().collect())
+    }
+
     /// Query-name sorted rows for this request, including after a nested scope.
     pub fn snapshot(&self) -> Vec<Row> {
         self.collector.as_ref().map_or_else(Vec::new, |c| c.rows.lock().values().cloned().collect())
@@ -109,6 +124,45 @@ impl Drop for Guard {
 pub fn snapshot() -> Vec<Row> {
     let collector = ACTIVE.lock().clone();
     collector.map_or_else(Vec::new, |c| c.rows.lock().values().cloned().collect())
+}
+
+/// Independent inclusive phase timer. It never changes provider nesting counters.
+/// Disabled capture performs no timestamp or allocation.
+#[must_use]
+pub struct PhaseTimer {
+    collector: Arc<Collector>,
+    name: &'static str,
+    start: Instant,
+}
+
+pub fn phase(name: &'static str) -> Option<PhaseTimer> {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return None;
+    }
+    let collector = ACTIVE.lock().clone()?;
+    Some(PhaseTimer { collector, name, start: Instant::now() })
+}
+
+impl PhaseTimer {
+    /// Complete an interval whose fixed label is selected at its boundary.
+    pub fn finish_as(mut self, name: &'static str) {
+        self.name = name;
+    }
+}
+
+impl Drop for PhaseTimer {
+    fn drop(&mut self) {
+        let elapsed = nanos(self.start.elapsed().as_nanos());
+        let mut rows = self.collector.phases.lock();
+        let name = if rows.contains_key(self.name) || rows.len() < 64 {
+            self.name
+        } else {
+            "<other phases>"
+        };
+        let row = rows.entry(name).or_insert_with(|| PhaseRow { name, ..PhaseRow::default() });
+        row.count = row.count.saturating_add(1);
+        row.nanos = row.nanos.saturating_add(elapsed);
+    }
 }
 
 pub(crate) struct ProviderTimer {
@@ -169,6 +223,29 @@ mod tests {
 
     // Process-wide capture requires serialization, just like driver requests.
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn phases_are_separate_bounded_and_reset() {
+        let _serial = TEST_LOCK.lock();
+        assert!(phase("disabled").is_none());
+        let request = begin(true);
+        {
+            let _provider = provider("provider", false);
+            drop(phase("frontend"));
+        }
+        assert_eq!(request.snapshot().len(), 1);
+        assert_eq!(request.phases()[0].name, "frontend");
+        assert_eq!(request.phases()[0].count, 1);
+        for i in 0..70 {
+            let name = Box::leak(format!("phase_{i}").into_boxed_str());
+            drop(phase(name));
+        }
+        assert_eq!(request.phases().len(), 65);
+        assert!(request.phases().iter().any(|row| row.name == "<other phases>"));
+        drop(request);
+        let fresh = begin(true);
+        assert!(fresh.phases().is_empty());
+    }
 
     #[test]
     fn reset_nested_disabled_and_unwind() {
