@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Pure mock tests only, never native performance evidence."""
+import argparse
+import contextlib
+import io
 import copy
 import json
 from pathlib import Path
@@ -15,8 +18,11 @@ class SuiteTests(unittest.TestCase):
     def receipt(self, client=False):
         with tempfile.TemporaryDirectory(prefix='jr') as temp:
             root = Path(temp)
-            compiler, cargo, binary = (root / name for name in ('rustc', 'cargo', 'justrust'))
-            for path in (compiler, cargo, binary):
+            (root / 'bin').mkdir()
+            (root / 'lib').mkdir()
+            compiler, cargo, binary = root / 'bin/rustc', root / 'cargo', root / 'justrust'
+            driver = root / 'lib/librustc_driver.so'
+            for path in (compiler, cargo, binary, driver):
                 path.write_bytes(path.name.encode())
             fake = FakeCargo()
             calls = []
@@ -25,8 +31,13 @@ class SuiteTests(unittest.TestCase):
                 fake.index %= 8
                 return fake(command, timeout, cwd, env)
             with mock.patch.object(suite.acceptance.native, 'run', side_effect=runner), \
-                    mock.patch.object(suite.acceptance.native, 'identity', side_effect=suite.identity):
-                result = suite.capture(compiler, cargo, root / 'o', justrust=binary if client else None)
+                    mock.patch.object(suite.acceptance.native, 'identity',
+                                      side_effect=lambda path: dict(suite.identity(path), drivers=[suite.identity(driver)])):
+                result = suite.capture(compiler, cargo, root / 'o', justrust=binary if client else None,
+                                       expected_compiler_sha256=suite.identity(compiler)['sha256'],
+                                       expected_driver_sha256=suite.identity(driver)['sha256'],
+                                       expected_cargo_sha256=suite.identity(cargo)['sha256'],
+                                       expected_client_sha256=suite.identity(binary)['sha256'] if client else None)
             self.assertEqual(json.loads((root / 'o/receipt.json').read_text()), result)
             self.assertTrue((root / 'o/000-on/03-source.rs').exists())
             return result, calls
@@ -55,7 +66,8 @@ class SuiteTests(unittest.TestCase):
 
     def test_compare_rejects_each_provenance_mismatch(self):
         report, _ = self.receipt()
-        self.assertEqual(set(suite.compare(report, report)['stages']), set(suite.MEASURED))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(set(suite.compare(report, report, floor=10)['stages']), set(suite.MEASURED))
         for key in report['provenance']:
             changed = copy.deepcopy(report)
             if key in ('source_b64', 'repetitions'):
@@ -78,6 +90,48 @@ class SuiteTests(unittest.TestCase):
             mutation(changed)
             with self.assertRaises((ValueError, AssertionError)):
                 suite.validate(changed)
+
+    def test_attestation_failure_precedes_any_candidate_execution(self):
+        with tempfile.TemporaryDirectory(prefix='jr') as temp:
+            root = Path(temp)
+            (root / 'bin').mkdir()
+            (root / 'lib').mkdir()
+            compiler, cargo, driver = root / 'bin/rustc', root / 'cargo', root / 'lib/librustc_driver.so'
+            for path in (compiler, cargo, driver):
+                path.write_bytes(b'candidate')
+            with mock.patch.object(suite.acceptance.native, 'run') as runner:
+                for key in ('compiler', 'driver', 'cargo'):
+                    hashes = {f'expected_{name}_sha256': suite.identity(path)['sha256']
+                              for name, path in (('compiler', compiler), ('cargo', cargo), ('driver', driver))}
+                    hashes[f'expected_{key}_sha256'] = '0' * 64
+                    with self.assertRaisesRegex(ValueError, 'Unattested'):
+                        suite.capture(compiler, cargo, root / 'o', **hashes)
+                runner.assert_not_called()
+            self.assertFalse((root / 'o').exists())
+
+    def test_secrets_removed_before_invocation_and_receipt(self):
+        seen = []
+        invoke = suite.timed_runner(lambda *a, **kw: seen.append(kw['env']) or {},
+                                    clock=iter([1, 100]).__next__)
+        env = dict(RUSTFLAGS='keep', AWS_SECRET_ACCESS_KEY='private', GITHUB_TOKEN='private',
+                   CLOUDFLARE_API_KEY='private', CARGO_REGISTRY_TOKEN='private', PATH='/bin')
+        result = invoke(['/cargo'], 3, Path('/cwd'), env)
+        self.assertEqual(seen, [dict(RUSTFLAGS='keep', PATH='/bin')])
+        self.assertNotIn('private', json.dumps(result))
+        with mock.patch.dict(suite.os.environ, {'GITHUB_TOKEN': 'private-leak-check'}):
+            report, _ = self.receipt()
+        self.assertNotIn('private-leak-check', json.dumps(report))
+
+    def test_parser_contract(self):
+        parser = argparse.ArgumentParser()
+        suite.add_parser(parser.add_subparsers())
+        args = parser.parse_args(['stable-native-cargo', '--compiler', '/c', '--cargo', '/g',
+                                  '--output', '/o', '--expected-compiler-sha256', '1' * 64,
+                                  '--expected-driver-sha256', '2' * 64,
+                                  '--expected-cargo-sha256', '3' * 64])
+        self.assertIs(args.fn, suite.run)
+        self.assertEqual(args.repetitions, 2)
+        self.assertEqual(suite.SCHEMA, 'stable_native_cargo/v1')
 
     def test_reject_unbalanced_counts_before_execution(self):
         for count in (0, 1, 3, True):
