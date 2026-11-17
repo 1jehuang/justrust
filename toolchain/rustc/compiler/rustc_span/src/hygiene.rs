@@ -395,6 +395,25 @@ impl HygieneData {
         }
     }
 
+    /// Forget revision-local metadata lookup identities before creating a new
+    /// crate store. Allocated local expansions and contexts remain append-only,
+    /// so historical local spans keep their indices. Foreign `ExpnId`s contain
+    /// crate-store-local crate numbers and must be decoded again, even when the
+    /// next store assigns the same number to the same dependency.
+    ///
+    /// This is not valid while retaining a crate store or its decoded contexts.
+    pub(crate) fn reset_resident_metadata_identity(&mut self) {
+        self.foreign_expn_data.clear();
+        self.foreign_expn_hashes.clear();
+        self.expn_hash_to_expn_id.clear();
+        self.expn_hash_to_expn_id.insert(ExpnHash(Fingerprint::ZERO), ExpnId::root());
+        self.expn_data_disambiguators.clear();
+        // Local expansion IDs are append-only, but foreign IDs can be reused by
+        // the new store. Do not intern its contexts as historical contexts with
+        // stale `$crate` names and source positions.
+        self.syntax_context_map.retain(|(_, expn, _), _| expn.krate == LOCAL_CRATE);
+    }
+
     pub(crate) fn enter_resident_revision(&mut self) {
         // Include the root context on entry with a fresh owner, just as in a
         // regular session. Otherwise retain all context identities and cached
@@ -1756,6 +1775,84 @@ mod resident_revision_tests {
             assert_eq!(pending.dollar_crate_name(), kw::DollarCrate);
             assert_eq!(resolved.dollar_crate_name(), old_name);
             assert_eq!(span.ctxt(), pending);
+        });
+    }
+
+    #[test]
+    fn fresh_metadata_store_redecodes_reused_foreign_expansion_identity() {
+        let mut globals = SessionGlobals::new(crate::edition::DEFAULT_EDITION, &[], None);
+        let krate = CrateNum::from_u32(2);
+        let hash = ExpnHash(Fingerprint::new(Hash64::new(1), Hash64::new(2)));
+        let old_ctxt = globals.enter_resident_revision(|| {
+            let expn = decode_expn_id(krate, 1, |_| {
+                (
+                    ExpnData::default(
+                        ExpnKind::Macro(MacroKind::Bang, sym::dummy),
+                        Span::with_root_ctxt(BytePos(10), BytePos(20)),
+                        crate::edition::DEFAULT_EDITION,
+                        Some(DefId { krate, index: DefIndex::from_u32(7) }),
+                        None,
+                    ),
+                    hash,
+                )
+            });
+            // Ordinary repeated decoding in one store must still hit the cache.
+            assert_eq!(decode_expn_id(krate, 1, |_| panic!("decoded twice")), expn);
+            let ctxt = HygieneData::with(|data| {
+                data.alloc_ctxt(SyntaxContext::root(), expn, Transparency::Opaque)
+            });
+            update_dollar_crate_names(|_| sym::core);
+            ctxt
+        });
+        globals.reset_resident_metadata_identity();
+        globals.enter_resident_revision(|| {
+            assert!(ExpnId::from_hash(hash).is_none());
+            assert_eq!(ExpnId::from_hash(ExpnHash(Fingerprint::ZERO)), Some(ExpnId::root()));
+            let mut decoded = false;
+            let expn = decode_expn_id(krate, 1, |_| {
+                decoded = true;
+                (
+                    ExpnData::default(
+                        ExpnKind::Macro(MacroKind::Bang, sym::dummy),
+                        Span::with_root_ctxt(BytePos(100), BytePos(120)),
+                        crate::edition::DEFAULT_EDITION,
+                        Some(DefId { krate, index: DefIndex::from_u32(9) }),
+                        None,
+                    ),
+                    hash,
+                )
+            });
+            assert!(decoded, "foreign identity was reused across metadata stores");
+            assert_eq!(expn.expn_data().call_site.lo(), BytePos(100));
+            assert_eq!(expn.expn_data().macro_def_id.unwrap().index, DefIndex::from_u32(9));
+            assert_eq!(ExpnId::from_hash(hash), Some(expn));
+            let ctxt = HygieneData::with(|data| {
+                data.alloc_ctxt(SyntaxContext::root(), expn, Transparency::Opaque)
+            });
+            assert_ne!(ctxt, old_ctxt);
+            assert_eq!(ctxt.dollar_crate_name(), kw::DollarCrate);
+            update_dollar_crate_names(|_| sym::std);
+            assert_eq!(ctxt.dollar_crate_name(), sym::std);
+            assert_eq!(old_ctxt.dollar_crate_name(), sym::core);
+        });
+    }
+
+    #[test]
+    fn fresh_metadata_store_resets_local_hash_disambiguation_without_recycling_indices() {
+        let mut globals = SessionGlobals::new(crate::edition::DEFAULT_EDITION, &[], None);
+        let old = globals.enter_resident_revision(|| {
+            HygieneData::with(|data| {
+                data.expn_data_disambiguators.insert(Hash64::new(3), 5);
+            });
+            new_context(SyntaxContext::root())
+        });
+        globals.reset_resident_metadata_identity();
+        globals.enter_resident_revision(|| {
+            HygieneData::with(|data| assert!(data.expn_data_disambiguators.is_empty()));
+            let current = new_context(SyntaxContext::root());
+            assert_ne!(old, current);
+            assert_ne!(old.outer_expn(), current.outer_expn());
+            assert_eq!(old.marks().len(), 1);
         });
     }
 

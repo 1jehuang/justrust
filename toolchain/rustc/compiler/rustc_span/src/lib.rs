@@ -146,6 +146,21 @@ impl SessionGlobals {
         set_session_globals_then(self, f)
     }
 
+    /// Reset metadata identities when the resident executor creates a fresh
+    /// crate store rather than reusing its previous global type context.
+    ///
+    /// All preceding workers must have returned. Old foreign expansion IDs and
+    /// metadata decode contexts must not be used after this call: their crate
+    /// numbers are local to the retired store. Local span/context indices remain
+    /// allocated, and the source encoder's active-source checks still apply.
+    pub fn reset_resident_metadata_identity(&mut self) {
+        assert!(
+            !SESSION_GLOBALS.is_set(),
+            "resident metadata reset must run outside an active session-global scope"
+        );
+        self.hygiene_data.borrow_mut().reset_resident_metadata_identity();
+    }
+
     pub fn new(
         edition: Edition,
         extra_symbols: &[&'static str],
