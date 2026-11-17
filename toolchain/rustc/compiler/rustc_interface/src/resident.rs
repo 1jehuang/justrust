@@ -8,7 +8,9 @@ use std::cell::{Cell, RefCell};
 
 use rustc_arena::TypedArena;
 use rustc_data_structures::jobserver;
-use rustc_middle::ty::{CurrentGcx, ResidentTypeDomain, with_resident_type_domain_and_owner};
+use rustc_middle::ty::{
+    CurrentGcx, ResidentTypeDomain, TyCtxt, with_resident_type_domain_and_owner,
+};
 use rustc_session::EarlyDiagCtxt;
 use rustc_session::config;
 use rustc_span::SessionGlobals;
@@ -37,6 +39,7 @@ pub struct ResidentCompilerBatch<'domain> {
     extra_symbols: Vec<&'static str>,
     invocations: Cell<usize>,
     options: ResidentBatchOptions,
+    external_decoders: bool,
 }
 
 /// Development-only selection. Ordinary owned batches retain their existing
@@ -53,6 +56,54 @@ pub struct ResidentBatchOptions {
     pub ast_cache: bool,
 }
 
+thread_local! {
+    static MANAGED_DECODERS: Cell<bool> = const { Cell::new(false) };
+}
+
+fn with_managed_decoders<R>(enabled: bool, f: impl FnOnce() -> R) -> R {
+    rustc_metadata::resident_metadata::with_resident_external_decoder_cache(enabled, || {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                MANAGED_DECODERS.with(|active| active.set(false));
+            }
+        }
+        MANAGED_DECODERS.with(|active| {
+            assert!(!active.replace(enabled), "managed decoder scopes cannot nest");
+        });
+        let _reset = Reset;
+        f()
+    })
+}
+
+/// Called after native context finalization while the current source revision
+/// and allocation universe are still active. Link failure later retires the
+/// whole owner in `ResidentCompilerBatch::run`; it cannot authorize a retry.
+pub(crate) fn publish_managed_decoders(tcx: TyCtxt<'_>) {
+    if !MANAGED_DECODERS.with(Cell::get) {
+        return;
+    }
+    if tcx.dcx().has_errors().is_some() {
+        rustc_metadata::resident_metadata::retire_after_failed_revision();
+        return;
+    }
+    use rustc_metadata::resident_metadata::{ExternalSourceSnapshotLimits, MetadataSnapshotLimits};
+    // Aggregate admission limits, not a hard process peak-memory cap.
+    let limits = ExternalSourceSnapshotLimits {
+        metadata: MetadataSnapshotLimits {
+            max_crates: 256,
+            max_metadata_bytes: 256 * 1024 * 1024,
+            max_mapping_entries: 65_536,
+        },
+        max_files: 16_384,
+        max_declared_source_bytes: 256 * 1024 * 1024,
+    };
+    // Rejection is a retirement request, not a compilation error. Preserve the
+    // actual result and let the managed transport flush its reply before exit.
+    let _ = rustc_metadata::creader::CStore::from_tcx(tcx)
+        .publish_observed_external_decoders(tcx, limits);
+}
+
 impl<'domain> ResidentCompilerBatch<'domain> {
     /// Allocated invocation and context counts, not live query-cache hit counts.
     pub fn counts(&self) -> (usize, usize) {
@@ -63,6 +114,10 @@ impl<'domain> ResidentCompilerBatch<'domain> {
         if let Some(state) = self.domain.live_query_state() {
             state.finish(success);
         }
+    }
+
+    pub fn decoder_stats(&self) -> rustc_metadata::resident_metadata::ExternalDecoderCacheStats {
+        rustc_metadata::resident_metadata::stats()
     }
 
     pub fn ast_stats(&self) -> rustc_parse::resident_ast::AstCacheStats {
@@ -89,6 +144,19 @@ impl<'domain> ResidentCompilerBatch<'domain> {
     ) -> R {
         let early_dcx = EarlyDiagCtxt::new(config.opts.error_format);
         reject_unsupported(&early_dcx, &config, self.options);
+        if self.external_decoders && self.decoder_stats().retired {
+            early_dcx
+                .early_fatal("resident external decoder owner is retired; start a fresh batch");
+        }
+        struct FailedRevision(bool);
+        impl Drop for FailedRevision {
+            fn drop(&mut self) {
+                if self.0 {
+                    rustc_metadata::resident_metadata::retire_after_failed_revision();
+                }
+            }
+        }
+        let mut failed_revision = FailedRevision(self.external_decoders);
         let target = config::build_target_config(
             &early_dcx,
             &config.opts.target_triple,
@@ -114,7 +182,7 @@ impl<'domain> ResidentCompilerBatch<'domain> {
             early_dcx.early_fatal("resident batch invocation limit reached; retire this batch");
         }
         self.invocations.set(count + 1);
-        self.owners.globals.borrow_mut().enter_resident_revision(|| {
+        let result = self.owners.globals.borrow_mut().enter_resident_revision(|| {
             let source_map = rustc_span::source_map::get_source_map()
                 .expect("resident batch owns a native source map");
             let _source_revision = source_map
@@ -130,10 +198,15 @@ impl<'domain> ResidentCompilerBatch<'domain> {
                 None,
                 |compiler| {
                     let compiler: &'domain Compiler = self.owners.compilers.alloc(compiler);
-                    execute_compiler(compiler, |_| f(compiler, &self.domain))
+                    let result = execute_compiler(compiler, |_| f(compiler, &self.domain));
+                    if compiler.sess.dcx().has_errors().is_none() {
+                        failed_revision.0 = false;
+                    }
+                    result
                 },
             )
-        })
+        });
+        result
     }
 }
 
@@ -184,6 +257,19 @@ pub fn with_resident_compiler_batch_options<R: Send>(
     options: ResidentBatchOptions,
     f: impl for<'domain> FnOnce(ResidentCompilerBatch<'domain>, Config) -> R + Send,
 ) -> R {
+    with_resident_compiler_batch_options_and_decoders(config, options, false, f)
+}
+
+/// Explicit development-only native decoder retention. This does not enable
+/// external typed queries. The caller must stop the batch when decoder stats
+/// request retirement, after preserving the actual compilation result.
+#[allow(rustc::bad_opt_access)]
+pub fn with_resident_compiler_batch_options_and_decoders<R: Send>(
+    config: Config,
+    options: ResidentBatchOptions,
+    external_decoders: bool,
+    f: impl for<'domain> FnOnce(ResidentCompilerBatch<'domain>, Config) -> R + Send,
+) -> R {
     let early_dcx = EarlyDiagCtxt::new(config.opts.error_format);
     reject_unsupported(&early_dcx, &config, options);
     if config.opts.jobs.frontend.is_some() {
@@ -229,25 +315,28 @@ pub fn with_resident_compiler_batch_options<R: Send>(
                 globals: RefCell::new(globals),
                 current_gcx: CurrentGcx::new(),
             };
-            rustc_parse::resident_ast::with_resident_ast_cache(options.ast_cache, || {
-                rustc_parse::resident::with_resident_lexer_cache(options.lexer_cache, || {
-                    with_resident_type_domain_and_owner(owners, |domain, owners| {
-                        domain.enable_live_queries(options.live_queries);
-                        if let Some(state) = domain.live_query_state() {
-                            state.enable_leaf(options.selective_leaf);
-                        }
-                        f(
-                            ResidentCompilerBatch {
-                                domain,
-                                owners,
-                                initial_options,
-                                target,
-                                extra_symbols: extra_symbols.clone(),
-                                invocations: Cell::new(0),
-                                options,
-                            },
-                            config,
-                        )
+            with_managed_decoders(external_decoders, || {
+                rustc_parse::resident_ast::with_resident_ast_cache(options.ast_cache, || {
+                    rustc_parse::resident::with_resident_lexer_cache(options.lexer_cache, || {
+                        with_resident_type_domain_and_owner(owners, |domain, owners| {
+                            domain.enable_live_queries(options.live_queries);
+                            if let Some(state) = domain.live_query_state() {
+                                state.enable_leaf(options.selective_leaf);
+                            }
+                            f(
+                                ResidentCompilerBatch {
+                                    domain,
+                                    owners,
+                                    initial_options,
+                                    target,
+                                    extra_symbols: extra_symbols.clone(),
+                                    invocations: Cell::new(0),
+                                    options,
+                                    external_decoders,
+                                },
+                                config,
+                            )
+                        })
                     })
                 })
             })
@@ -390,6 +479,77 @@ mod tests {
             );
             assert!(identities[1].authorize_reuse(&identities[2], budget).is_err());
         });
+    }
+
+    #[test]
+    fn managed_decoder_publication_and_failure_retirement() {
+        let executable = std::env::current_exe().expect("native test executable");
+        let sysroot = executable
+            .ancestors()
+            .find_map(|path| {
+                let stage = path.file_name()?.to_str()?.strip_suffix("-rustc")?;
+                let number = stage.strip_prefix("stage")?;
+                (!number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
+                    .then(|| path.with_file_name(stage))
+            })
+            .expect("run with bootstrap x test and matching standard libraries");
+        let make_config = || {
+            let mut config = config(0);
+            config.opts.sysroot = config::Sysroot::new(Some(sysroot.clone()));
+            config.input = Input::Str {
+                name: FileName::Custom("managed-decoder.rs".into()),
+                input: "pub fn value() -> bool { std::matches!(std::hint::black_box(1u8), 1) }"
+                    .into(),
+            };
+            config
+        };
+        for enabled in [false, true] {
+            with_resident_compiler_batch_options_and_decoders(
+                make_config(),
+                ResidentBatchOptions::default(),
+                enabled,
+                |batch, first| {
+                    for config in [first, make_config()] {
+                        batch.run(config, |compiler, domain| {
+                            let krate = crate::passes::parse(&compiler.sess);
+                            crate::passes::create_and_enter_global_ctxt_in_domain(
+                                compiler,
+                                domain,
+                                krate,
+                                |tcx| tcx.ensure_ok().analysis(()),
+                            )
+                            .expect("native domain capacity");
+                        });
+                    }
+                    let stats = batch.decoder_stats();
+                    assert!(!stats.retired);
+                    assert_eq!(stats.publications, if enabled { 2 } else { 0 });
+                    assert_eq!(stats.hits > 0, enabled);
+                    assert_eq!(stats.retained_entries > 0, enabled);
+                    // Simulate failure after successful context finalization,
+                    // such as an ordinary linker failure. No failed owner retry.
+                    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        batch.run(make_config(), |_, _| panic!("post-context failure"));
+                    }));
+                    assert!(failed.is_err());
+                    assert_eq!(batch.decoder_stats().retired, enabled);
+                    assert_eq!(batch.decoder_stats().retained_entries, 0);
+                    if enabled {
+                        assert!(
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                batch.run(make_config(), |_, _| {
+                                    panic!("must not execute retired owner")
+                                });
+                            }))
+                            .is_err()
+                        );
+                        assert_eq!(batch.decoder_stats().retirement_requests, 1);
+                    }
+                },
+            );
+            assert!(!MANAGED_DECODERS.with(Cell::get));
+            assert!(!rustc_metadata::resident_metadata::stats().retired);
+        }
     }
 
     #[test]

@@ -171,6 +171,21 @@ pub fn stats() -> ExternalDecoderCacheStats {
     DECODERS.with(|slot| slot.borrow().as_ref().map(|c| c.stats).unwrap_or_default())
 }
 
+/// A failed managed invocation may have partially populated shared decoder
+/// storage. Do not retry in the same SessionGlobals universe, even when the
+/// failure occurred after a successful pre-link publication.
+pub fn retire_after_failed_revision() {
+    DECODERS.with(|slot| {
+        if let Some(cache) = slot.borrow_mut().as_mut() {
+            cache.published = None;
+            cache.stats.retained_entries = 0;
+            if !cache.stats.retired {
+                cache.retire();
+            }
+        }
+    });
+}
+
 fn absent_text(source: &SourceFile) -> bool {
     matches!(
         &*source.external_src.read(),

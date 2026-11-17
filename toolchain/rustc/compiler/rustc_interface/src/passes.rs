@@ -1101,6 +1101,7 @@ fn create_and_enter_global_ctxt_inner<'tcx, T>(
             };
 
             tcx.finish();
+            crate::resident::publish_managed_decoders(tcx);
             res
         },
     );
