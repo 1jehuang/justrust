@@ -33,6 +33,15 @@ class FixtureTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Linux boot identity'):
                 suite.host_identity()
 
+    def test_host_identity_records_effective_affinity(self):
+        with patch.object(suite.os, 'sched_getaffinity', return_value={3, 1}):
+            first = suite.host_identity()
+        with patch.object(suite.os, 'sched_getaffinity', return_value={3}):
+            second = suite.host_identity()
+        self.assertEqual(first['affinity'], [1, 3])
+        self.assertEqual(second['affinity'], [3])
+        self.assertNotEqual(first, second)
+
     def test_pinned_three_files_crossfile_edits(self):
         old, _ = suite.fixture(128, 0)
         self.assertEqual(set(old), {'fixture.rs', 'module_a.rs', 'module_b.rs'})

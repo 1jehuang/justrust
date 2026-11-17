@@ -103,7 +103,7 @@ def host_identity():
             'requires exact Linux boot identity for resident timing')
     return dict(host=platform.node(), cpu=model, ncpu=os.cpu_count(), machine=platform.machine(),
                 kernel=platform.release(), execution='local-native-owned', python=platform.python_version(),
-                boot_id=boot_id)
+                boot_id=boot_id, affinity=sorted(os.sched_getaffinity(0)))
 
 
 def attestation(expected_driver_sha256=DRIVER_SHA, expected_compiler_sha256=BINARY_SHA):
