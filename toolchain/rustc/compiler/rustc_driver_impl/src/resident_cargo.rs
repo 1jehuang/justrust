@@ -443,6 +443,43 @@ fn disabled_experiment(value: Option<&std::ffi::OsStr>) -> bool {
     value.is_none_or(|value| value == "0")
 }
 
+fn macro_selection(
+    value: Option<&std::ffi::OsStr>,
+    owned: bool,
+    decoders: Option<&std::ffi::OsStr>,
+) -> Result<bool, String> {
+    if disabled_experiment(value) {
+        return Ok(false);
+    }
+    if !owned_selection(value) {
+        return Err("proc-macro helpers require an explicit 0 or 1".into());
+    }
+    if !owned || !disabled_experiment(decoders) {
+        return Err(
+            "proc-macro helpers require the owned batch with decoder retention disabled".into()
+        );
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+#[test]
+fn macro_helper_selection_is_explicit_and_uncached() {
+    use std::ffi::OsStr;
+    for disabled in [None, Some(OsStr::new("0"))] {
+        assert_eq!(macro_selection(disabled, false, None), Ok(false));
+    }
+    for invalid in ["", "true", "2", "01"] {
+        assert!(macro_selection(Some(OsStr::new(invalid)), true, None).is_err());
+    }
+    let enabled = Some(OsStr::new("1"));
+    assert!(macro_selection(enabled, false, None).is_err());
+    assert!(macro_selection(enabled, true, Some(OsStr::new("1"))).is_err());
+    assert!(macro_selection(enabled, true, Some(OsStr::new("invalid"))).is_err());
+    assert_eq!(macro_selection(enabled, true, None), Ok(true));
+    assert_eq!(macro_selection(enabled, true, Some(OsStr::new("0"))), Ok(true));
+}
+
 fn owned_capacity_exhausted(counts: Option<(usize, usize)>) -> bool {
     counts.is_some_and(|(revisions, contexts)| revisions >= 64 || contexts >= 64)
 }
@@ -468,6 +505,11 @@ fn serve_requests(
     mut pending: Option<PreparedRequest>,
     owned: bool,
 ) -> Result<(), String> {
+    let macro_helpers = macro_selection(
+        std::env::var_os("JUSTRUST_CARGO_RESIDENT_MACROS").as_deref(),
+        owned,
+        std::env::var_os("JUSTRUST_CARGO_RESIDENT_DECODERS").as_deref(),
+    )?;
     let mut frozen = None;
     let watch_enabled = std::env::var_os("JUSTRUST_CARGO_RESIDENT_EVICT").as_deref()
         == Some(std::ffi::OsStr::new("1"));
@@ -619,8 +661,22 @@ fn serve_requests(
         let start = Instant::now();
         let mut callbacks = crate::TimePassesCallbacks::default();
         let result = lease
-            .with_current(|| {
-                crate::catch_fatal_errors(|| {
+            .with_current(|| -> Result<_, String> {
+                // This owner is destroyed before restoring stdio or finishing
+                // the request scheduler, including ordinary fatal diagnostics.
+                // Never retain macro descriptors/decoders across requests.
+                let macros = if macro_helpers {
+                    Some(
+                        rustc_metadata::resident_proc_macro_request::RequestMacros::begin(
+                            std::env::current_exe().map_err(|error| error.to_string())?,
+                            lease.client(),
+                        )
+                        .map_err(|error| error.to_string())?,
+                    )
+                } else {
+                    None
+                };
+                let result = crate::catch_fatal_errors(|| {
                     if let Some(batch) = batch {
                         let (prepared, initial_callbacks) =
                             prepared.take().expect("owned preflight");
@@ -639,9 +695,11 @@ fn serve_requests(
                     } else {
                         crate::compiler_entrypoint(&argv, &mut callbacks);
                     }
-                })
+                });
+                drop(macros);
+                Ok(result)
             })
-            .map_err(|e| format!("scheduler selection failed: {e:?}"))?;
+            .map_err(|e| format!("scheduler selection failed: {e:?}"))??;
         let status = if result.is_ok() { 0 } else { 1 };
         if let Some(batch) = batch {
             batch.finish_live_revision(status == 0);
@@ -692,6 +750,7 @@ fn serve_requests(
                 "retained_estimated_bytes":live.retained_estimated_bytes})
         });
         let mut reply = json!({"id":id,"status":status,"pid":std::process::id(),
+            "proc_macro_helpers":macro_helpers,
             "external_inputs_verified":external.is_some(),"external_inputs_changed":external_changed,
             "input_watch_enabled":watch_enabled,"input_watch_active":watch.is_some(),
             "input_watch_changed":watch_changed,
