@@ -13,6 +13,26 @@ import stable_resident_leaf_suite as suite
 
 
 class FixtureTests(unittest.TestCase):
+    def test_host_identity_distinguishes_recycled_slot_boots(self):
+        boot = ['11111111-1111-4111-8111-111111111111']
+
+        def contents(path):
+            if str(path) == '/proc/cpuinfo':
+                return 'model name : same CPU\n'
+            self.assertEqual(str(path), '/proc/sys/kernel/random/boot_id')
+            return boot[0] + '\n'
+
+        with patch.object(Path, 'read_text', autospec=True, side_effect=contents):
+            first = suite.host_identity()
+            boot[0] = '22222222-2222-4222-8222-222222222222'
+            second = suite.host_identity()
+            self.assertNotEqual(first, second)
+            self.assertEqual({k: v for k, v in first.items() if k != 'boot_id'},
+                             {k: v for k, v in second.items() if k != 'boot_id'})
+            boot[0] = 'unknown'
+            with self.assertRaisesRegex(ValueError, 'Linux boot identity'):
+                suite.host_identity()
+
     def test_pinned_three_files_crossfile_edits(self):
         old, _ = suite.fixture(128, 0)
         self.assertEqual(set(old), {'fixture.rs', 'module_a.rs', 'module_b.rs'})

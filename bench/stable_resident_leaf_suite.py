@@ -98,8 +98,12 @@ def workload(items, edits, repetitions):
 def host_identity():
     cpu = Path('/proc/cpuinfo').read_text()
     model = next((x.split(':', 1)[1].strip() for x in cpu.splitlines() if x.startswith('model name')), 'unknown')
+    boot_id = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    require(re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', boot_id) is not None,
+            'requires exact Linux boot identity for resident timing')
     return dict(host=platform.node(), cpu=model, ncpu=os.cpu_count(), machine=platform.machine(),
-                kernel=platform.release(), execution='local-native-owned', python=platform.python_version())
+                kernel=platform.release(), execution='local-native-owned', python=platform.python_version(),
+                boot_id=boot_id)
 
 
 def attestation(expected_driver_sha256=DRIVER_SHA, expected_compiler_sha256=BINARY_SHA):
