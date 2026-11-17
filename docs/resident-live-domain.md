@@ -414,10 +414,39 @@ interface suite (21 tests), metadata suite (15 tests plus two doctests), and
 loaded-std source-universe acceptance pass. This supplies an ownership unit, not
 cross-context binding or authorization.
 
-The next ownership work must handle imported source translations and decoder
-hygiene together. Globally interning sources by stable ID alone is insufficient:
-external source-text caches and diagnostics must retain correct revision behavior.
-No external typed reuse or performance improvement is established by this capture.
+An explicit, default-off native decoder owner now binds that bundle across
+contexts before `CrateMetadata::new` decodes anything. Publication requires bounded
+complete metadata/source snapshots and untouched foreign source-text caches
+(`AbsentOk` only). Selection requires actual same `SourceMap` ownership, exact
+translation settings, exact metadata bytes and numeric maps, and actual previously
+validated decoder owners for every loaded dependency. No source imports are
+forced by publication or selection.
+
+Reused imported files are atomically reactivated at their original sparse source
+indices. Cross-map, shadowed, local, inactive and poisoned inputs reject activation.
+The decoder owner is scoped to a fresh `SessionGlobals` and drops on unwind. Nested
+masking is rejected, so compilation cannot silently run outside a retained owner.
+
+Rejection after publication requires retiring the whole owner, not silently
+constructing fresh decoder storage: native `decode_expn_id` also caches foreign
+expansions globally by `(CrateNum, ExpnIndex)`. Clearing the per-crate cache would
+not refresh that global state. Publication failure latches retirement and cannot
+be undone by publishing again.
+
+The real loaded-std test now also compiles a `std::matches!` consumer twice with
+this owner explicitly enabled. Constructor hit counters are positive and exact
+imported-source snapshots match across the two fresh contexts. Disabled controls
+still allocate different source universes. A forced publication-budget failure
+makes the next compile refuse the retired owner, as required. External typed-query
+identity still rejects in both modes. All 70 span tests, 23 metadata tests plus two
+doctests, and 21 interface tests pass against matching standard libraries.
+
+This is actual source/hygiene decoder reuse, not external typed-query reuse. It is
+not wired into the resident transport or Cargo defaults. Allocation-decoder state,
+full external typed ownership and query identity, ordinary demand-driven bounded
+publication, mutation/error fallback acceptance and representative performance
+remain separate gates. Globally interning sources by stable ID alone is still not
+a valid replacement, and no speed improvement follows from this native test.
 
 ## Native Cargo routing boundary
 
