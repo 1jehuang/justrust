@@ -12,6 +12,9 @@ pub use resource::{
 mod frontend_admission;
 pub use frontend_admission::FrontendAdmission;
 
+#[path = "jobserver_resident.rs"]
+pub mod resident;
+
 use std::sync::{Arc, OnceLock};
 
 pub use jobserver_crate::Acquired;
