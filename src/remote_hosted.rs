@@ -165,6 +165,22 @@ pub fn build_base() -> String {
 }
 
 impl Creds {
+    /// Account- and endpoint-specific opaque namespace for private dashboard data.
+    /// Only the digest leaves this method. Anonymous credentials have no cache.
+    pub(crate) fn dashboard_cache_scope(&self) -> Option<String> {
+        use sha2::{Digest, Sha256};
+        if self.key.is_empty() {
+            return None;
+        }
+        let mut hash = Sha256::new();
+        hash.update(b"justrust/dashboard/display-cache/v1\0");
+        for value in [&self.key, &self.base, &self.build_base] {
+            hash.update((value.len() as u64).to_le_bytes());
+            hash.update(value.as_bytes());
+        }
+        Some(format!("{:x}", hash.finalize()))
+    }
+
     pub fn new(base: String, key: String) -> Result<Self> {
         if key.chars().any(|c| c.is_control() || c == ' ') {
             bail!(
