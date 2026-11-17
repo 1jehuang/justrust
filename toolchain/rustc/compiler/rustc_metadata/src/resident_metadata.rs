@@ -144,13 +144,15 @@ thread_local! {
     static DECODERS: RefCell<Option<DecoderCache>> = const { RefCell::new(None) };
 }
 
-/// The caller must keep one SessionGlobals universe alive and use this same
-/// serial thread throughout the closure. No state survives scope exit or unwind.
-/// Enabled scopes cannot nest. A disabled scope masks any enclosing owner.
+/// The caller must enter this scope before the first external metadata decode
+/// in a fresh SessionGlobals universe, keep that universe alive, and use this
+/// same serial thread throughout the closure. No state survives scope exit or
+/// unwind. Nested enabled or disabled scopes inside an active owner are rejected:
+/// compiling with a masked owner could contaminate global foreign expansion IDs.
 pub fn with_resident_external_decoder_cache<R>(enabled: bool, f: impl FnOnce() -> R) -> R {
     let previous = DECODERS.with(|slot| {
         let mut slot = slot.borrow_mut();
-        assert!(!enabled || slot.is_none(), "resident external decoder scopes cannot nest");
+        assert!(slot.is_none(), "resident external decoder scopes cannot nest");
         std::mem::replace(&mut *slot, enabled.then(DecoderCache::default))
     });
     struct Reset(Option<DecoderCache>);
@@ -786,23 +788,21 @@ mod tests {
     }
 
     #[test]
-    fn disabled_scope_masks_and_restores_owner_and_enabled_nesting_rejects() {
+    fn decoder_scopes_reject_enabled_and_disabled_nesting() {
         with_resident_external_decoder_cache(true, || {
             DECODERS.with(|slot| slot.borrow_mut().as_mut().unwrap().stats.hits = 7);
-            with_resident_external_decoder_cache(false, || {
-                assert!(DECODERS.with(|slot| slot.borrow().is_none()));
-                assert_eq!(stats().hits, 0);
-            });
-            assert_eq!(stats().hits, 7);
-            assert!(
-                std::panic::catch_unwind(|| {
-                    with_resident_external_decoder_cache(true, || panic!("must not enter"));
-                })
-                .is_err()
-            );
-            assert_eq!(stats().hits, 7);
+            for enabled in [false, true] {
+                assert!(
+                    std::panic::catch_unwind(|| {
+                        with_resident_external_decoder_cache(enabled, || panic!("must not enter"));
+                    })
+                    .is_err()
+                );
+                assert_eq!(stats().hits, 7);
+            }
         });
         assert!(DECODERS.with(|slot| slot.borrow().is_none()));
+        with_resident_external_decoder_cache(false, || assert_eq!(stats().hits, 0));
     }
 
     fn source_limits() -> ExternalSourceSnapshotLimits {

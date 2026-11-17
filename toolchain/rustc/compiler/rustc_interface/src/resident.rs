@@ -397,7 +397,7 @@ mod tests {
         use rustc_metadata::creader::CStore;
         use rustc_metadata::resident_metadata::{
             ExternalSourceSnapshotError, ExternalSourceSnapshotLimits, MetadataSnapshotError,
-            MetadataSnapshotLimits,
+            MetadataSnapshotLimits, with_resident_external_decoder_cache,
         };
         use rustc_middle::ty::resident_compiler_identity::{
             CompilerIdentityError, FrozenSemanticInvocation, build_revision_identity,
@@ -428,7 +428,8 @@ mod tests {
             config.opts.sysroot = rustc_session::config::Sysroot::new(Some(sysroot.clone()));
             config.input = Input::Str {
                 name: FileName::Custom("resident-external-metadata.rs".into()),
-                input: "pub fn value() -> bool { std::hint::black_box(true) }".into(),
+                input: "pub fn value() -> bool { std::matches!(std::hint::black_box(1u8), 1) }"
+                    .into(),
             };
             config
         };
@@ -442,10 +443,12 @@ mod tests {
             max_files: 128 * 1024,
             max_declared_source_bytes: 1024 * 1024 * 1024,
         };
-        with_resident_compiler_batch(make_config(), |batch, first| {
-            let mut snapshots = Vec::new();
-            for config in [first, make_config()] {
-                let snapshot = batch.run(config, |compiler, domain| {
+        for cache_enabled in [false, true] {
+            with_resident_compiler_batch(make_config(), |batch, first| {
+                with_resident_external_decoder_cache(cache_enabled, || {
+                    let mut snapshots = Vec::new();
+                    for (revision, config) in [first, make_config()].into_iter().enumerate() {
+                        let snapshot = batch.run(config, |compiler, domain| {
                     let krate = crate::passes::parse(&compiler.sess);
                     let (snapshot, locks) = crate::passes::create_and_enter_global_ctxt_in_domain(
                         compiler,
@@ -496,10 +499,12 @@ mod tests {
                                 snapshot
                             };
                             // Capture must inspect existing imports, never populate them.
-                            assert_eq!(
-                                CStore::from_tcx(tcx).capture_external_sources(source_limits),
-                                Err(ExternalSourceSnapshotError::IncompleteImports)
-                            );
+                            if !cache_enabled || revision == 0 {
+                                assert_eq!(
+                                    CStore::from_tcx(tcx).capture_external_sources(source_limits),
+                                    Err(ExternalSourceSnapshotError::IncompleteImports)
+                                );
+                            }
                             // Explicit test setup imports every metadata source. Do not hold
                             // a CStore guard across the hook, which acquires its own guard.
                             for &cnum in tcx.crates(()) {
@@ -558,6 +563,23 @@ mod tests {
                                 ),
                                 Err(CompilerIdentityError::UnsupportedExternalCrates)
                             ));
+                            if cache_enabled {
+                                let cstore = CStore::from_tcx(tcx);
+                                cstore.publish_external_decoders(tcx, source_limits)
+                                    .expect("bounded complete source and metadata publication");
+                                let stats = rustc_metadata::resident_metadata::stats();
+                                assert_eq!(stats.publications, revision + 1);
+                                if revision == 0 {
+                                    assert_eq!(stats.hits, 0);
+                                } else {
+                                    assert!(stats.hits > 0, "actual constructor must select retained decoder storage");
+                                    assert_eq!(cstore.publish_external_decoders(tcx,
+                                        ExternalSourceSnapshotLimits { max_files: 0, ..source_limits }),
+                                        Err(ExternalSourceSnapshotError::FileBudget));
+                                }
+                            } else {
+                                assert_eq!(rustc_metadata::resident_metadata::stats().hits, 0);
+                            }
                             (snapshot, sources)
                         },
                     )
@@ -565,16 +587,43 @@ mod tests {
                     assert!(locks.is_none());
                     snapshot
                 });
-                snapshots.push(snapshot);
-            }
-            // These owned values survive their original contexts. Equal inputs do
-            // not authorize external DefId/source/interner or typed query reuse.
-            assert_eq!(snapshots[0].0, snapshots[1].0);
-            assert_ne!(
-                snapshots[0].1, snapshots[1].1,
-                "equal external metadata does not imply shared imported source allocations"
-            );
-        });
+                        snapshots.push(snapshot);
+                    }
+                    // These owned values survive their original contexts. Equal inputs do
+                    // not authorize external DefId/source/interner or typed query reuse.
+                    assert_eq!(snapshots[0].0, snapshots[1].0);
+                    if cache_enabled {
+                        assert_eq!(
+                            snapshots[0].1, snapshots[1].1,
+                            "explicit native cache must preserve actual imported source allocations"
+                        );
+                        let refusal = rustc_errors::catch_fatal_errors(|| {
+                            batch.run(make_config(), |compiler, domain| {
+                                let krate = crate::passes::parse(&compiler.sess);
+                                crate::passes::create_and_enter_global_ctxt_in_domain(
+                                    compiler,
+                                    domain,
+                                    krate,
+                                    |tcx| {
+                                        tcx.ensure_ok().analysis(());
+                                    },
+                                )
+                                .expect("available context storage");
+                            })
+                        });
+                        assert!(
+                            refusal.is_err(),
+                            "publication failure must retire the native foreign hygiene owner, not silently decode fresh"
+                        );
+                    } else {
+                        assert_ne!(
+                            snapshots[0].1, snapshots[1].1,
+                            "equal external metadata alone does not imply shared source allocations"
+                        );
+                    }
+                });
+            });
+        }
     }
 
     #[test]
