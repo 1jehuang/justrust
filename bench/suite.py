@@ -1823,6 +1823,12 @@ def cmd_compare(args) -> None:
     own_loop_options = {
         "expected_" + side + "_macro_" + control: getattr(args, "own_loop_" + side + "_macro_" + control, None)
         for side in ("before", "after") for control in ("shm", "spins")}
+    own_loop_hashes = {
+        "expected_" + side + "_" + component + "_sha256":
+            getattr(args, "own_loop_" + side + "_" + component + "_sha256", None)
+        for side in ("before", "after") for component in ("compiler", "driver")}
+    if any(value is not None for value in own_loop_hashes.values()):
+        own_loop_options.update(own_loop_hashes)
     own_loop_schema = "stable-resident-own-loop/v1"
     own_loop_receipt = any(str(result.get("schema", "")).startswith("stable-resident-own-loop") for result in (a, b))
     if own_loop_receipt:
@@ -1831,7 +1837,10 @@ def cmd_compare(args) -> None:
         if getattr(args, "require_valid", False):
             sys.exit("bench: --require-valid supports only synthetic comparisons")
         if getattr(args, "allow_compiler_change", False):
-            sys.exit("bench: own-loop comparison requires identical compiler/driver candidates, broad --allow-compiler-change is refused")
+            sys.exit("bench: own-loop compiler/driver changes require four exact hashes, broad --allow-compiler-change is refused")
+        if any(value is not None for value in own_loop_hashes.values()) and any(
+                value is None for value in own_loop_hashes.values()):
+            sys.exit("bench: own-loop compiler/driver expectations require all four before/after SHA256 hashes")
         for side in ("before", "after"):
             key = "expected_" + side + "_macro_shm"
             if own_loop_options[key] is not None:
@@ -2071,6 +2080,10 @@ def main() -> None:
                        help="exact expected own-loop macro spin count, 0..256")
         c.add_argument("--own-loop-" + side + "-macro-shm", choices=("0", "1"),
                        type=str, help="exact expected own-loop SHM mode, 0 or 1")
+        for component in ("compiler", "driver"):
+            c.add_argument("--own-loop-" + side + "-" + component + "-sha256",
+                           help="exact expected own-loop " + side + " " + component
+                                + " SHA256, all four before/after compiler/driver hashes required")
     c.add_argument("a")
     c.add_argument("b")
     c.add_argument("--require-valid", action="store_true",

@@ -72,6 +72,36 @@ class OwnLoopCompareDispatchTests(unittest.TestCase):
                     self.dispatch(dict(schema=own_loop.SCHEMA), dict(schema=own_loop.SCHEMA), **options)
                 compare.assert_not_called()
 
+    def test_exact_compiler_driver_hash_forwarding_and_complete_requirement(self):
+        options = {'own_loop_' + side + '_' + component + '_sha256': digit * 64
+                   for side, component, digit in (('before', 'compiler', 'a'), ('after', 'compiler', 'b'),
+                                                   ('before', 'driver', 'c'), ('after', 'driver', 'd'))}
+        before, after = (dict(schema=own_loop.SCHEMA, side=side) for side in ('before', 'after'))
+        with mock.patch.object(own_loop, 'compare', return_value={}) as compare:
+            self.dispatch(before, after, **options)
+        expected = {key.replace('own_loop_', 'expected_', 1): value for key, value in options.items()}
+        compare.assert_called_once_with(before, after, 10, expected_before_macro_shm=None,
+                                        expected_after_macro_shm=None, expected_before_macro_spins=None,
+                                        expected_after_macro_spins=None, **expected)
+        for missing in options:
+            incomplete = dict(options)
+            incomplete.pop(missing)
+            with self.subTest(missing=missing), mock.patch.object(own_loop, 'compare') as compare:
+                with self.assertRaisesRegex(SystemExit, 'all four'):
+                    self.dispatch(before, after, **incomplete)
+                compare.assert_not_called()
+        for schemas in (('synthetic/v1', 'synthetic/v1'), ('stable_native_cargo/v1', 'stable_native_cargo/v1'),
+                        (own_loop.SCHEMA, 'synthetic/v1'), (own_loop.DIAGNOSTIC_SCHEMA, own_loop.DIAGNOSTIC_SCHEMA)):
+            for flag, value in options.items():
+                with self.subTest(schemas=schemas, flag=flag), mock.patch.object(own_loop, 'compare') as compare:
+                    with self.assertRaises(SystemExit):
+                        self.dispatch(*(dict(schema=schema) for schema in schemas), **{flag: value})
+                    compare.assert_not_called()
+        with mock.patch.object(own_loop, 'compare') as compare:
+            with self.assertRaisesRegex(SystemExit, 'broad'):
+                self.dispatch(before, after, allow_compiler_change=True, **options)
+            compare.assert_not_called()
+
     def test_spin_parser_is_bounded_and_canonical(self):
         for text in ('0', '192', '256'):
             self.assertEqual(suite.own_loop_macro_spins(text), int(text))
@@ -92,6 +122,15 @@ class OwnLoopCompareDispatchTests(unittest.TestCase):
         self.assertEqual(args.own_loop_after_macro_spins, 192)
         self.assertEqual(args.own_loop_before_macro_shm, '0')
         self.assertEqual(args.own_loop_after_macro_shm, '1')
+        hashes = []
+        for side in ('before', 'after'):
+            for component in ('compiler', 'driver'):
+                hashes.extend(['--own-loop-' + side + '-' + component + '-sha256', 'a' * 64])
+        with mock.patch('sys.argv', argv + hashes), mock.patch.object(suite, 'cmd_compare') as compare:
+            suite.main()
+        for side in ('before', 'after'):
+            for component in ('compiler', 'driver'):
+                self.assertEqual(getattr(compare.call_args.args[0], 'own_loop_' + side + '_' + component + '_sha256'), 'a' * 64)
         for flag, value in (('--own-loop-before-macro-shm', 'true'),
                             ('--own-loop-after-macro-spins', '257')):
             with mock.patch('sys.argv', ['suite.py', 'compare', 'a', 'b', flag, value]), \
@@ -116,6 +155,44 @@ class OwnLoopCompareDispatchTests(unittest.TestCase):
             with self.assertRaises((ValueError, AssertionError)):
                 self.dispatch(report, after, own_loop_before_macro_spins=192,
                               own_loop_after_macro_spins=193)
+
+    def test_exact_hash_authorization_uses_strict_compare_without_other_exceptions(self):
+        helper = fixtures.OwnLoopTests()
+        with tempfile.TemporaryDirectory() as directory:
+            before, _, _ = helper.capture(Path(directory), commands=('check',))
+            after = copy.deepcopy(before)
+            flags = {}
+            expected = {}
+            for component, digest in (('compiler', 'a' * 64), ('driver', 'b' * 64)):
+                after['provenance']['attestation'][component].update(sha256=digest, path='/new/' + component)
+                after['provenance']['expected'][component + '_sha256'] = digest
+                for side, report in (('before', before), ('after', after)):
+                    value = report['provenance']['expected'][component + '_sha256']
+                    flags['own_loop_' + side + '_' + component + '_sha256'] = value
+                    expected['expected_' + side + '_' + component + '_sha256'] = value
+            for pair in after['repetitions']:
+                for arm in pair['arms'].values():
+                    for row in arm['observations']:
+                        row['cargo']['invocation']['environment']['RUSTC'] = '/new/compiler'
+            self.assertEqual(self.dispatch(before, after, **flags)['comparison'],
+                             own_loop.compare(before, after, **expected))
+            with self.assertRaisesRegex(ValueError, 'Provenance mismatch'):
+                self.dispatch(before, after)
+            for key in flags:
+                for invalid in ('c' * 64, 'a' * 63, 'A' * 64, 'g' * 64, ''):
+                    bad_flags = dict(flags, **{key: invalid})
+                    with self.subTest(key=key, invalid=invalid), self.assertRaisesRegex(ValueError, 'hash mismatch'):
+                        self.dispatch(before, after, **bad_flags)
+            for field in ('manifest_b64', 'host'):
+                bad = copy.deepcopy(after)
+                bad['provenance'][field] = 'different-workload-or-host'
+                with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'Provenance mismatch'):
+                    self.dispatch(before, bad, **flags)
+            bad = copy.deepcopy(after)
+            bad['provenance']['attestation']['cargo']['sha256'] = 'c' * 64
+            bad['provenance']['expected']['cargo_sha256'] = 'c' * 64
+            with self.assertRaisesRegex(ValueError, 'Provenance mismatch'):
+                self.dispatch(before, bad, **flags)
 
 
 if __name__ == '__main__':
