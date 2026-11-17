@@ -34,6 +34,23 @@ class DecoderSuiteTests(unittest.TestCase):
                     with self.assertRaises((ValueError, AssertionError)):
                         suite.validate_live(record, prior, 'decoder', 'unchanged')
 
+    def test_exact_optional_native_phase_schema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = self.synthetic(Path(directory))
+            for arm in ('control', 'decoder'):
+                rows = [row for row in report['rows'] if row['arm'] == arm]
+                first = copy.deepcopy(rows[0]['record'])
+                first['decoder'].update(selection_nanos=10 if arm == 'decoder' else 0,
+                                        publication_nanos=20 if arm == 'decoder' else 0)
+                previous = suite.validate_live(first, None, arm, 'cold')
+                later = copy.deepcopy(rows[1]['record'])
+                later['decoder'].update(selection_nanos=11 if arm == 'decoder' else 0,
+                                        publication_nanos=21 if arm == 'decoder' else 0)
+                suite.validate_live(later, previous, arm, 'unchanged')
+                later['decoder']['unknown_phase_nanos'] = 0
+                with self.assertRaisesRegex(ValueError, 'unknown decoder telemetry'):
+                    suite.validate_live(later, previous, arm, 'unchanged')
+
     def test_sanitized_environment_and_bounds(self):
         keys = ('RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER',
                 'RUSTC_WORKSPACE_WRAPPER', 'RUSTC_BOOTSTRAP', 'LLVM_PROFILE_FILE',

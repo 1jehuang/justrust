@@ -173,7 +173,9 @@ def validate_live(record, previous, arm, kind):
     require(arm in ('control', 'decoder'), 'invalid resident arm')
     stats = decoder.validate_stats(record, previous, '1' if arm == 'decoder' else '0',
                                    'cold' if kind == 'cold' else 'hit')
-    require(set(stats) == set(decoder.COUNTERS) | {'retired'}, 'unknown decoder telemetry')
+    base_fields = set(decoder.COUNTERS) | {'retired'}
+    require(set(stats) in (base_fields, base_fields | {'selection_nanos', 'publication_nanos'}),
+            'unknown decoder telemetry')
     require(stats['rejected'] == 0 and stats['retirement_requests'] == 0 and not stats['retired'],
             'decoder rejection or retirement')
     for field, counters in (('ast', ast.COUNTERS), ('lexer', ast.COUNTERS), ('live', ast.LIVE_COUNTERS)):
