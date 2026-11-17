@@ -93,7 +93,7 @@ class ShellPrerequisiteTests(unittest.TestCase):
         self.assertIn("run --synth 1 --points 40 -n 1 --stop-on-invalid", helper)
         self.assertLess(helper.index('python3 "$root/ci/check-pinned-runtime.py"'),
                         helper.index('  benchmark_binary before "$BASELINE_REF"'))
-        self.assertIn("JUSTRUST_BENCH_RUNTIME_CONTEXT=jcode-isolated-v3", helper)
+        self.assertIn("JUSTRUST_BENCH_RUNTIME_CONTEXT=jcode-isolated-v4", helper)
         workflow = (ROOT / ".github/workflows/source-sync-release-gate.yml").read_text()
         self.assertIn("sudo ln -sf /bin/bash /bin/sh", workflow)
         self.assertIn("python3 ci/check-shell-environment.py", workflow)
