@@ -7,8 +7,7 @@
 //! to replay an expansion. The compiler must not route nested invocations over
 //! this connection until the transport has a reentrant callback pump.
 
-use std::io;
-use std::os::unix::net::UnixStream;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use rustc_data_structures::resident_macro_transport::{self as transport, Outcome};
@@ -150,7 +149,7 @@ fn load(libraries: &mut Vec<Library>, path: &str, symbol: &str) -> io::Result<Ve
 
 /// Runs only inside the fresh helper, with resident mode disabled. Shutdown or
 /// any Failure ends the session. No operation is retried after an Invoke.
-pub fn run(stream: UnixStream) -> io::Result<()> {
+pub fn run(stream: impl Read + Write) -> io::Result<()> {
     if rustc_session::resident::is_process() {
         return Err(io::Error::other("proc-macro helper must be a fresh non-resident process"));
     }

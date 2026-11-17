@@ -4,6 +4,8 @@
 #[path = "resident_proc_macro_acceptance.rs"]
 mod acceptance;
 
+#[cfg(target_arch = "x86_64")]
+use std::os::fd::OwnedFd;
 use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
@@ -76,15 +78,53 @@ fn validate(fd: RawFd) -> std::io::Result<()> {
     Ok(())
 }
 
+fn shared_descriptor(argument: &str, socket: RawFd) -> std::io::Result<RawFd> {
+    let fd =
+        argument.parse().map_err(|_| std::io::Error::other("invalid shared helper descriptor"))?;
+    if fd < 3 || fd == socket {
+        return Err(std::io::Error::other("helper requires a separate shared descriptor"));
+    }
+    Ok(fd)
+}
+
 /// # Safety
 /// Called once from native main, which exclusively receives the validated fd.
-pub unsafe fn run(argument: &str) -> ExitCode {
+pub unsafe fn run(argument: &str, shared_argument: Option<&str>) -> ExitCode {
     let result = (|| {
         let fd: RawFd =
             argument.parse().map_err(|_| std::io::Error::other("invalid helper descriptor"))?;
         validate(fd)?;
         // SAFETY: validation succeeded and native main transfers exclusive ownership.
         let stream = unsafe { UnixStream::from_raw_fd(fd) };
+        if let Some(argument) = shared_argument {
+            let shared_fd = shared_descriptor(argument, fd)?;
+            #[cfg(target_arch = "x86_64")]
+            {
+                // SAFETY: fcntl borrows the descriptor. Check it is open before
+                // constructing OwnedFd, and confine this capability to the helper
+                // rather than any subprocess a user macro might execute.
+                let flags = unsafe { libc::fcntl(shared_fd, libc::F_GETFD) };
+                if flags == -1
+                    || unsafe { libc::fcntl(shared_fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) }
+                        == -1
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // SAFETY: native main exclusively transfers the separate inherited
+                // descriptor. The authenticated Unix socket remains owned until
+                // the shared session exits. Attachment checks the creator too.
+                let shared_fd = unsafe { OwnedFd::from_raw_fd(shared_fd) };
+                let endpoint =
+                    rustc_data_structures::resident_macro_shm::attach_child(shared_fd, unsafe {
+                        libc::getppid()
+                    })?;
+                let result = rustc_metadata::resident_proc_macro_helper::run(endpoint);
+                drop(stream);
+                return result;
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            return Err(std::io::Error::other("shared proc-macro transport requires Linux x86-64"));
+        }
         rustc_metadata::resident_proc_macro_helper::run(stream)
     })();
     match result {
@@ -100,6 +140,14 @@ pub unsafe fn run(argument: &str) -> ExitCode {
 mod tests {
     use super::*;
     use std::os::fd::AsRawFd;
+
+    #[test]
+    fn shared_descriptor_must_be_separate_and_dedicated() {
+        for argument in ["", "bad", "-1", "0", "1", "2", "7", "2147483648"] {
+            assert!(shared_descriptor(argument, 7).is_err());
+        }
+        assert_eq!(shared_descriptor("8", 7).unwrap(), 8);
+    }
 
     #[test]
     fn rejects_standard_and_invalid_descriptors() {

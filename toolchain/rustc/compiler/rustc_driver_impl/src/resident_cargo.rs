@@ -520,6 +520,27 @@ fn macro_helper_selection_is_explicit_and_uncached() {
     assert_eq!(macro_selection(enabled, true, Some(OsStr::new("0"))), Ok(true));
 }
 
+fn macro_shm_selection(value: Option<&std::ffi::OsStr>, helpers: bool) -> Result<bool, String> {
+    match value {
+        None => Ok(false),
+        Some(value) if value == "0" => Ok(false),
+        Some(value) if value == "1" && helpers => Ok(true),
+        _ => Err("shared macro transport requires explicit 0/1 and enabled macro helpers".into()),
+    }
+}
+
+#[test]
+fn shared_transport_selection_is_strict_and_requires_helpers() {
+    use std::ffi::OsStr;
+    assert_eq!(macro_shm_selection(None, false), Ok(false));
+    assert_eq!(macro_shm_selection(Some(OsStr::new("0")), false), Ok(false));
+    assert_eq!(macro_shm_selection(Some(OsStr::new("1")), true), Ok(true));
+    assert!(macro_shm_selection(Some(OsStr::new("1")), false).is_err());
+    for invalid in ["", "2", "true", "01"] {
+        assert!(macro_shm_selection(Some(OsStr::new(invalid)), true).is_err());
+    }
+}
+
 fn owned_capacity_exhausted(counts: Option<(usize, usize)>) -> bool {
     counts.is_some_and(|(revisions, contexts)| revisions >= 64 || contexts >= 64)
 }
@@ -549,6 +570,10 @@ fn serve_requests(
         std::env::var_os("JUSTRUST_CARGO_RESIDENT_MACROS").as_deref(),
         owned,
         std::env::var_os("JUSTRUST_CARGO_RESIDENT_DECODERS").as_deref(),
+    )?;
+    macro_shm_selection(
+        std::env::var_os("JUSTRUST_CARGO_RESIDENT_MACRO_SHM").as_deref(),
+        macro_helpers,
     )?;
     let mut frozen = None;
     let watch_enabled = std::env::var_os("JUSTRUST_CARGO_RESIDENT_EVICT").as_deref()

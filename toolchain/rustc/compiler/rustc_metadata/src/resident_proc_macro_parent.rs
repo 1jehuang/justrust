@@ -4,7 +4,7 @@
 //! compiler request and must not route nested expansions over this sequential
 //! connection. Failed operations are never retried in this or another process.
 
-use std::io;
+use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
@@ -17,8 +17,55 @@ use rustc_data_structures::resident_macro_transport::{self as transport, Outcome
 use crate::resident_proc_macro_helper::{decode_loaded, encode_expand, encode_load};
 
 pub struct MacroHelper {
-    session: Option<transport::Session<UnixStream>>,
+    session: Option<transport::Session<HelperTransport>>,
     child: Option<RequestChild>,
+}
+
+enum HelperTransport {
+    Unix(UnixStream),
+    #[cfg(target_arch = "x86_64")]
+    Shared {
+        endpoint: rustc_data_structures::resident_macro_shm::Endpoint,
+        // Authentication remains mandatory, even though RPC uses the memfd.
+        _socket: UnixStream,
+    },
+}
+
+impl Read for HelperTransport {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Unix(socket) => socket.read(bytes),
+            #[cfg(target_arch = "x86_64")]
+            Self::Shared { endpoint, .. } => endpoint.read(bytes),
+        }
+    }
+}
+
+impl Write for HelperTransport {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Unix(socket) => socket.write(bytes),
+            #[cfg(target_arch = "x86_64")]
+            Self::Shared { endpoint, .. } => endpoint.write(bytes),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Unix(socket) => socket.flush(),
+            #[cfg(target_arch = "x86_64")]
+            Self::Shared { endpoint, .. } => endpoint.flush(),
+        }
+    }
+}
+
+fn shm_enabled(value: Option<&std::ffi::OsStr>) -> io::Result<bool> {
+    match value {
+        None => Ok(false),
+        Some(value) if value == "0" => Ok(false),
+        Some(value) if value == "1" => Ok(true),
+        Some(_) => Err(io::Error::other("JUSTRUST_CARGO_RESIDENT_MACRO_SHM must be 0 or 1")),
+    }
 }
 
 impl MacroHelper {
@@ -26,24 +73,54 @@ impl MacroHelper {
     /// long-lived worker's environment descriptor numbers. No standard stream is
     /// used for RPC or redirected away from the compiler request.
     pub fn spawn(executable: &Path, scheduler: &RequestClient) -> io::Result<Self> {
+        let use_shm =
+            shm_enabled(std::env::var_os("JUSTRUST_CARGO_RESIDENT_MACRO_SHM").as_deref())?;
+        #[cfg(not(target_arch = "x86_64"))]
+        if use_shm {
+            return Err(io::Error::other("shared proc-macro transport requires Linux x86-64"));
+        }
+        #[cfg(target_arch = "x86_64")]
+        let shared =
+            if use_shm { Some(rustc_data_structures::resident_macro_shm::create()?) } else { None };
         let (parent, endpoint) = UnixStream::pair()?;
         let fd = endpoint.as_raw_fd();
+        #[cfg(target_arch = "x86_64")]
+        let shm_fd = shared.as_ref().map(|(_, fd)| fd.as_raw_fd());
+        #[cfg(not(target_arch = "x86_64"))]
+        let shm_fd: Option<std::os::fd::RawFd> = None;
         let mut command = Command::new(executable);
         command.arg("--jr-proc-macro-helper").arg(fd.to_string());
+        if let Some(shm_fd) = shm_fd {
+            command.arg(shm_fd.to_string());
+        }
         // SAFETY: the child closure only performs async-signal-safe fcntl. The
         // endpoint stays owned and open until spawn returns. All other inherited
         // capability setup is owned by RequestClient::spawn_child.
         unsafe {
             command.pre_exec(move || {
-                let flags = libc::fcntl(fd, libc::F_GETFD);
-                if flags == -1 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
-                    return Err(io::Error::last_os_error());
+                for fd in [Some(fd), shm_fd].into_iter().flatten() {
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    if flags == -1
+                        || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
                 }
                 Ok(())
             });
         }
         let child = scheduler.spawn_child(command)?;
         drop(endpoint);
+        let parent = HelperTransport::Unix(parent);
+        #[cfg(target_arch = "x86_64")]
+        let parent = match (shared, parent) {
+            (Some((endpoint, child_fd)), HelperTransport::Unix(socket)) => {
+                drop(child_fd);
+                HelperTransport::Shared { endpoint, _socket: socket }
+            }
+            (None, parent) => parent,
+            _ => unreachable!(),
+        };
         Ok(Self { session: Some(transport::Session::new(parent)), child: Some(child) })
     }
 
@@ -123,6 +200,68 @@ mod tests {
     use rustc_data_structures::jobserver::resident::RequestLease;
 
     #[test]
+    fn shared_transport_is_strictly_opt_in() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        assert!(!shm_enabled(None).unwrap());
+        assert!(!shm_enabled(Some(OsStr::new("0"))).unwrap());
+        assert!(shm_enabled(Some(OsStr::new("1"))).unwrap());
+        for invalid in ["", "true", "false", "01", " 1", "1 "] {
+            assert!(shm_enabled(Some(OsStr::new(invalid))).is_err());
+        }
+        assert!(shm_enabled(Some(OsStr::from_bytes(&[0xff]))).is_err());
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn shared_transport_callbacks_and_terminal_failure_do_not_replay() {
+        let _lock = LOCK.lock().unwrap();
+        let lease = RequestLease::begin_serial().unwrap();
+        let scheduler = lease.client();
+        let mut command = Command::new("/bin/sleep");
+        command.arg("60");
+        let child = scheduler.spawn_child(command).unwrap();
+        drop(scheduler);
+        let (socket, _peer_socket) = UnixStream::pair().unwrap();
+        let (endpoint, fd) = rustc_data_structures::resident_macro_shm::create().unwrap();
+        let remote =
+            rustc_data_structures::resident_macro_shm::attach_child(fd, unsafe { libc::getpid() })
+                .unwrap();
+        let peer = std::thread::spawn(move || {
+            let mut session = transport::Session::new(remote);
+            session
+                .respond(|_, callback| {
+                    assert_eq!(callback(vec![7])?, vec![8]);
+                    Ok(vec![9])
+                })
+                .unwrap();
+            session.respond(|_, _| Err(io::Error::other("terminal shared failure"))).unwrap();
+        });
+        let mut helper = MacroHelper {
+            session: Some(transport::Session::new(HelperTransport::Shared {
+                endpoint,
+                _socket: socket,
+            })),
+            child: Some(child),
+        };
+        assert_eq!(
+            helper
+                .expand(0, 0, false, &[], |bytes| {
+                    assert_eq!(bytes, vec![7]);
+                    Ok(vec![8])
+                })
+                .unwrap(),
+            vec![9]
+        );
+        assert!(helper.load(Path::new("/fixture.so"), "symbol").is_err());
+        assert!(helper.session.is_none());
+        assert!(helper.child.is_none());
+        assert!(helper.load(Path::new("/fixture.so"), "symbol").is_err());
+        peer.join().unwrap();
+        lease.finish().unwrap();
+    }
+
+    #[test]
     #[ignore = "requires an explicitly supplied matching native helper and proc-macro library"]
     fn native_helper_load_and_terminal_cleanup() {
         let _lock = LOCK.lock().unwrap();
@@ -182,8 +321,10 @@ mod tests {
                 })
                 .unwrap();
         });
-        let mut helper =
-            MacroHelper { session: Some(transport::Session::new(parent)), child: Some(child) };
+        let mut helper = MacroHelper {
+            session: Some(transport::Session::new(HelperTransport::Unix(parent))),
+            child: Some(child),
+        };
         assert_eq!(helper.load(Path::new("/fixture.so"), "symbol").unwrap(), (0, 1));
         assert_eq!(
             helper
@@ -214,8 +355,10 @@ mod tests {
                 .respond(|_, _| Err(io::Error::other("terminal fixture failure")))
                 .unwrap();
         });
-        let mut helper =
-            MacroHelper { session: Some(transport::Session::new(parent)), child: Some(child) };
+        let mut helper = MacroHelper {
+            session: Some(transport::Session::new(HelperTransport::Unix(parent))),
+            child: Some(child),
+        };
         assert!(helper.load(Path::new("/fixture.so"), "symbol").is_err());
         assert!(helper.session.is_none());
         assert!(helper.load(Path::new("/fixture.so"), "symbol").is_err());

@@ -1885,13 +1885,17 @@ pub unsafe fn main() -> ExitCode {
 
     let raw_args = args::raw_args(&early_dcx);
     if raw_args.get(1).is_some_and(|arg| arg == "--jr-proc-macro-helper") {
-        if raw_args.len() != 3 || query_admission.is_some() {
-            eprintln!("jr-rustc proc-macro helper: requires one dedicated unbound socket");
+        if !(3..=4).contains(&raw_args.len()) || query_admission.is_some() {
+            eprintln!(
+                "jr-rustc proc-macro helper: requires a dedicated unbound socket and optional shared descriptor"
+            );
             return ExitCode::FAILURE;
         }
         #[cfg(target_os = "linux")]
         // SAFETY: native main exclusively owns the validated inherited endpoint.
-        return unsafe { resident_proc_macro::run(&raw_args[2]) };
+        return unsafe {
+            resident_proc_macro::run(&raw_args[2], raw_args.get(3).map(String::as_str))
+        };
         #[cfg(not(target_os = "linux"))]
         {
             eprintln!("jr-rustc proc-macro helper: unsupported platform");
