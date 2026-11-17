@@ -1773,17 +1773,24 @@ def named_test_failure_issues(result: dict) -> list[str]:
 
 def cmd_compare(args) -> None:
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
-    if any(str(result.get("schema", "")).startswith("stable_native_leaf/") for result in (a, b)):
+    leaf_receipt = any(str(result.get("schema", "")).startswith("stable_native_leaf/") for result in (a, b))
+    arithmetic_receipt = any(str(result.get("schema", "")).startswith("stable_native_arithmetic/") for result in (a, b))
+    if leaf_receipt or arithmetic_receipt:
         if getattr(args, "require_valid", False):
             sys.exit("bench: --require-valid supports only synthetic comparisons")
-        from stable_resident_leaf_suite import compare
+        if leaf_receipt and arithmetic_receipt:
+            sys.exit("bench: comparison refuses different stable native workloads")
+        if arithmetic_receipt:
+            from stable_resident_arithmetic_suite import compare
+        else:
+            from stable_resident_leaf_suite import compare
         if getattr(args, "allow_compiler_change", False):
             compare(a, b, args.floor, allow_compiler_change=True)
         else:
             compare(a, b, args.floor)
         return
     if getattr(args, "allow_compiler_change", False):
-        sys.exit("bench: --allow-compiler-change supports only stable native leaf comparisons")
+        sys.exit("bench: --allow-compiler-change supports only stable native leaf and arithmetic comparisons")
     if any(result.get("schema") == "contention_suite_v1" for result in (a, b)):
         from contention import comparison_issues
         issues = comparison_issues(a, b)
@@ -1915,6 +1922,8 @@ def main() -> None:
     add_resident_parser(sub)
     from stable_resident_leaf_suite import add_parser as add_stable_leaf_parser
     add_stable_leaf_parser(sub)
+    from stable_resident_arithmetic_suite import add_parser as add_stable_arithmetic_parser
+    add_stable_arithmetic_parser(sub)
     sub.add_parser("list").set_defaults(fn=cmd_list)
     sub.add_parser("preflight", help="check pinned test runtime prerequisites without building").set_defaults(fn=cmd_preflight)
     r = sub.add_parser("run")
@@ -1965,7 +1974,7 @@ def main() -> None:
     c.add_argument("--require-valid", action="store_true",
                    help="exit nonzero for an ineligible synthetic comparison (automation gate)")
     c.add_argument("--allow-compiler-change", action="store_true",
-                   help="explicitly compare hash-attested compiler optimizations in the stable native leaf diagnostic only")
+                   help="explicitly compare hash-attested compiler optimizations in the stable native leaf or arithmetic diagnostic only")
     c.add_argument("--floor", type=float, default=10.0, metavar="PCT",
                    help="minimum median change to call a difference (default 10%%)")
     c.set_defaults(fn=cmd_compare)

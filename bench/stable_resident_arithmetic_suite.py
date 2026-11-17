@@ -21,7 +21,9 @@ host_identity, aggregate, check_identity = base.host_identity, base.aggregate, b
 attestation, order = base.attestation, base.order
 ARMS = base.ARMS
 SCHEMA = 'stable_native_arithmetic/v1'
-CLAIM = 'Scalar arithmetic workload only, NOT general reuse, realproject or fullgate. Descriptive invocation timings only.'
+CLAIM = ('Scalar arithmetic diagnostic with forced object, LLVM IR and MIR output only. '
+         'NOT ordinary Cargo build performance, general reuse, realproject or fullgate. '
+         'Descriptive producer invocation timings only.')
 
 
 def fixture(items, revision):
@@ -71,7 +73,8 @@ def workload(items, edits, repetitions):
                 repetitions=repetitions, revisions=revisions, inputs=list(map(list, arithmetic.INPUTS)),
                 order=[order(r) for r in range(repetitions)], lifetime=64,
                 timing='producer-invocation-wall-only', warmup='revision0 excluded',
-                incremental='isolated per repetition and arm')
+                incremental='isolated per repetition and arm',
+                producer_outputs='obj+llvm-ir+mir (diagnostic-forced)')
 
 
 def execution_identity():

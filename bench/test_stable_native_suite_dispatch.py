@@ -14,8 +14,9 @@ import suite
 
 
 class StableNativeDispatchTests(unittest.TestCase):
-    def invoke(self, a, b, require_valid=False, allow_compiler_change=False):
-        module = types.ModuleType('stable_resident_leaf_suite')
+    def invoke(self, a, b, require_valid=False, allow_compiler_change=False,
+               module_name='stable_resident_leaf_suite'):
+        module = types.ModuleType(module_name)
         module.compare = Mock()
         with tempfile.TemporaryDirectory() as temporary:
             paths = [Path(temporary) / name for name in ('a.json', 'b.json')]
@@ -24,7 +25,7 @@ class StableNativeDispatchTests(unittest.TestCase):
             args = argparse.Namespace(a=str(paths[0]), b=str(paths[1]), floor=10,
                                       require_valid=require_valid,
                                       allow_compiler_change=allow_compiler_change)
-            with patch.dict(sys.modules, {'stable_resident_leaf_suite': module}):
+            with patch.dict(sys.modules, {module_name: module}):
                 suite.cmd_compare(args)
         return module.compare
 
@@ -48,6 +49,30 @@ class StableNativeDispatchTests(unittest.TestCase):
         compare = self.invoke(a, b, allow_compiler_change=True)
         compare.assert_called_once_with(a, b, 10, allow_compiler_change=True)
 
+    def test_arithmetic_dispatch_preserves_optimization_opt_in(self):
+        a = {'schema': 'stable_native_arithmetic/v1'}
+        b = {'schema': 'stable_native_arithmetic/v1'}
+        for changed in (False, True):
+            compare = self.invoke(a, b, allow_compiler_change=changed,
+                                  module_name='stable_resident_arithmetic_suite')
+            if changed:
+                compare.assert_called_once_with(a, b, 10, allow_compiler_change=True)
+            else:
+                compare.assert_called_once_with(a, b, 10)
+
+    def test_mixed_native_workloads_are_rejected_before_dispatch(self):
+        for first, second in (('leaf', 'arithmetic'), ('arithmetic', 'leaf')):
+            with self.assertRaisesRegex(SystemExit, 'different stable native workloads'):
+                self.invoke({'schema': f'stable_native_{first}/v1'},
+                            {'schema': f'stable_native_{second}/v1'},
+                            allow_compiler_change=True)
+
+    def test_arithmetic_cannot_bypass_synthetic_validity_gate(self):
+        with self.assertRaisesRegex(SystemExit, 'only synthetic'):
+            self.invoke({'schema': 'stable_native_arithmetic/v1'},
+                        {'schema': 'stable_native_arithmetic/v1'}, require_valid=True,
+                        module_name='stable_resident_arithmetic_suite')
+
     def test_compiler_change_opt_in_cannot_relax_other_benchmarks(self):
         with self.assertRaisesRegex(SystemExit, 'only stable native leaf'):
             self.invoke({'schema': 'other'}, {'schema': 'other'},
@@ -64,6 +89,21 @@ class StableNativeDispatchTests(unittest.TestCase):
         self.assertEqual(args.compiler, Path('/fixture/rustc'))
         self.assertEqual(args.items, 8)
         self.assertEqual(args.repetitions, 1)
+
+    def test_root_arithmetic_cli_requires_hash_attestations_and_uses_fn(self):
+        import stable_resident_arithmetic_suite as adapter
+        argv = ['suite.py', 'stable-native-arithmetic', '--compiler', '/fixture/rustc',
+                '--output', '/fixture/output', '--items', '8', '-n', '1',
+                '--expected-driver-sha256', '1' * 64,
+                '--expected-compiler-sha256', '2' * 64]
+        with patch.object(adapter, 'run') as run, patch.object(sys, 'argv', argv):
+            suite.main()
+        run.assert_called_once()
+        args = run.call_args.args[0]
+        self.assertEqual(args.compiler, Path('/fixture/rustc'))
+        self.assertEqual(args.items, 8)
+        self.assertEqual(args.expected_driver_sha256, '1' * 64)
+        self.assertEqual(args.expected_compiler_sha256, '2' * 64)
 
     def test_automatic_record_upload_is_unique_opt_out_and_fail_open(self):
         import stable_resident_leaf_suite as adapter
