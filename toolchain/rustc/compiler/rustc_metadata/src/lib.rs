@@ -29,6 +29,8 @@ pub mod resident_metadata;
 pub mod resident_proc_macro_helper;
 #[cfg(target_os = "linux")]
 pub mod resident_proc_macro_parent;
+#[cfg(target_os = "linux")]
+pub mod resident_proc_macro_request;
 
 pub use fs::{METADATA_FILENAME, emit_wrapper_file};
 pub use host_dylib::{DylibError, load_symbol_from_dylib};

@@ -114,12 +114,13 @@ impl Drop for MacroHelper {
 }
 
 #[cfg(test)]
+pub(crate) static REQUEST_MACRO_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod tests {
+    use super::REQUEST_MACRO_TEST_LOCK as LOCK;
     use super::*;
     use rustc_data_structures::jobserver::resident::RequestLease;
-    use std::sync::Mutex;
-
-    static LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     #[ignore = "requires an explicitly supplied matching native helper and proc-macro library"]
