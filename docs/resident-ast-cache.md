@@ -85,6 +85,31 @@ The comprehensive session-weighted synthetic gate, full-project Cargo routing,
 general changed-source Typeck/HIR residency, external-type reuse and default
 promotion are not established by this experiment.
 
+## Combined lexer and AST diagnostic
+
+`0924dad7b` adds explicit `--with-lexer` composition to the focused suite.
+AST-only defaults remain unchanged. Combined mode requires the exact expected
+lexer hit/miss deltas as well as AST hits, bounds both caches independently,
+preserves original telemetry, and rejects comparisons with AST-only captures.
+Its 44 pure tests and the native `0359-diagnostic` capture passed.
+
+Two CPU-3-pinned captures used the same frozen compiler and parent environment,
+32 functions, 6 helper edits and 3 repetitions, with 18 measured rows per arm:
+
+| Record suffix | Fresh median | Process-only median | AST + lexer median |
+| --- | ---: | ---: | ---: |
+| `0400-a` | 19.081 ms | 8.916 ms | 8.812 ms |
+| `0400-b` | 21.805 ms | 10.431 ms | 10.131 ms |
+
+Full record IDs are
+`bench/stable-resident-composed-suite-20261117-0400-{a,b}`.
+The `bench/suite.py compare` validated provenance but reported repeat drift
+above its 10% descriptive floor in fresh and control timings, at +14.28% and
++16.99%. Combined/cache-control ratios were 0.9884x and 0.9713x. This small added
+cache effect amid larger repeat drift does not establish a reproducible speedup.
+All three untouched generated receipts passed exact authenticated JSON readback.
+No compiler code, production default or published client was changed.
+
 ## Hosted correctness acceptance
 
 The same immutable compiler and complete matching library sysroot passed native
