@@ -633,7 +633,7 @@ fn serve_requests(
         let owned_stats = batch.map(|batch| {
             let (revisions, contexts) = batch.counts();
             let live = batch.live_stats();
-            json!({"revisions":revisions,"contexts":contexts,
+            json!({"enabled":true,"revisions":revisions,"contexts":contexts,
                 "live_queries":false,"external_decoders":false,"incremental_control":true,
                 "retained_entries":live.retained_entries,
                 "retained_estimated_bytes":live.retained_estimated_bytes})
@@ -694,7 +694,9 @@ mod tests {
     #[test]
     fn owned_preflight_rejects_help_and_accepts_real_serial_compilation() {
         let mut callbacks = crate::TimePassesCallbacks::default();
-        let argv = ["jr-rustc", "a.rs", "--jobs-backend=1", "--jobs-linker=1"].map(str::to_owned);
+        let argv =
+            ["jr-rustc", "a.rs", "-Zunstable-options", "--jobs-backend=1", "--jobs-linker=1"]
+                .map(str::to_owned);
         let mut prepared = crate::prepare_compiler(&argv, &mut callbacks, None).unwrap();
         assert!(owned_supported(&prepared));
         prepared.has_input = false;

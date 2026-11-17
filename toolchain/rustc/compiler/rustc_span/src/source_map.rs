@@ -231,6 +231,7 @@ pub struct ResidentRawSourceFile {
 }
 
 struct RevisionSourceFile {
+    read_path: PathBuf,
     // Keep the exact, pre-normalization contents. Hashes or normalized text are
     // insufficient: BOM and CRLF changes must allocate a new source version too.
     raw: String,
@@ -284,9 +285,13 @@ impl SourceRevision<'_, '_> {
 impl SourceRevisionState {
     fn load_file(&mut self, sm: &SourceMap, path: &Path) -> io::Result<Arc<SourceFile>> {
         let loader = self;
+        // Resolve reads and ownership against the captured directory, but keep
+        // the caller's logical filename just as ordinary SourceMap loading does.
+        let filename = FileName::Real(sm.path_mapping.to_real_filename(&sm.working_dir, path));
+        let logical_path = path.to_path_buf();
         let path = loader.working_directory.join(path);
-        if let Some(entry) = loader.entries.get(&path) {
-            if entry.loaded_revision == loader.revision {
+        if let Some(entry) = loader.entries.get(&logical_path) {
+            if entry.loaded_revision == loader.revision && entry.file.name == filename {
                 return Ok(Arc::clone(&entry.file));
             }
         } else if loader.entries.len() == loader.max_files {
@@ -294,7 +299,7 @@ impl SourceRevisionState {
         }
 
         let raw = sm.file_loader.read_file(&path)?;
-        let previous = loader.entries.get(&path);
+        let previous = loader.entries.get(&logical_path);
         let previous_len = previous.map_or(0, |entry| entry.raw.len());
         let raw_bytes = loader
             .raw_bytes
@@ -302,17 +307,23 @@ impl SourceRevisionState {
             .and_then(|bytes| bytes.checked_add(raw.len()))
             .filter(|&bytes| bytes <= loader.max_raw_bytes)
             .ok_or_else(|| io::Error::other("source revision raw-byte budget exhausted"))?;
-        let file = if let Some(entry) = previous.filter(|entry| entry.raw == raw) {
+        let file = if let Some(entry) =
+            previous.filter(|entry| entry.raw == raw && entry.file.name == filename)
+        {
             Arc::clone(&entry.file)
         } else {
-            let filename = FileName::Real(sm.path_mapping.to_real_filename(&sm.working_dir, &path));
             sm.new_source_file_version(filename, raw.clone()).map_err(|_| {
                 io::Error::other("source revision source-map address space exhausted")
             })?
         };
         loader.entries.insert(
-            path,
-            RevisionSourceFile { raw, file: Arc::clone(&file), loaded_revision: loader.revision },
+            logical_path,
+            RevisionSourceFile {
+                read_path: path,
+                raw,
+                file: Arc::clone(&file),
+                loaded_revision: loader.revision,
+            },
         );
         loader.raw_bytes = raw_bytes;
         Ok(file)
@@ -393,6 +404,34 @@ mod revision_loader_tests {
             .unwrap()
             .contents
             .insert(std::env::current_dir().unwrap().join(name), text.to_string());
+    }
+
+    #[test]
+    fn native_revision_preserves_logical_diagnostic_names_and_frozen_aliases() {
+        let (sm, disk) = setup();
+        let logical = Path::new("diagnostic.rs");
+        let absolute = std::env::current_dir().unwrap().join(logical);
+        let expected = FileName::Real(sm.path_mapping.to_real_filename(&sm.working_dir, logical));
+        write(&disk, "diagnostic.rs", "first");
+        let first = {
+            let _revision = sm.begin_resident_source_revision(2, 64, 2).unwrap();
+            let relative = sm.load_file(logical).unwrap();
+            assert_eq!(relative.name, expected);
+            let absolute_file = sm.load_file(&absolute).unwrap();
+            assert_ne!(absolute_file.name, relative.name);
+            write(&disk, "diagnostic.rs", "changed");
+            assert!(Arc::ptr_eq(&relative, &sm.load_file(logical).unwrap()));
+            assert!(Arc::ptr_eq(&absolute_file, &sm.load_file(&absolute).unwrap()));
+            for raw in sm.resident_raw_source_files(4096).unwrap().unwrap() {
+                assert_eq!(raw.path, absolute);
+                assert_eq!(raw.raw, "first");
+            }
+            relative
+        };
+        let _revision = sm.begin_resident_source_revision(2, 64, 2).unwrap();
+        let changed = sm.load_file(logical).unwrap();
+        assert_eq!(changed.name, expected);
+        assert!(!Arc::ptr_eq(&first, &changed));
     }
 
     #[test]
@@ -1208,10 +1247,10 @@ impl SourceMap {
             .as_ref()
             .ok_or_else(|| io::Error::other("resident raw inputs are currently loading"))?;
         let mut remaining = max_bytes;
-        for (path, entry) in &state.entries {
+        for entry in state.entries.values() {
             if entry.loaded_revision == state.revision {
                 remaining = remaining
-                    .checked_sub(path.as_os_str().as_encoded_bytes().len())
+                    .checked_sub(entry.read_path.as_os_str().as_encoded_bytes().len())
                     .and_then(|bytes| bytes.checked_sub(entry.raw.len()))
                     .ok_or_else(|| {
                         io::Error::other("resident raw input snapshot budget exceeded")
@@ -1223,8 +1262,8 @@ impl SourceMap {
                 .entries
                 .iter()
                 .filter(|(_, entry)| entry.loaded_revision == state.revision)
-                .map(|(path, entry)| ResidentRawSourceFile {
-                    path: path.clone(),
+                .map(|(_, entry)| ResidentRawSourceFile {
+                    path: entry.read_path.clone(),
                     file: Arc::clone(&entry.file),
                     raw: entry.raw.clone(),
                 })

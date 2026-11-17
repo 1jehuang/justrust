@@ -1,5 +1,33 @@
 # Native resident Cargo integration, 2026-11-17
 
+## Production-hosted compiler-owner followthrough, 13:00 UTC
+
+With `JUSTRUST_CARGO_RESIDENT_OWNED=1` and external admission enabled, the actual
+Cargo worker now holds native SessionGlobals, the source map and compiler arena
+owners across requests. Each revision still creates a fresh compiler context.
+Live typed query reuse and managed decoder retention remain disabled. This is
+an explicit experiment, not the default published toolchain.
+
+The complete 20-stage dependency acceptance passed through published alpha.36
+on the production hosted machine, including exact relative diagnostic paths,
+root edits/error recovery on the same worker, increasing native revision/context
+counts, and dependency identity invalidation. Original evidence:
+`justrust records show bench stable-resident-owned-paths-20261117-1300`.
+The exact driver is
+`9e42043aeb23abaa57678b3eaf40d4c0dcdd2a065b8b450f828b87842a5a1d6b`.
+Hosted gates also passed 71 source-map tests, 23 interface tests and 21 driver
+tests. A real diagnostic mismatch found by acceptance was fixed in the native
+source map, not hidden by normalizing the oracle.
+
+Build the matching stage1 compiler and standard library before interface tests
+that load external metadata. Testing a new compiler identity against the prior
+sysroot produces legitimate E0514 failures and wastes an iteration. Synthetic
+discovery now supports `JUSTRUST_SYNTH_PROBE_REMOTE=1` so the comprehensive
+hosted benchmark does not silently perform its discovery compilations locally.
+No representative speedup or 10× result is established by these correctness
+checks. Unrestricted typed reuse, resource measurement and matched broad timing
+remain open.
+
 ## Production-hosted external-input followthrough, 12:35 UTC
 
 The std-only boundary described below is the earlier baseline. Explicitly setting

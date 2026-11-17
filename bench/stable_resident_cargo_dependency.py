@@ -238,6 +238,9 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
         env['JUSTRUST_CARGO_RESIDENT_EXTERNAL'] = '1'
     if owned_batch:
         env['JUSTRUST_CARGO_RESIDENT_OWNED'] = '1'
+        # The owned compiler's lifecycle is separate from the snapshot-only
+        # frontend experiment. Compare the same disabled setting in both arms.
+        env['JUSTRUST_RUSTC_RESIDENT_FRONTEND'] = '0'
     report = dict(mode=mode, verdict='incomplete', observations=[])
     try:
         previous_dependency = None

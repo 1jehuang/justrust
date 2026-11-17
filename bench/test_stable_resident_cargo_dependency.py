@@ -290,6 +290,7 @@ class DependencyAcceptanceTests(unittest.TestCase):
         for call in calls:
             self.assertEqual(call['env']['JUSTRUST_CARGO_RESIDENT_OWNED'], '1')
             self.assertEqual(call['env']['JUSTRUST_CARGO_RESIDENT_EXTERNAL'], '1')
+            self.assertEqual(call['env']['JUSTRUST_RUSTC_RESIDENT_FRONTEND'], '0')
 
     def test_owned_batch_requires_server_revision_evidence(self):
         stage = subject.stages('nonce')[1]
