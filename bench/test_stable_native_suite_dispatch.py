@@ -63,7 +63,10 @@ class StableNativeDispatchTests(unittest.TestCase):
     def test_mixed_native_workloads_are_rejected_before_dispatch(self):
         for first, second in (('leaf', 'arithmetic'), ('arithmetic', 'leaf'),
                               ('lexer', 'leaf'), ('leaf', 'lexer'),
-                              ('lexer', 'arithmetic'), ('arithmetic', 'lexer')):
+                              ('lexer', 'arithmetic'), ('arithmetic', 'lexer'),
+                              ('ast', 'leaf'), ('leaf', 'ast'),
+                              ('ast', 'lexer'), ('lexer', 'ast'),
+                              ('ast', 'arithmetic'), ('arithmetic', 'ast')):
             with self.assertRaisesRegex(SystemExit, 'different stable native workloads'):
                 self.invoke({'schema': f'stable_native_{first}/v1'},
                             {'schema': f'stable_native_{second}/v1'},
@@ -123,6 +126,30 @@ class StableNativeDispatchTests(unittest.TestCase):
     def test_root_lexer_cli_requires_hash_attestations_and_uses_fn(self):
         import stable_resident_lexer_suite as adapter
         argv = ['suite.py', 'stable-native-lexer', '--compiler', '/fixture/rustc',
+                '--output', '/fixture/output', '--items', '8', '-n', '1',
+                '--expected-driver-sha256', '1' * 64,
+                '--expected-compiler-sha256', '2' * 64]
+        with patch.object(adapter, 'run') as run, patch.object(sys, 'argv', argv):
+            suite.main()
+        run.assert_called_once()
+        args = run.call_args.args[0]
+        self.assertEqual(args.items, 8)
+        self.assertEqual(args.expected_driver_sha256, '1' * 64)
+        self.assertEqual(args.expected_compiler_sha256, '2' * 64)
+
+    def test_ast_dispatch_is_strict_and_not_a_synthetic_gate(self):
+        a = {'schema': 'stable_native_ast/v1'}
+        b = {'schema': 'stable_native_ast/v1'}
+        compare = self.invoke(a, b, module_name='stable_resident_ast_suite')
+        compare.assert_called_once_with(a, b, 10)
+        with self.assertRaisesRegex(SystemExit, 'only synthetic'):
+            self.invoke(a, b, require_valid=True, module_name='stable_resident_ast_suite')
+        with self.assertRaisesRegex(SystemExit, 'identical compiler'):
+            self.invoke(a, b, allow_compiler_change=True, module_name='stable_resident_ast_suite')
+
+    def test_root_ast_cli_requires_hashes_and_uses_shared_callback(self):
+        import stable_resident_ast_suite as adapter
+        argv = ['suite.py', 'stable-native-ast', '--compiler', '/fixture/rustc',
                 '--output', '/fixture/output', '--items', '8', '-n', '1',
                 '--expected-driver-sha256', '1' * 64,
                 '--expected-compiler-sha256', '2' * 64]

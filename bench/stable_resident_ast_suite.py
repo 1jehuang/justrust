@@ -134,7 +134,7 @@ def validate_live(record, previous, arm, kind):
     stats = ast.validate_stats(record, previous, '1' if arm == 'ast' else '0',
                                'cold' if kind == 'cold' else 'hit')
     require(set(stats) == set(ast.COUNTERS), 'unknown AST telemetry')
-    require(stats['retained_entries'] <= 128 and stats['retained_estimated_bytes'] <= 8 * 1024 * 1024,
+    require(stats['retained_entries'] <= 32 and stats['retained_estimated_bytes'] <= 8 * 1024 * 1024,
             'AST retention bounds exceeded')
     if arm == 'ast':
         require(stats['rejected'] == 0, 'admitted root rejected')

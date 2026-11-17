@@ -158,6 +158,15 @@ class AstSuiteTests(unittest.TestCase):
         report['aggregates'] = suite.aggregate(report['rows'])
         return report
 
+    def test_native_entry_bound_is_not_fixture_item_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = self.synthetic(Path(directory))
+            row = next(row for row in report['rows'] if row['arm'] == 'ast' and row['step'] == 0)
+            record = copy.deepcopy(row['record'])
+            record['ast']['retained_entries'] = 33
+            with self.assertRaisesRegex(ValueError, 'AST retention bounds exceeded'):
+                suite.validate_live(record, None, 'ast', 'cold')
+
     def test_offline_success_and_comparison(self):
         with tempfile.TemporaryDirectory() as directory:
             report = self.synthetic(Path(directory))
