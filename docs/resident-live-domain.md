@@ -433,3 +433,43 @@ process-only +0.55% and retained -0.96% between repetitions, all below its 10%
 floor. Retention is 1.45–2.99% slower than process-only here, not an additional
 speedup. These are forced-output diagnostic timings, not ordinary Cargo,
 real-project, hosted, comprehensive synthetic or production-default evidence.
+
+## Ordinary-output clean token retention
+
+An independent lexer experiment now retains successful clean token streams
+inside the existing native serial batch's shared symbol/source-map lifetime.
+`JUSTRUST_RUSTC_RESIDENT_LEXER=1` explicitly enables it; the default and `0`
+remain disabled. It does not require typed-query reuse, forced MIR output or
+external-crate identity authorization. It is not an AST/HIR cache: each request
+still parses, creates fresh attribute IDs, performs gates and runs diagnostics.
+
+The cache key requires the exact retained SourceMap and SourceFile Arc identities,
+edition and stripping mode, and never admits override spans. Conservative ASCII
+eligibility rejects comments, attributes, strings, lifetimes, raw/forced
+identifiers, Unicode and unsupported numeric forms. Only successful token-tree
+construction enters the cache. Its otherwise skipped session effect, identifier
+SymbolGallery insertion, is replayed in lexical order while preserving existing
+first occurrences. Token mutations use the existing copy-on-write representation.
+The bounds are 128 entries, 8 MiB estimated retained bytes, 256 KiB input per
+file and 65,536 token trees. Owner retirement, disabled mode and unwind cleanup
+remain separate from compiler result correctness.
+
+Native driver typecheck and all 72 parser tests pass, including exact token and
+gallery replay, preexisting gallery entries, map/file/edition/strip isolation,
+malformed-token exclusion, source limits, eviction and unwind cleanup. The
+matching frozen `stable-resident-lexer-20261117-0200-sysroot` driver is
+`1b73420f6f480f61d52ff28ca48402df236dc72f9e0d76fad3a19bb8f1645555`.
+Ordinary object-only acceptance passes all ten transitions per arm, including
+unrelated/relevant edits, delimiter error/recovery and unsupported-syntax
+fallback. Enabled mode records eight actual lexer hits; disabled mode records
+zero in every lexer field. Fresh C consumers validate unique-nonce outputs.
+This is a real ordinary-output hit result, not yet evidence of a speedup.
+
+Exact original account-private readback is verified for
+`bench/stable-resident-lexer-20261117-0203-native` and the lexer-enabled native
+guard and shipping-module `n=3` regressions
+`bench/stable-resident-lexer-20261117-0204-{guard,dogfood}`. The earlier harness
+flag-selection failure is preserved separately. Default compiler/client behavior
+and production installation are unchanged. General frontend retention, broad
+Rust-source coverage, managed Cargo routing and representative performance
+acceptance remain unfinished.
