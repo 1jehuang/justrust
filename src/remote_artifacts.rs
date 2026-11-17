@@ -1055,6 +1055,20 @@ pub(crate) fn fetch_tests(
     retry_full(|| fetch_inner(args, start, Some(run_id)))
 }
 
+fn artifact_command(toolchain: Option<&str>) -> String {
+    let pin = toolchain
+        .map(|pin| {
+            format!(
+                "export JUSTRUST_TOOLCHAIN={}; ",
+                crate::remote_build::shell_quote(pin)
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "{pin}export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; ~/.cargo/bin/justrust {ARG}"
+    )
+}
+
 fn artifact_command_response<T>(
     child: &mut std::process::Child,
     receive: impl FnOnce(&mut BufReader<std::process::ChildStdout>) -> T,
@@ -1166,11 +1180,10 @@ fn fetch_inner(
         test_run: test_run.map(str::to_owned),
         anchors: !FORCE_FULL.load(std::sync::atomic::Ordering::Relaxed),
     };
+    let command = artifact_command(std::env::var("JUSTRUST_TOOLCHAIN").ok().as_deref());
     let mut child = t
         .command()
-        .arg(format!(
-            "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; ~/.cargo/bin/justrust {ARG}"
-        ))
+        .arg(command)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1403,6 +1416,18 @@ pub fn available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artifact_command_preserves_explicit_managed_pin_without_shell_injection() {
+        let pin = "nightly-2026-10-08'; touch /unwanted; '";
+        let command = artifact_command(Some(pin));
+        assert!(command.starts_with(&format!(
+            "export JUSTRUST_TOOLCHAIN={}; ",
+            crate::remote_build::shell_quote(pin)
+        )));
+        assert!(command.ends_with("~/.cargo/bin/justrust __artifacts"));
+        assert!(!artifact_command(None).contains("JUSTRUST_TOOLCHAIN="));
+    }
 
     #[cfg(unix)]
     #[test]

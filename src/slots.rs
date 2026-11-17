@@ -303,8 +303,19 @@ pub fn target_dir_in_result(cwd: &Path, args: &[OsString]) -> anyhow::Result<Pat
 
 fn directory_metadata(cwd: &Path, args: &[OsString]) -> anyhow::Result<serde_json::Value> {
     use anyhow::{Context, bail};
-    let cargo = paths::real_cargo().context("locating Cargo for target-directory metadata")?;
+    // Artifact commands run outside the recorded-build environment. Managed-only
+    // hosted machines intentionally have no system Cargo on PATH, so honor the
+    // same explicit pin as the build without installing a different toolchain.
+    let managed = crate::toolchain::resolve(cwd)?
+        .and_then(|pin| crate::toolchain::available_for_build(&pin.spec));
+    let cargo = match &managed {
+        Some(tc) => tc.cargo(),
+        None => paths::real_cargo().context("locating Cargo for target-directory metadata")?,
+    };
     let mut cmd = Command::new(cargo);
+    if let Some(tc) = managed {
+        cmd.env("RUSTC", tc.bin("rustc"));
+    }
     cmd.current_dir(cwd);
     cmd.args([
         "metadata",
@@ -1801,6 +1812,65 @@ mod tests {
         ] {
             assert!(target_metadata_options(&malformed).is_err());
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn target_metadata_works_with_managed_cargo_without_system_path() {
+        const CHILD: &str = "JUSTRUST_METADATA_MANAGED_CHILD";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = PathBuf::from(root);
+            assert_eq!(
+                target_dir_in_result(&root, &os(&["build"])).unwrap(),
+                root.join("target")
+            );
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("justrust-managed-metadata-{}", std::process::id()));
+        let tc = root.join("toolchains/1.99.0");
+        std::fs::create_dir_all(tc.join("bin")).unwrap();
+        let info = crate::toolchain::Installed {
+            id: "1.99.0".into(),
+            ..Default::default()
+        };
+        std::fs::write(
+            tc.join("justrust-toolchain.json"),
+            serde_json::to_vec(&info).unwrap(),
+        )
+        .unwrap();
+        let expected = root.join("target");
+        let cargo = format!(
+            "#!/bin/sh\n[ \"$RUSTC\" = '{}' ] || exit 9\nprintf '%s' '{}'\n",
+            tc.join("bin/rustc").display(),
+            serde_json::json!({"target_directory": expected}).to_string(),
+        );
+        for (name, body) in [("cargo", cargo.as_str()), ("rustc", "#!/bin/sh\nexit 0\n")] {
+            let path = tc.join("bin").join(name);
+            std::fs::write(&path, body).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "slots::tests::target_metadata_works_with_managed_cargo_without_system_path",
+                "--nocapture",
+            ])
+            .env(CHILD, &root)
+            .env("JUSTRUST_HOME", &root)
+            .env("JUSTRUST_TOOLCHAIN", "1.99.0")
+            .env("PATH", "")
+            .env_remove("JUSTRUST_REAL_CARGO")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
