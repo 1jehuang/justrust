@@ -571,3 +571,16 @@ with authenticated exact JSON readback verified against each unchanged original.
 This is expanded syntax correctness coverage only. It establishes neither a
 speedup nor general AST/HIR/Typeck retention, managed Cargo routing or production
 default readiness; the ordinary rlib timing limitations above still apply.
+
+The identical frozen 0231 compiler was subsequently staged in a new private
+directory on the authenticated production guest, without installation or slot
+provisioning. Launcher, driver, harness and shipping-source hashes matched the
+local originals before execution. The guest passed the same 46 common-syntax
+transitions, lexer-enabled native guards and shipping-module `n=3` dogfood.
+Original raw streams and generated receipts were transferred unchanged through
+the normal authenticated SSH path. Exact account-private JSON readback is
+verified for
+`bench/stable-resident-lexer-common-host-20261117-0243-{native,guard,dogfood}`.
+This is guest correctness evidence, not hosted timing or managed Cargo routing
+acceptance. The default published client and compiler selection were not changed
+by this experiment.
