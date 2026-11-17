@@ -383,6 +383,32 @@ reuse cannot satisfy that gate. The untouched original receipt passed exact
 authenticated JSON readback. These additional source fixtures do not establish
 a natural Typeck reuse opportunity or justify forcing extra query work.
 
+## Exact imported source-universe prerequisite
+
+`CStore::capture_external_sources` pairs the exact metadata snapshot with every
+already-imported external source mapping. Limits bound metadata, mapping count,
+file count and declared source bytes before retaining source allocations. Missing
+imports, proc macros, malformed ownership/index/endpoints and exceeded budgets
+reject capture. Capture does not force imports or reopen source paths.
+
+Equality requires the actual translated `Arc<SourceFile>` allocation and its
+original/current numeric endpoints, owner and metadata index. Stable IDs, paths,
+content hashes and equal metadata bytes are not substitutes for allocation
+identity. This snapshot is not a reuse authorization.
+
+The actual loaded-std test demonstrates the distinction: repeated captures within
+one context match, but two fresh contexts have equal metadata snapshots and
+unequal imported source universes. The test explicitly imports sources as setup,
+checks incomplete pre-import rejection and both source budgets, and verifies that
+external typed reuse still rejects. Ten native metadata tests and this native
+cross-context acceptance pass. Matching std was rebuilt normally after an initial
+incompatible-sysroot rejection, without a version override.
+
+The next ownership work must handle imported source translations and decoder
+hygiene together. Globally interning sources by stable ID alone is insufficient:
+external source-text caches and diagnostics must retain correct revision behavior.
+No external typed reuse or performance improvement is established by this capture.
+
 ## Native Cargo routing boundary
 
 **Update, 2026-11-17:** explicit std-only native Cargo and actual justrust client
