@@ -52,11 +52,6 @@ mod linux {
     use std::time::{Duration, Instant};
 
     const JOBSERVER: &[&str] = &["CARGO_MAKEFLAGS", "MAKEFLAGS", "MFLAGS"];
-    const OBSERVATION: &[&str] = &[
-        "JUSTRUST_RUN_DIR",
-        "JUSTRUST_RUN_ID",
-        "JUSTRUST_CARGO_RESIDENT_TRACE",
-    ];
     const RECORDING: &[&str] = &[
         "JUSTRUST_RUSTC_PHASE_LOG",
         "JUSTRUST_RUSTC_PHASES_FILE",
@@ -153,10 +148,8 @@ mod linux {
         for key in JOBSERVER {
             env.remove(OsStr::new(key));
         }
-        // Per-RPC harness output is written by Cargo, never by a frozen worker.
-        for key in OBSERVATION {
-            env.remove(OsStr::new(key));
-        }
+        // No other variable is observationally invisible: even telemetry names
+        // can be inputs to env!/option_env! in ordinary Rust source.
         env
     }
 
@@ -791,15 +784,27 @@ mod linux {
         }
 
         #[test]
-        fn observation_is_normalized_but_incompatible_recording_refused() {
+        fn observation_is_preserved_and_incompatible_recording_refused() {
             let mut cmd = test_command();
             cmd.env("JUSTRUST_RUN_DIR", "/run/one")
-                .env("JUSTRUST_RUN_ID", "one");
+                .env("JUSTRUST_RUN_ID", "one")
+                .env("JUSTRUST_CARGO_RESIDENT_TRACE", "/trace/one");
             assert!(candidate(&cmd));
             let before = effective_env(&cmd);
+            for (name, expected) in [
+                ("JUSTRUST_RUN_DIR", "/run/one"),
+                ("JUSTRUST_RUN_ID", "one"),
+                ("JUSTRUST_CARGO_RESIDENT_TRACE", "/trace/one"),
+            ] {
+                assert_eq!(
+                    before.get(OsStr::new(name)).map(OsString::as_os_str),
+                    Some(OsStr::new(expected))
+                );
+            }
             cmd.env("JUSTRUST_RUN_DIR", "/run/two")
-                .env("JUSTRUST_RUN_ID", "two");
-            assert_eq!(before, effective_env(&cmd));
+                .env("JUSTRUST_RUN_ID", "two")
+                .env("JUSTRUST_CARGO_RESIDENT_TRACE", "/trace/two");
+            assert_ne!(before, effective_env(&cmd));
             for variable in RECORDING {
                 cmd.env(variable, "present");
                 assert!(!candidate(&cmd), "{variable}");
