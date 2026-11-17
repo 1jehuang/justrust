@@ -2,7 +2,10 @@
 """Frozen owned lexer correctness acceptance. Never builds a compiler or claims speed.
 
 CLI: --compiler /explicit/frozen/jr-rustc --out /new/evidence/directory
-API: capture(compiler, out, timeout=180). Raw transport and receipts survive failure.
+API: capture(compiler, out, timeout=180, common_syntax=False).
+Optional --common-syntax requires the expanded non-doc ASCII comment/attribute
+candidate. The default preserves the original frozen acceptance contract.
+Raw transport and receipts survive failure.
 """
 import argparse
 import hashlib
@@ -58,8 +61,8 @@ class LexerResident(owned.OwnedResident):
 
 
 def sources(a=7, b=11):
-    # Attributes reject the root/module as appropriate, while clean third module
-    # bytes exercise the actual lexer. Export attributes live in the root only.
+    # The root contains an extern ABI string and stays unsupported even when
+    # comments and pound attributes become eligible. Only the two modules hit.
     root = ROOT + '''#[unsafe(no_mangle)]
 pub extern "C" fn lexer_a() -> u64 { module_a::value() }
 #[unsafe(no_mangle)]
@@ -70,7 +73,7 @@ pub extern "C" fn lexer_b() -> u64 { module_b::value() }
             'module_b.rs': ('pub fn value() -> u64 { %d + 3 }\n' % b).encode()}
 
 
-def cases():
+def cases(common_syntax=False):
     result = [('initial', sources(), (9, 14), 'cold'),
               ('unchanged', sources(), (9, 14), 'same'),
               ('unrelated-edit', sources(b=17), (9, 20), 'cross'),
@@ -85,9 +88,36 @@ def cases():
                        ('string', '{ let _text = "fallback"; 47 + 2 }')]:
         data = sources(a=31, b=19)
         data['module_a.rs'] = ('pub fn value() -> u64 { ' + body + ' }\n').encode()
+        kind = ('common-warmup' if name == 'comment' else 'common-fallback') if common_syntax else 'fallback'
         result.append(('unsupported-' + name, data,
                        ({'comment': 39, 'raw-ident': 43, 'unicode': 45, 'string': 49}[name], 22),
-                       'fallback'))
+                       kind))
+        if common_syntax and name == 'comment':
+            result.append(('common-comment-unchanged', dict(data), (39, 22), 'same'))
+    if common_syntax:
+        for name, prefix, value in [
+                ('line-comment', '// ordinary ASCII comment\n', 53),
+                ('attribute', '#[inline]\n', 59),
+                ('nested-block', '/* outer /* nested */ terminated */\n', 61)]:
+            data = sources(a=value, b=19)
+            data['module_a.rs'] = prefix.encode() + data['module_a.rs']
+            result.append(('common-' + name, data, (value + 2, 22), 'common-warmup'))
+            result.append(('common-' + name + '-unchanged', dict(data), (value + 2, 22), 'same'))
+            if name == 'line-comment':
+                edited = sources(a=67, b=19)
+                edited['module_a.rs'] = b'// changed ASCII comment\n' + edited['module_a.rs']
+                result.append(('common-comment-relevant-edit', edited, (69, 22), 'cross'))
+                result.append(('common-comment-edit-unchanged', dict(edited), (69, 22), 'same'))
+        for name, prefix, value in [
+                ('line-doc', '/// unsupported documentation\n', 71),
+                ('block-doc', '/** unsupported documentation */\n', 73)]:
+            data = sources(a=value, b=19)
+            data['module_a.rs'] = prefix.encode() + data['module_a.rs']
+            result.append(('unsupported-' + name, data, (value + 2, 22), 'common-fallback'))
+        bad = sources(a=79, b=19)
+        bad['module_a.rs'] = b'/* unterminated ordinary comment\n' + bad['module_a.rs']
+        result.append(('unsupported-unterminated-comment', bad, None, 'error'))
+        result.append(('common-final-recovery', sources(a=83, b=19), (85, 22), 'recovery'))
     return result
 
 
@@ -126,6 +156,8 @@ def validate_lexer(response, previous, mode, kind):
     elif mode != '1':
         raise ValueError('Unknown mode')
     else:
+        if kind == 'common-warmup' and response['status'] != 0:
+            raise AssertionError('Common syntax warmup must compile successfully')
         if kind == 'cold' and delta['hits']:
             raise AssertionError('Cold lexer hit')
         if kind in ('same', 'cross'):
@@ -134,6 +166,9 @@ def validate_lexer(response, previous, mode, kind):
                 raise AssertionError('Successful unchanged/cross edit requires exact expected module lexer hits')
         if kind == 'cross' and delta['misses'] < 1:
             raise AssertionError('Unique changed source requires lexer miss')
+        if kind == 'common-fallback':
+            if response['status'] != 0 or delta['rejected'] < 2 or delta['hits'] != 1:
+                raise AssertionError('Common fallback must reject root and unsupported module, hit only sibling')
         if kind in ('error', 'fallback') and delta['rejected'] < 1:
             raise AssertionError('Unsupported/error source requires lexer rejection')
         # Errors may legitimately hit unchanged modules, but cannot be accepted
@@ -161,10 +196,12 @@ def execute(root, timeout):
                 execution=shared.run([binary, nonce], timeout, cwd=root, env=owned.environment()))
 
 
-def capture(compiler, out, timeout=180):
+def capture(compiler, out, timeout=180, common_syntax=False):
     compiler, out = Path(compiler).resolve(), Path(out).resolve()
     out.mkdir(parents=True, exist_ok=False)
     report = dict(schema=1, verdict='incomplete', modes=[], claim='Actual lexer correctness only. No speed claim.')
+    if common_syntax:
+        report['common_syntax'] = True
     worker = None
     try:
         report['identity_before'] = shared.identity(compiler)
@@ -185,7 +222,7 @@ def capture(compiler, out, timeout=180):
             entry['pid'] = worker.process.pid
             previous = old = None
             seen = set()
-            for name, data, expected, kind in cases():
+            for name, data, expected, kind in cases(common_syntax=common_syntax):
                 changed = validate_transition(old, data, kind, seen)
                 row = dict(name=name, kind=kind, changed=changed, expected=expected,
                            sources={k: shared.encoded(v) for k, v in data.items()}, modes={})
@@ -233,8 +270,10 @@ def main():
     parser.add_argument('--compiler', required=True, type=Path)
     parser.add_argument('--out', required=True, type=Path)
     parser.add_argument('--timeout', type=float, default=180)
+    parser.add_argument('--common-syntax', action='store_true',
+                        help='require expanded non-doc ASCII comments and pound attributes')
     args = parser.parse_args()
-    capture(args.compiler, args.out, args.timeout)
+    capture(args.compiler, args.out, args.timeout, common_syntax=args.common_syntax)
     print(str(args.out / 'receipt.json'))
 
 

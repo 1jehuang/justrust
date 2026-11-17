@@ -92,6 +92,63 @@ class Contract(unittest.TestCase):
         with self.assertRaises(AssertionError):
             lexer.validate_transition(a, lexer.sources(a=23, b=17), 'cross', set())
 
+    def test_default_cases_preserve_frozen_contract(self):
+        self.assertEqual(lexer.cases(), lexer.cases(common_syntax=False))
+        self.assertEqual([(row[0], row[3]) for row in lexer.cases()], [
+            ('initial', 'cold'), ('unchanged', 'same'), ('unrelated-edit', 'cross'),
+            ('relevant-edit', 'cross'), ('delimiter-error', 'error'),
+            ('recovery', 'recovery'), ('unsupported-comment', 'fallback'),
+            ('unsupported-raw-ident', 'fallback'), ('unsupported-unicode', 'fallback'),
+            ('unsupported-string', 'fallback')])
+
+    def test_common_case_transitions_and_repeat_oracles(self):
+        previous, seen = None, set()
+        rows = lexer.cases(common_syntax=True)
+        self.assertEqual(len(rows), 23)
+        repeats = []
+        for index, (name, current, expected, kind) in enumerate(rows):
+            lexer.validate_transition(previous, current, kind, seen)
+            if kind == 'same' and name.startswith('common-'):
+                self.assertEqual(rows[index - 1][1:3], (current, expected))
+                repeats.append(name)
+            if name.startswith('common-'):
+                self.assertIn(b'extern "C"', current['fixture.rs'])
+                self.assertEqual(current['module_b.rs'], lexer.sources(a=31, b=19)['module_b.rs'])
+            seen.update(current.values())
+            previous = current
+        self.assertEqual(len(repeats), 5)
+        by_name = {row[0]: row for row in rows}
+        self.assertEqual(by_name['common-comment-relevant-edit'][2:], ((69, 22), 'cross'))
+        self.assertIn(b'#[inline]', by_name['common-attribute'][1]['module_a.rs'])
+        self.assertIn(b'/* outer /* nested */ terminated */', by_name['common-nested-block'][1]['module_a.rs'])
+        for name in ('raw-ident', 'unicode', 'string', 'line-doc', 'block-doc'):
+            self.assertEqual(by_name['unsupported-' + name][3], 'common-fallback')
+        self.assertEqual(by_name['unsupported-unterminated-comment'][2:], (None, 'error'))
+
+    def test_common_warmup_and_fallback_counters(self):
+        prior = response(5, 8, 4, 4, 100)['lexer']
+        lexer.validate_lexer(response(5, 10, 5, 5, 150), prior, '1', 'common-warmup')
+        lexer.validate_lexer(response(6, 10, 5, 5, 150), prior, '1', 'common-warmup')
+        with self.assertRaises(AssertionError):
+            lexer.validate_lexer(response(6, 10, 5, 5, 150, status=1), prior, '1', 'common-warmup')
+        lexer.validate_lexer(response(6, 10, 6, 5, 150), prior, '1', 'common-fallback')
+        for item in (response(6, 10, 5, 5, 150), response(7, 10, 6, 5, 150),
+                     response(6, 10, 6, 5, 150, status=1)):
+            with self.assertRaises(AssertionError):
+                lexer.validate_lexer(item, prior, '1', 'common-fallback')
+        lexer.validate_lexer(response(), None, 'control', 'common-warmup')
+        lexer.validate_lexer(response(), None, 'control', 'common-fallback')
+        with self.assertRaises(AssertionError):
+            lexer.validate_lexer(response(hits=1), None, 'control', 'common-warmup')
+
+    def test_common_cli_is_opt_in(self):
+        for flag, expected in (([], False), (['--common-syntax'], True)):
+            with patch('sys.argv', ['lexer', '--compiler', '/frozen', '--out', '/evidence', *flag]), \
+                 patch.object(lexer, 'capture') as capture, patch('builtins.print'):
+                lexer.main()
+            capture.assert_called_once_with(Path('/frozen'), Path('/evidence'), 180,
+                                            common_syntax=expected)
+
     def test_object_only(self):
         args = lexer.arguments(Path('/fixture'))
         self.assertEqual([v for v in args if v.startswith('--emit=')], ['--emit=obj=/fixture/fixture.o'])
