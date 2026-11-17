@@ -643,9 +643,30 @@ dogfood. Exact unchanged originals are archived with authenticated JSON readback
 - `bench/stable-resident-immutable-decoder-20261117-0642-default-guard`
 - `bench/stable-resident-immutable-decoder-20261117-0642-default-dogfood`
 
-This establishes correctness for the scoped ownership optimization. Performance
-must be measured separately; external typed admission and production defaults
-remain unchanged.
+Performance was then measured separately with `bench/suite.py` using the same
+CPU affinity, boot, 32-item/six-edit workload and three repetitions (18 timed
+invocations per arm). Captures ran in before-a, after-a, after-b, before-b order.
+Both explicit compiler-change comparisons passed. Only candidate paths, attested
+driver SHA and internally consistent `rustc -vV` commit hashes may differ;
+release, date, host, LLVM, binding marker, diagnostics and workload provenance stay
+exact. Both old and new compiler captures were regenerated with the final adapter,
+rather than rewriting the earlier baselines or overriding compiler version stamps.
+
+| Pair | Decoder before | Decoder after | After/control | Change |
+| --- | ---: | ---: | ---: | ---: |
+| a | 157.018 ms | 23.783 ms | 1.4400x | -84.85% |
+| b | 149.701 ms | 23.520 ms | 1.4381x | -84.29% |
+
+The process controls remained 16.430 to 16.516 ms in pair a and 16.420 to
+16.355 ms in pair b. This is a reproducible reduction of the scoped decoder
+retention overhead, but the optimized mode still costs about 44% more than its
+process-only control. It is not a general build speedup or a default-promotion
+result. The comprehensive synthetic and hosted performance gates were not run.
+
+Exact original JSON is stored and authenticated readback verified for
+`bench/stable-resident-immutable-suite-20261117-0645-{before-a,after-a,after-b,before-b}`.
+Raw compiler frames, consumer oracles and original timing values remain intact.
+External typed admission and production defaults remain unchanged.
 
 ## Native Cargo routing boundary
 
