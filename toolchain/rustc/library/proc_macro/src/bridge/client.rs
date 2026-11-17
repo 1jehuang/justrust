@@ -10,6 +10,12 @@ use crate::bridge::{
     TokenTree, closure, handle,
 };
 
+// This trailer is advertised only by the external-byte dispatcher. In particular,
+// a stock dispatcher must never receive our reserved request tag.
+const DROP_BATCH_CAPABILITY: &[u8] = b"\0justrust.proc-macro.drop-batch.v1\x9d\x73\xa1\x46";
+const DROP_BATCH_TAG: u8 = 255;
+const DROP_BATCH_LIMIT: usize = 256;
+
 pub(crate) struct TokenStream {
     handle: handle::Handle,
 }
@@ -20,7 +26,19 @@ impl !Sync for TokenStream {}
 // Forward `Drop::drop` to the inherent `drop` method.
 impl Drop for TokenStream {
     fn drop(&mut self) {
-        Methods::ts_drop(TokenStream { handle: self.handle });
+        let queued = Bridge::with(|bridge| {
+            if !bridge.drop_batching {
+                return false;
+            }
+            bridge.pending_drops.push(self.handle);
+            if bridge.pending_drops.len() == DROP_BATCH_LIMIT {
+                bridge.flush_drops();
+            }
+            true
+        });
+        if !queued {
+            Methods::ts_drop(TokenStream { handle: self.handle });
+        }
     }
 }
 
@@ -120,12 +138,15 @@ macro_rules! define_client_side {
                     let mut buf = bridge.cached_buffer.take();
 
                     buf.clear();
+                    bridge.encode_pending_drops(&mut buf);
                     ApiTags::$method.encode(&mut buf, &mut ());
                     $($arg.encode(&mut buf, &mut ());)*
 
                     buf = bridge.dispatch.call(buf);
 
-                    let r = Result::<_, PanicMessage>::decode(&mut &buf[..], &mut ());
+                    let mut reader = &buf[..];
+                    let r = Result::<_, PanicMessage>::decode(&mut reader, &mut ());
+                    bridge.drop_batching = reader == DROP_BATCH_CAPABILITY;
 
                     bridge.cached_buffer = buf;
 
@@ -141,6 +162,9 @@ struct Bridge<'a> {
     /// Reusable buffer (only `clear`-ed, never shrunk), primarily
     /// used for making requests.
     cached_buffer: Buffer,
+
+    drop_batching: bool,
+    pending_drops: Vec<handle::Handle>,
 
     /// Server-side function that the client uses to make requests.
     dispatch: closure::Closure<'a>,
@@ -195,6 +219,35 @@ mod state {
 }
 
 impl Bridge<'_> {
+    // Remove handles before entering the transport: a failed request is never replayed.
+    // Disable negotiation until an exact capability is received again.
+    fn encode_pending_drops(&mut self, buf: &mut Buffer) {
+        if self.pending_drops.is_empty() {
+            return;
+        }
+        DROP_BATCH_TAG.encode(buf, &mut ());
+        (self.pending_drops.len() as u32).encode(buf, &mut ());
+        for handle in self.pending_drops.drain(..) {
+            handle.encode(buf, &mut ());
+        }
+        self.drop_batching = false;
+    }
+
+    fn flush_drops(&mut self) {
+        if self.pending_drops.is_empty() {
+            return;
+        }
+        let mut buf = self.cached_buffer.take();
+        buf.clear();
+        self.encode_pending_drops(&mut buf);
+        buf = self.dispatch.call(buf);
+        let mut reader = &buf[..];
+        let result = Result::<(), PanicMessage>::decode(&mut reader, &mut ());
+        self.drop_batching = reader == DROP_BATCH_CAPABILITY;
+        self.cached_buffer = buf;
+        result.unwrap_or_else(|e| panic::resume_unwind(e.into()));
+    }
+
     fn with<R>(f: impl FnOnce(&mut Bridge<'_>) -> R) -> R {
         state::with(|state| {
             let bridge = state.expect("procedural macro API is used outside of a procedural macro");
@@ -258,9 +311,26 @@ fn run_client<A: for<'a, 's> Decode<'a, 's, ()>>(
         let (globals, input) = <(ExpnGlobals<Span>, A)>::decode(reader, &mut ());
 
         // Put the buffer we used for input back in the `Bridge` for requests.
-        let state = RefCell::new(Bridge { cached_buffer: buf.take(), dispatch, globals });
+        let state = RefCell::new(Bridge {
+            cached_buffer: buf.take(),
+            drop_batching: false,
+            pending_drops: Vec::new(),
+            dispatch,
+            globals,
+        });
 
-        let output = state::set(&state, || f(input));
+        let output = state::set(&state, || {
+            // Keep cleanup inside the active bridge, including while unwinding. This
+            // guard is created before calling user code, so its locals drop first.
+            struct FlushDrops;
+            impl Drop for FlushDrops {
+                fn drop(&mut self) {
+                    Bridge::with(|bridge| bridge.flush_drops());
+                }
+            }
+            let _flush = FlushDrops;
+            f(input)
+        });
 
         // Take the `cached_buffer` back out, for the output value.
         buf = RefCell::into_inner(state).cached_buffer;

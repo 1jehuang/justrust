@@ -12,6 +12,10 @@ use crate::bridge::{
     PanicMessage, TokenTree, client, handle,
 };
 
+const DROP_BATCH_CAPABILITY: &[u8] = b"\0justrust.proc-macro.drop-batch.v1\x9d\x73\xa1\x46";
+const DROP_BATCH_TAG: u8 = 255;
+const DROP_BATCH_LIMIT: usize = 256;
+
 pub(super) struct HandleStore<S: Server> {
     token_stream: handle::OwnedStore<MarkedTokenStream<S>>,
     span: handle::InternedStore<MarkedSpan<S>>,
@@ -135,7 +139,39 @@ impl<S: Server> Dispatcher<S> {
     /// Dispatch one owned wire request without sharing allocator-owned buffers
     /// with another process. Handles remain owned by this expansion's server.
     pub fn dispatch_bytes(&mut self, request: Vec<u8>) -> Vec<u8> {
-        self.dispatch(Buffer::from(request)).to_vec()
+        let mut reader = &request[..];
+        let mut response = if reader.first() == Some(&DROP_BATCH_TAG) {
+            reader = &reader[1..];
+            let mut drop_handles = || {
+                let count = u32::decode(&mut reader, &mut ()) as usize;
+                assert!(count <= DROP_BATCH_LIMIT, "oversized token stream drop batch");
+                for _ in 0..count {
+                    let stream =
+                        MarkedTokenStream::<S>::decode(&mut reader, &mut self.handle_store);
+                    self.server.ts_drop(stream.unmark());
+                }
+            };
+            // As in ordinary dispatch, avoid introducing a catch boundary during unwind.
+            let dropped = if thread::panicking() {
+                drop_handles();
+                Ok(())
+            } else {
+                panic::catch_unwind(panic::AssertUnwindSafe(drop_handles))
+                    .map_err(PanicMessage::from)
+            };
+            match dropped {
+                Ok(()) if !reader.is_empty() => self.dispatch(Buffer::from(reader.to_vec())),
+                result => {
+                    let mut buf = Buffer::new();
+                    result.encode(&mut buf, &mut ());
+                    buf
+                }
+            }
+        } else {
+            self.dispatch(Buffer::from(request))
+        };
+        response.extend_from_slice(DROP_BATCH_CAPABILITY);
+        response.to_vec()
     }
 }
 
@@ -242,6 +278,161 @@ mod external_tests {
         };
     }
     with_api!(test_server, Self::TokenStream, Self::Span, Self::Symbol);
+
+    #[test]
+    fn legacy_and_unknown_trailers_never_receive_envelopes() {
+        let mut extended_capability = DROP_BATCH_CAPABILITY.to_vec();
+        extended_capability.push(0);
+        for trailer in [&b""[..], &b"unknown capability"[..], &extended_capability[..]] {
+            let client = client::Client::expand1(|input: crate::TokenStream| {
+                let streams: Vec<_> = (0..300).map(|_| input.clone()).collect();
+                drop(streams);
+                assert!(!input.is_empty());
+                input
+            });
+            let mut drops = 0;
+            let result = run1_external(TestServer, vec![9], |dispatcher, input| {
+                Ok(client.run_external_bytes(
+                    input,
+                    |request| {
+                        assert_ne!(request.first(), Some(&DROP_BATCH_TAG));
+                        let mut reader = &request[..];
+                        if matches!(ApiTags::decode(&mut reader, &mut ()), ApiTags::ts_drop) {
+                            drops += 1;
+                        }
+                        let mut response = dispatcher.dispatch(Buffer::from(request));
+                        response.extend_from_slice(trailer);
+                        response.to_vec()
+                    },
+                    false,
+                ))
+            });
+            assert_eq!(result.unwrap_or_else(|_| panic!("legacy expansion failed")), vec![9]);
+            assert_eq!(drops, 300);
+        }
+    }
+
+    #[test]
+    fn negotiated_batches_are_bounded_ordered_and_flush_at_exit() {
+        let client = client::Client::expand1(|input: crate::TokenStream| {
+            let streams: Vec<_> = (0..600).map(|_| input.clone()).collect();
+            drop(streams);
+            assert!(!input.is_empty());
+            // This final drop has no following ordinary request.
+            drop(input.clone());
+            input
+        });
+        let mut batches = Vec::new();
+        let mut handles = Vec::new();
+        // Reuse the same Client across expansions: negotiation and queues must reset.
+        for _ in 0..2 {
+            let mut first = true;
+            let result = run1_external(TestServer, vec![17], |dispatcher, input| {
+                Ok(client.run_external_bytes(
+                    input,
+                    |request| {
+                        if first {
+                            assert_ne!(request.first(), Some(&DROP_BATCH_TAG));
+                            first = false;
+                        }
+                        if request.first() == Some(&DROP_BATCH_TAG) {
+                            let mut reader = &request[1..];
+                            let count = u32::decode(&mut reader, &mut ()) as usize;
+                            assert!(count <= DROP_BATCH_LIMIT);
+                            for _ in 0..count {
+                                handles.push(handle::Handle::decode(&mut reader, &mut ()));
+                            }
+                            batches.push((count, reader.is_empty()));
+                        }
+                        dispatcher.dispatch_bytes(request)
+                    },
+                    false,
+                ))
+            });
+            assert_eq!(result.unwrap_or_else(|_| panic!("batched expansion failed")), vec![17]);
+        }
+        assert_eq!(
+            batches,
+            vec![
+                (256, true),
+                (256, true),
+                (88, false),
+                (1, true),
+                (256, true),
+                (256, true),
+                (88, false),
+                (1, true)
+            ]
+        );
+        assert_eq!(handles.len(), 1202);
+        assert!(handles.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn pending_drops_flush_during_unwind() {
+        let client = client::Client::expand1(|input: crate::TokenStream| {
+            drop(input.clone());
+            panic!("intentional macro failure")
+        });
+        let mut dropped = 0;
+        let result = run1_external(TestServer, vec![3], |dispatcher, input| {
+            Ok(client.run_external_bytes(
+                input,
+                |request| {
+                    if request.first() == Some(&DROP_BATCH_TAG) {
+                        let mut reader = &request[1..];
+                        dropped += u32::decode(&mut reader, &mut ());
+                    }
+                    dispatcher.dispatch_bytes(request)
+                },
+                false,
+            ))
+        });
+        assert!(result.is_err());
+        assert_eq!(dropped, 2);
+    }
+
+    #[test]
+    fn committed_drop_batch_is_not_replayed_after_transport_failure() {
+        let client = client::Client::expand1(|input: crate::TokenStream| {
+            drop(input.clone());
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| input.is_empty()));
+            assert!(result.is_err());
+            // The callback remains usable, but must renegotiate through a legacy request.
+            assert!(!input.is_empty());
+            input
+        });
+        let mut batches = 0;
+        let mut needs_legacy = false;
+        let result = run1_external(TestServer, vec![3], |dispatcher, input| {
+            Ok(client.run_external_bytes(
+                input,
+                |request| {
+                    if needs_legacy {
+                        assert_ne!(request.first(), Some(&DROP_BATCH_TAG));
+                        needs_legacy = false;
+                    }
+                    let batched = request.first() == Some(&DROP_BATCH_TAG);
+                    let response = dispatcher.dispatch_bytes(request);
+                    if batched {
+                        batches += 1;
+                        needs_legacy = true;
+                        let mut failure = Buffer::new();
+                        Result::<(), PanicMessage>::Err(PanicMessage::StaticStr(
+                            "transport disconnected after commit",
+                        ))
+                        .encode(&mut failure, &mut ());
+                        return failure.to_vec();
+                    }
+                    response
+                },
+                false,
+            ))
+        });
+        assert_eq!(result.unwrap_or_else(|_| panic!("recovery failed")), vec![3]);
+        assert_eq!(batches, 1);
+        assert!(!needs_legacy);
+    }
 
     #[test]
     fn external_bytes_preserve_handles_and_callbacks() {
