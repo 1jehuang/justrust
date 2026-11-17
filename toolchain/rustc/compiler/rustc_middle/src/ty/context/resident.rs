@@ -277,10 +277,19 @@ mod tests {
                 assert_eq!(state.stats().typeck_hits, 2);
                 assert_eq!(state.stats().retained_entries, 1);
                 assert_eq!(state.stats().retained_estimated_bytes, 128);
+                assert_eq!(state.stats().identity_begin_rejections, 1);
+                assert_eq!(state.stats().identity_complete_rejections, 1);
+                assert_eq!(state.stats().published_revisions, 1);
+                assert_eq!(state.stats().aborted_revisions, 5);
                 domain.enable_live_queries(false);
                 assert!(domain.live_query_state().is_none());
                 assert!(domain.context_resources().resident_live_queries.is_none());
                 assert!(state.get_typeck(dep, fingerprint).is_none());
+                let stats = state.stats();
+                assert!(!state.begin(8, None, budget));
+                assert!(!state.complete(None, budget));
+                assert!(!state.finish(false));
+                assert_eq!(state.stats(), stats);
             })
         });
     }

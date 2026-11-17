@@ -374,6 +374,10 @@ fn serve_owned(mut response: File) -> Result<(), String> {
                     let mut reply = owned_completion(Some(status), rss, revisions, contexts);
                     let live = batch.live_stats();
                     reply["live"] = json!({
+                        "identity_begin_rejections": live.identity_begin_rejections,
+                        "identity_complete_rejections": live.identity_complete_rejections,
+                        "published_revisions": live.published_revisions,
+                        "aborted_revisions": live.aborted_revisions,
                         "typeck_hits": live.typeck_hits,
                         "typeck_misses": live.typeck_misses,
                         "mir_hits": live.mir_hits,

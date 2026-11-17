@@ -18,6 +18,11 @@ pub const LIVE_QUERY_NAMESPACE: &[u8] = b"justrust-local-same-source-v1";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LiveQueryStats {
+    /// Revision-level gates, distinct from per-query cache misses.
+    pub identity_begin_rejections: u64,
+    pub identity_complete_rejections: u64,
+    pub published_revisions: u64,
+    pub aborted_revisions: u64,
     pub typeck_hits: u64,
     pub typeck_misses: u64,
     pub mir_hits: u64,
@@ -94,8 +99,12 @@ impl<'tcx> LiveQueryState<'tcx> {
         if !state.enabled {
             return false;
         }
-        let Some(identity) = identity else { return false };
+        let Some(identity) = identity else {
+            state.stats.identity_begin_rejections += 1;
+            return false;
+        };
         if state.values.begin_revision(generation, identity, budget).is_err() {
+            state.stats.identity_begin_rejections += 1;
             return false;
         }
         state.identity_budget = Some(budget);
@@ -112,6 +121,9 @@ impl<'tcx> LiveQueryState<'tcx> {
             });
         state.completed = valid;
         if !valid {
+            if state.enabled {
+                state.stats.identity_complete_rejections += 1;
+            }
             state.values.abort_revision();
             state.identity_budget = None;
         }
@@ -128,6 +140,13 @@ impl<'tcx> LiveQueryState<'tcx> {
             && state.values.publish_success().is_ok();
         if !published {
             state.values.abort_revision();
+        }
+        if state.enabled {
+            if published {
+                state.stats.published_revisions += 1;
+            } else {
+                state.stats.aborted_revisions += 1;
+            }
         }
         state.completed = false;
         state.identity_budget = None;
