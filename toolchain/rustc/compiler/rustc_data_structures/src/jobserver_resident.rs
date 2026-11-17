@@ -144,6 +144,18 @@ impl RequestLease {
         ADMISSION.begin(client)
     }
 
+    /// Represents one explicitly delegated scheduler slot with no spare capacity.
+    ///
+    /// The dispatcher must keep its external Cargo job alive until this lease is
+    /// finished, forbid frontend/backend/linker parallelism, and kill the whole
+    /// worker process group if that job disconnects. This is not an independent
+    /// grant of CPU capacity and must never be used to replace an inherited
+    /// parallel jobserver. No raw client escapes this constructor.
+    pub fn begin_serial() -> Result<Self, BeginError> {
+        let client = Client::new(1).map_err(BeginError::Acquire)?;
+        ADMISSION.begin(client)
+    }
+
     pub fn client(&self) -> RequestClient {
         RequestClient { inner: Arc::clone(self.inner.as_ref().unwrap()) }
     }

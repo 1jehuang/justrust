@@ -20,6 +20,37 @@ fn isolated(name: &str) -> bool {
 }
 
 #[test]
+fn delegated_serial_slot_has_no_parallel_capacity_and_can_be_reused() {
+    if isolated("delegated_serial_slot_has_no_parallel_capacity_and_can_be_reused") {
+        return;
+    }
+    initialize(2, |error| panic!("unexpected ordinary initialization: {error}"));
+    for _ in 0..2 {
+        let request = resident::RequestLease::begin_serial().unwrap();
+        request
+            .with_current(|| {
+                assert!(compiler_client().is_resident());
+                let (send, receive) = mpsc::channel();
+                let helper = compiler_client()
+                    .into_helper_thread(move |token| {
+                        let _ = send.send(token);
+                    })
+                    .unwrap();
+                helper.request_token();
+                assert!(matches!(
+                    receive.recv_timeout(Duration::from_millis(30)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ));
+                drop(helper);
+            })
+            .unwrap();
+        request.finish().unwrap();
+        assert!(!compiler_client().is_resident());
+        assert_eq!(client().available().unwrap(), 1);
+    }
+}
+
+#[test]
 fn ordinary_codegen_helper_returns_actual_tokens() {
     let supplied = Client::new(1).unwrap();
     let (send, receive) = mpsc::channel();
