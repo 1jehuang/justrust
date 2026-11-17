@@ -862,13 +862,20 @@ fn serve_requests(
                 "archive_hits":archive.hits,"archive_misses":archive.misses,"archive_bytes":archive.current_bytes,
                 "value_loads":archive.value_loads,"typeck_loads":archive.typeck_loads,"mir_loads":archive.mir_loads}});
         if let Some(stats) = macro_stats {
+            let callback_wire_tags: Vec<_> = stats
+                .callback_wire_tags
+                .iter()
+                .enumerate()
+                .filter(|(_, count)| **count != 0)
+                .map(|(wire_tag, count)| json!({"wire_tag":wire_tag,"count":count}))
+                .collect();
             reply["proc_macro_phases"] = json!({
                 "helper_spawns":stats.helper_spawn_count,"spawn_nanos":stats.helper_spawn_ns,
                 "loads":stats.load_count,"load_nanos":stats.load_ns,
                 "expansions":stats.expand_count,"expansion_nanos":stats.expand_ns,
                 "callbacks":stats.callback_count,"callback_input_bytes":stats.callback_input_bytes,
                 "callback_output_bytes":stats.callback_output_bytes,
-                "callback_nanos":stats.callback_ns});
+                "callback_nanos":stats.callback_ns,"callback_wire_tags":callback_wire_tags});
         }
         if let Some(stats) = decoder {
             reply["decoder"] = json!({"enabled":decoder_enabled,"hits":stats.hits,

@@ -23,7 +23,7 @@ static OWNER: Mutex<Option<Owner>> = Mutex::new(None);
 /// Native request-local operation totals. Expansion time includes callbacks and
 /// lazy helper startup; load time includes lazy helper startup. Counts include
 /// failed attempts. These measurements never participate in cache identity.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RequestMacroStats {
     pub helper_spawn_count: u64,
     pub helper_spawn_ns: u64,
@@ -35,6 +35,27 @@ pub struct RequestMacroStats {
     pub callback_input_bytes: u64,
     pub callback_output_bytes: u64,
     pub callback_ns: u64,
+    /// Counts only the first wire byte, not payloads or inferred method names.
+    /// Empty callback payloads are counted in callback_count but have no tag.
+    pub callback_wire_tags: [u64; 256],
+}
+
+impl Default for RequestMacroStats {
+    fn default() -> Self {
+        Self {
+            helper_spawn_count: 0,
+            helper_spawn_ns: 0,
+            load_count: 0,
+            load_ns: 0,
+            expand_count: 0,
+            expand_ns: 0,
+            callback_count: 0,
+            callback_input_bytes: 0,
+            callback_output_bytes: 0,
+            callback_ns: 0,
+            callback_wire_tags: [0; 256],
+        }
+    }
 }
 
 fn add(counter: &mut u64, value: u128) {
@@ -49,6 +70,9 @@ impl RequestMacroStats {
     ) -> Vec<u8> {
         add(&mut self.callback_count, 1);
         add(&mut self.callback_input_bytes, input.len() as u128);
+        if let Some(&wire_tag) = input.first() {
+            add(&mut self.callback_wire_tags[usize::from(wire_tag)], 1);
+        }
         let started = Instant::now();
         let output = callback(input);
         add(&mut self.callback_ns, started.elapsed().as_nanos());
@@ -213,16 +237,42 @@ mod tests {
         assert_eq!(stats.callback_count, 1);
         assert_eq!(stats.callback_input_bytes, 3);
         assert_eq!(stats.callback_output_bytes, 2);
+        assert_eq!(stats.callback_wire_tags[1], 1);
         assert_eq!(stats.expand_count, 0);
         stats.callback_count = u64::MAX;
         stats.callback_input_bytes = u64::MAX;
         stats.callback_output_bytes = u64::MAX;
         stats.callback_ns = u64::MAX;
+        stats.callback_wire_tags[1] = u64::MAX;
         stats.callback(vec![1], &mut |input| input);
         assert_eq!(stats.callback_count, u64::MAX);
         assert_eq!(stats.callback_input_bytes, u64::MAX);
         assert_eq!(stats.callback_output_bytes, u64::MAX);
         assert_eq!(stats.callback_ns, u64::MAX);
+        assert_eq!(stats.callback_wire_tags[1], u64::MAX);
+    }
+
+    #[test]
+    fn wire_tags_are_bounded_and_empty_callbacks_are_unchanged() {
+        let mut stats = RequestMacroStats::default();
+        for tag in 0..=u8::MAX {
+            let payload = vec![tag, 17, 255];
+            assert_eq!(stats.callback(payload.clone(), &mut |input| input), payload);
+        }
+        assert_eq!(stats.callback_wire_tags, [1; 256]);
+        assert_eq!(
+            stats.callback(vec![], &mut |input| {
+                assert!(input.is_empty());
+                vec![42]
+            }),
+            [42]
+        );
+        assert_eq!(stats.callback_count, 257);
+        assert_eq!(stats.callback_input_bytes, 256 * 3);
+        assert_eq!(stats.callback_wire_tags, [1; 256]);
+        stats = RequestMacroStats::default();
+        assert_eq!(stats.callback_count, 0);
+        assert_eq!(stats.callback_wire_tags, [0; 256]);
     }
 
     #[test]
@@ -263,6 +313,13 @@ mod tests {
             assert_eq!(expanded.load_ns, loaded.load_ns);
             assert!(expanded.helper_spawn_ns >= loaded.helper_spawn_ns);
             assert!(expanded.expand_ns >= expanded.helper_spawn_ns - loaded.helper_spawn_ns);
+            {
+                let mut current = selected().unwrap();
+                let stats = &mut current.as_mut().unwrap().stats;
+                stats.callback(vec![255, 1], &mut |input| input);
+                assert_eq!(stats.callback_wire_tags[255], 1);
+            }
+            assert_eq!(owner.stats().unwrap().callback_wire_tags[255], 1);
             let request = owner.request;
             drop(owner);
             assert!(RequestMacros { request }.stats().is_err());
