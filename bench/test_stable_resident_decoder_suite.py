@@ -289,7 +289,13 @@ class DecoderSuiteTests(unittest.TestCase):
             before = self.synthetic(Path(directory))
             identity = before['identity_before']
             identity['drivers'][0]['path'] = '/attested/lib/librustc_driver.so'
-            identity['version'] = dict(status=0, stdout_b64=suite.shared.encoded(b'fixed version\n'), stderr_b64='')
+            old_hash = b'4839bc2474a0e5c35883e8008ebd393cf95d125b'
+            new_hash = b'b2ceb57a36a32c5f23aeaa3077b9156497039e7a'
+            version = (b'rustc 1.93.0-nightly (' + old_hash[:9] + b' 2026-11-16)\n'
+                       b'binary: rustc\ncommit-hash: ' + old_hash + b'\n'
+                       b'commit-date: 2026-11-16\nhost: x86_64-unknown-linux-gnu\n'
+                       b'release: 1.93.0-nightly\nLLVM version: 21.1.0\n')
+            identity['version'] = dict(status=0, stdout_b64=suite.shared.encoded(version), stderr_b64='')
             identity['sysroot'] = dict(status=0, stdout_b64=suite.shared.encoded(b'/attested\n'), stderr_b64='')
             before['identity_after'] = copy.deepcopy(identity)
             after = copy.deepcopy(before)
@@ -306,6 +312,8 @@ class DecoderSuiteTests(unittest.TestCase):
             for key in ('identity_before', 'identity_after'):
                 after[key]['drivers'][0].update(path='/candidate/lib/librustc_driver.so', sha256='3' * 64)
                 after[key]['sysroot']['stdout_b64'] = suite.shared.encoded(b'/candidate\n')
+                after[key]['version']['stdout_b64'] = suite.shared.encoded(
+                    version.replace(old_hash, new_hash).replace(old_hash[:9], new_hash[:9]))
             originals = copy.deepcopy((before, after))
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
@@ -313,6 +321,35 @@ class DecoderSuiteTests(unittest.TestCase):
             self.assertIn('2' * 64, output.getvalue())
             self.assertIn('3' * 64, output.getvalue())
             self.assertEqual((before, after), originals)
+            bad_versions = [
+                version.replace(old_hash[:9], new_hash[:9], 1),
+                version.replace(old_hash, new_hash),
+                version.replace(old_hash, b'unknown'),
+                version.replace(old_hash, old_hash.upper()),
+                version.replace(old_hash, old_hash + b'0'),
+                version.replace(old_hash[:9], b'4839bc24', 1),
+                version + b'commit-hash: ' + old_hash + b'\n',
+                version.replace(b'commit-hash:', b'commit-hash: malformed'),
+            ]
+            for old, new in ((b'rustc 1.93.0', b'rustc 1.94.0'),
+                             (b'release: 1.93.0', b'release: 1.94.0'),
+                             (b' 2026-11-16)', b' 2026-11-17)'),
+                             (b'commit-date: 2026-11-16', b'commit-date: 2026-11-17'),
+                             (b'x86_64', b'aarch64'), (b'21.1.0', b'22.1.0'),
+                             (b'binary: rustc', b'binary: jr-rustc')):
+                bad_versions.append(version.replace(old, new))
+            for data in bad_versions:
+                changed = copy.deepcopy(after)
+                for key in ('identity_before', 'identity_after'):
+                    changed[key]['version']['stdout_b64'] = suite.shared.encoded(data)
+                with self.subTest(version=data), self.assertRaises(ValueError):
+                    suite.compare(before, changed, allow_compiler_change=True)
+            for field, value in (('status', 1), ('stderr_b64', suite.shared.encoded(b'warning\n'))):
+                changed = copy.deepcopy(after)
+                for key in ('identity_before', 'identity_after'):
+                    changed[key]['version'][field] = value
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    suite.compare(before, changed, allow_compiler_change=True)
             with self.assertRaisesRegex(ValueError, 'different identity_before'):
                 suite.compare(before, after)
             for value in (1, None, 'true'):

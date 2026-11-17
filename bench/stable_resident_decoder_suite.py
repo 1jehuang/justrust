@@ -417,11 +417,29 @@ def validate_sessions(report):
                     require(record.get(key) == value, 'original completion mismatch: ' + key)
 
 
+def comparison_version(version):
+    """Mask only consistent rustc -vV source hashes, preserving all other bytes."""
+    normalized = dict(version)
+    data = base64.b64decode(normalized['stdout_b64'], validate=True)
+    summary = re.match(rb'\Arustc [^\r\n ()]+ \(([0-9a-f]{9}) [0-9]{4}-[0-9]{2}-[0-9]{2}\)\n', data)
+    hashes = list(re.finditer(rb'^commit-hash: ([0-9a-f]{40})$', data, re.MULTILINE))
+    require(summary is not None and len(hashes) == 1,
+            'invalid rustc version source stamp')
+    require(summary[1] == hashes[0][1][:9], 'inconsistent rustc version source stamp')
+    require(len(re.findall(rb'^commit-hash:', data, re.MULTILINE)) == 1,
+            'duplicate rustc version source stamp')
+    # Replace spans in reverse order so no surrounding version bytes change.
+    for start, end in sorted((summary.span(1), hashes[0].span(1)), reverse=True):
+        data = data[:start] + b'<source-commit>' + data[end:]
+    normalized['stdout_b64'] = shared.encoded(data)
+    return normalized
+
+
 def comparison_identity(identity):
     """Remove only attested candidate paths and the single driver digest.
 
-    Version diagnostics and every other identity field remain exact. This is
-    comparison-only normalization, never a rewrite of original receipts.
+    Only consistent version source hashes are additionally masked. All other
+    diagnostics remain exact. Original receipts are never rewritten.
     """
     normalized = dict(identity)
     require(Path(normalized.pop('path')).is_absolute(), 'nonabsolute candidate path')
@@ -433,6 +451,8 @@ def comparison_identity(identity):
         entry.pop('sha256')
         drivers.append(entry)
     normalized['drivers'] = drivers
+    if 'version' in normalized:
+        normalized['version'] = comparison_version(normalized['version'])
     if 'sysroot' in normalized:
         sysroot = dict(normalized['sysroot'])
         data = base64.b64decode(sysroot.pop('stdout_b64'), validate=True)
@@ -456,7 +476,7 @@ def compare(a, b, floor=10.0, allow_compiler_change=False):
         require(a['expected_identity']['compiler_sha256'] == b['expected_identity']['compiler_sha256'],
                 'compiler-change opt-in requires same launcher SHA')
         require(comparison_identity(a['identity_before']) == comparison_identity(b['identity_before']),
-                'comparison refuses changes beyond candidate paths and driver SHA')
+                'comparison refuses changes beyond candidate paths, driver SHA and source stamps')
     else:
         for key in ('identity_before', 'expected_identity'):
             require(a[key] == b[key], 'comparison refuses different ' + key)
