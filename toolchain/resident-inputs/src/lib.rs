@@ -328,7 +328,45 @@ fn unchanged(a: &Metadata, b: &Metadata) -> bool {
     }
 }
 
+// Cargo may publish dependency artifacts while a pipelined root starts. A
+// failed observation is not an identity: discard it and recapture everything.
+// Never retry a completed manifest mismatch or an unsupported input. Three
+// attempts bound IO and preserve ordinary fail-open compilation under churn.
+fn retry_unstable_snapshot<T>(mut attempt: impl FnMut() -> Result<T, String>) -> Result<T, String> {
+    for index in 0..3 {
+        match attempt() {
+            Err(error)
+                if index < 2
+                    && matches!(
+                        error.as_str(),
+                        "dependency membership changed during capture"
+                            | "input raced open"
+                            | "input changed during read"
+                            | "input changed during capture"
+                    ) => {}
+            result => return result,
+        }
+    }
+    unreachable!("last snapshot attempt always returns")
+}
+
 fn snapshot(
+    externs: Vec<PathBuf>,
+    directories: Vec<PathBuf>,
+    native_directories: Vec<PathBuf>,
+    macro_loader_paths: Option<Vec<PathBuf>>,
+) -> Result<Manifest, String> {
+    retry_unstable_snapshot(|| {
+        snapshot_once(
+            externs.clone(),
+            directories.clone(),
+            native_directories.clone(),
+            macro_loader_paths.clone(),
+        )
+    })
+}
+
+fn snapshot_once(
     mut externs: Vec<PathBuf>,
     mut directories: Vec<PathBuf>,
     mut native_directories: Vec<PathBuf>,
@@ -491,4 +529,62 @@ fn snapshot(
     };
     manifest.encoded()?;
     Ok(manifest)
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::retry_unstable_snapshot;
+
+    #[test]
+    fn unstable_observations_are_discarded_before_success() {
+        for reason in [
+            "dependency membership changed during capture",
+            "input raced open",
+            "input changed during read",
+            "input changed during capture",
+        ] {
+            let mut calls = 0;
+            let result = retry_unstable_snapshot(|| {
+                calls += 1;
+                if calls < 3 {
+                    Err(reason.to_owned())
+                } else {
+                    Ok(42)
+                }
+            });
+            assert_eq!(result, Ok(42));
+            assert_eq!(calls, 3);
+        }
+    }
+
+    #[test]
+    fn persistent_churn_is_bounded_and_returns_the_last_failure() {
+        let mut calls = 0;
+        let result: Result<(), _> = retry_unstable_snapshot(|| {
+            calls += 1;
+            Err("dependency membership changed during capture".to_owned())
+        });
+        assert_eq!(calls, 3);
+        assert_eq!(
+            result,
+            Err("dependency membership changed during capture".to_owned())
+        );
+    }
+
+    #[test]
+    fn validation_mismatches_and_unsupported_inputs_are_not_retried() {
+        for reason in [
+            "dependency inputs changed",
+            "nonregular input",
+            "byte budget exceeded",
+        ] {
+            let mut calls = 0;
+            let result: Result<(), _> = retry_unstable_snapshot(|| {
+                calls += 1;
+                Err(reason.to_owned())
+            });
+            assert_eq!(calls, 1);
+            assert_eq!(result, Err(reason.to_owned()));
+        }
+    }
 }

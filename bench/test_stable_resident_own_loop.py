@@ -218,6 +218,104 @@ class OwnLoopTests(unittest.TestCase):
                     self.assertEqual(arm['observations'][0]['trace'], [])
             suite.validate(report)
 
+    def retirement_rows(self):
+        rows = []
+        for index, name in enumerate(suite.STAGES):
+            initial = index == 0
+            result = dict(pid=152845 if initial else 153293, id=index + 1, status=0,
+                          external_inputs_changed=initial, retire=initial)
+            event = dict(event='complete', crate_name='justrust', key='root',
+                         elapsed_ns=1234, result=result)
+            rows.append(dict(name=name, semantics=dict(fresh=index == 1),
+                             trace=[] if index == 1 else [event],
+                             cargo=dict(resident_worker_rss=[dict(pid=result['pid'])])))
+        return rows
+
+    def test_only_initial_explicit_safety_retirement_permits_new_generation(self):
+        rows = self.retirement_rows()
+        raw = copy.deepcopy(rows)
+        evidence = suite.validate_residency(rows, 'on')
+        self.assertEqual(rows, raw)
+        self.assertEqual(evidence, dict(root_worker_key='root', root_worker_pid=153293,
+                                       initial_safety_retirement=dict(root_worker_key='root',
+                                           root_worker_pid=152845, status=0,
+                                           external_inputs_changed=True, retire=True)))
+        # Key changes are also permitted only between the evicted cold worker
+        # and the single stable measured generation.
+        rows[0]['trace'][0]['key'] = 'cold-root'
+        self.assertEqual(suite.validate_residency(rows, 'on')['root_worker_key'], 'root')
+
+    def test_initial_retirement_requires_both_true_flags_and_successful_rpc(self):
+        for field, value in (('external_inputs_changed', None), ('retire', None),
+                             ('external_inputs_changed', False), ('retire', False),
+                             ('external_inputs_changed', 1), ('retire', 1),
+                             ('status', None), ('status', 1), ('status', False)):
+            with self.subTest(field=field, value=value):
+                rows = self.retirement_rows()
+                result = rows[0]['trace'][0]['result']
+                if value is None:
+                    result.pop(field)
+                else:
+                    result[field] = value
+                with self.assertRaises(AssertionError):
+                    suite.validate_residency(rows, 'on')
+        rows = self.retirement_rows()
+        rows[0]['trace'][0]['result'].update(external_inputs_changed=False, retire=False)
+        with self.assertRaisesRegex(AssertionError, 'worker changed'):
+            suite.validate_residency(rows, 'on')
+
+    def test_retirement_never_allows_fallback_or_extra_root_rpc(self):
+        for index in (0, 2, 3, 4):
+            for extra in ('fallback', 'duplicate', 'result-fallback', 'retirement-trace'):
+                if index == 0 and extra == 'retirement-trace':
+                    continue
+                with self.subTest(index=index, extra=extra):
+                    rows = self.retirement_rows()
+                    if extra == 'fallback':
+                        rows[index]['trace'].append(dict(event='fallback', crate_name='justrust'))
+                    elif extra == 'duplicate':
+                        rows[index]['trace'].append(copy.deepcopy(rows[index]['trace'][0]))
+                    elif extra == 'retirement-trace':
+                        rows[index]['trace'].append(dict(event='retire', crate_name='justrust'))
+                    else:
+                        rows[index]['trace'][0]['result']['fallback'] = True
+                    with self.assertRaises(AssertionError):
+                        suite.validate_residency(rows, 'on')
+
+    def test_measured_generations_require_stable_key_pid_and_no_retirement(self):
+        for index in (2, 3, 4):
+            for field, value in (('pid', 999999), ('key', 'replacement'),
+                                 ('retire', True), ('external_inputs_changed', True),
+                                 ('both', True)):
+                # The first measured worker establishes identity, so change it
+                # and leave subsequent workers unchanged to test that boundary.
+                with self.subTest(index=index, field=field):
+                    rows = self.retirement_rows()
+                    event = rows[index]['trace'][0]
+                    if field == 'key':
+                        event[field] = value
+                    elif field == 'both':
+                        event['result'].update(retire=True, external_inputs_changed=True)
+                    else:
+                        event['result'][field] = value
+                    with self.assertRaises(AssertionError):
+                        suite.validate_residency(rows, 'on')
+
+    def test_initial_safety_retirement_preserves_strict_default_capture(self):
+        def mutate(event, index):
+            if index == 0:
+                event['result'].update(pid=152845, external_inputs_changed=True, retire=True)
+        with tempfile.TemporaryDirectory() as directory:
+            report, calls, _ = self.capture(Path(directory), mutate=mutate)
+            self.assertEqual(len(calls), 40)
+            self.assertEqual(set(suite.validate(report)), {'check', 'build'})
+            self.assertEqual(report['schema'], suite.SCHEMA)
+            for pair in report['repetitions']:
+                for command in ('check', 'build'):
+                    evidence = pair['arms']['on']['residency'][command]
+                    self.assertEqual(evidence['root_worker_pid'], 9876543)
+                    self.assertEqual(evidence['initial_safety_retirement']['root_worker_pid'], 152845)
+
     def test_actual_body_and_optional_comment_modes(self):
         body = suite.stages(ORIGINAL, 'nonce')
         self.assertIn(b'_ => agent && dev_wrapper,', body[2][1])

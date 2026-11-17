@@ -74,7 +74,15 @@ def semantics(record, fresh):
 
 def validate_residency(rows, mode):
     identity = None
-    for row in rows:
+    initial_safety_retirement = None
+    for row_index, row in enumerate(rows):
+        if mode != 'off' and any('fallback' in str(e.get('event', '')).lower()
+                                 or e.get('fallback')
+                                 or e.get('result', {}).get('fallback') for e in row['trace']):
+            raise AssertionError('Resident invocation used fallback')
+        if mode != 'off' and row_index != 0 and any(
+                'retir' in str(e.get('event', '')).lower() for e in row['trace']):
+            raise AssertionError('Unexpected worker retirement trace')
         complete = [e for e in row['trace'] if e.get('event') == 'complete']
         if mode == 'off' or row['semantics']['fresh']:
             if complete:
@@ -93,13 +101,26 @@ def validate_residency(rows, mode):
                 or event['elapsed_ns'] < 0):
             raise AssertionError('Invalid root worker response')
         current = (key, pid)
+        changed, retired = result.get('external_inputs_changed'), result.get('retire')
+        safety_retirement = (row_index == 0 and row['name'] == 'initial'
+                             and changed is True and retired is True)
+        if (any(value is not None and value is not False for value in (changed, retired))
+                and not safety_retirement):
+            raise AssertionError('Unexpected root worker input change/retirement')
+        if safety_retirement:
+            initial_safety_retirement = dict(root_worker_key=key, root_worker_pid=pid,
+                                             status=0, external_inputs_changed=True, retire=True)
         if identity is not None and current != identity:
             raise AssertionError('Root worker changed across repeated source edits')
-        identity = current
+        if not safety_retirement:
+            identity = current
         samples = row['cargo']['resident_worker_rss']
         if not any(s.get('pid') == pid for s in samples):
             raise AssertionError('Missing root worker RSS observation')
-    return dict(root_worker_key=identity[0], root_worker_pid=identity[1]) if identity else {}
+    evidence = dict(root_worker_key=identity[0], root_worker_pid=identity[1]) if identity else {}
+    if initial_safety_retirement is not None:
+        evidence['initial_safety_retirement'] = initial_safety_retirement
+    return evidence
 
 
 def selected_commands(commands):
