@@ -108,7 +108,7 @@ pub(crate) struct CrateMetadata {
     incoherent_impls: FxIndexMap<SimplifiedType, LazyArray<DefIndex>>,
     /// Proc macro function pointers for this crate, if it's a proc macro crate.
     raw_proc_macros: Option<&'static [ProcMacroClient]>,
-    /// Actual source translations and hygiene decoder, fresh for this metadata.
+    /// Actual source translations and hygiene decoder, selected before decoding.
     decoder_identity: Arc<ExternalDecoderIdentityState>,
     /// For every definition in this crate, maps its `DefPathHash` to its `DefIndex`.
     def_path_hash_map: DefPathHashMapRef<'static>,
@@ -1028,6 +1028,10 @@ impl CrateRoot {
 }
 
 impl CrateMetadata {
+    pub(crate) fn resident_decoder_identity(&self) -> Arc<ExternalDecoderIdentityState> {
+        Arc::clone(&self.decoder_identity)
+    }
+
     /// Borrow the exact loaded decoder input and its numeric crate translation.
     /// Resident capture copies these bytes rather than reopening artifact paths.
     pub(crate) fn resident_metadata_inputs(&self) -> (&[u8], &CrateNumMap) {
@@ -1995,6 +1999,7 @@ impl CrateMetadata {
         root: CrateRoot,
         unhashed: CrateRootUnhashed,
         raw_proc_macros: Option<&'static [ProcMacroClient]>,
+        decoder_identity: Arc<ExternalDecoderIdentityState>,
         cnum: CrateNum,
         cnum_map: CrateNumMap,
         dep_kind: CrateDepKind,
@@ -2021,7 +2026,7 @@ impl CrateMetadata {
             trait_impls,
             incoherent_impls: Default::default(),
             raw_proc_macros,
-            decoder_identity: Arc::new(ExternalDecoderIdentityState::default()),
+            decoder_identity,
             def_path_hash_map,
             expn_hash_map: Default::default(),
             alloc_decoding_state,

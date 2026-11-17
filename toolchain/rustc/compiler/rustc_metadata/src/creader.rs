@@ -661,6 +661,18 @@ impl CStore {
             private_dep,
         )?;
 
+        // Select the actual source/hygiene owner before CrateMetadata::new can
+        // decode anything. A published identity mismatch requires retiring the
+        // SessionGlobals owner, whose foreign expansion cache cannot be reset
+        // merely by allocating fresh per-metadata decoder storage.
+        let decoder_identity = self.select_external_decoder(
+            tcx,
+            cnum,
+            &metadata,
+            &cnum_map.raw,
+            crate_root.is_proc_macro_crate(),
+        );
+
         let raw_proc_macros = if crate_root.is_proc_macro_crate() {
             let temp_root;
             let (dlsym_source, dlsym_root) = match &host_lib {
@@ -706,6 +718,7 @@ impl CStore {
             crate_root,
             unhashed,
             raw_proc_macros,
+            decoder_identity,
             cnum,
             cnum_map,
             dep_kind,

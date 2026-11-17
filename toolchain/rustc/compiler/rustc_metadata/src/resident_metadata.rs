@@ -6,9 +6,334 @@
 
 use crate::creader::CStore;
 use rustc_data_structures::sync::Lock;
+use rustc_middle::ty::TyCtxt;
+use rustc_span::def_id::CrateNum;
 use rustc_span::hygiene::HygieneDecodeContext;
-use rustc_span::{ExternalSource, Pos, SourceFile};
+use rustc_span::source_map::SourceMap;
+use rustc_span::{ExternalSource, ExternalSourceKind, Pos, SourceFile};
+use std::cell::RefCell;
+use std::path::PathBuf;
 use std::sync::Arc;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExternalDecoderCacheStats {
+    pub hits: usize,
+    pub misses: usize,
+    pub rejected: usize,
+    pub publications: usize,
+    pub retained_entries: usize,
+    pub retired: bool,
+    pub retirement_requests: usize,
+}
+
+#[derive(PartialEq, Eq)]
+struct TranslationInputs {
+    real_source: Option<PathBuf>,
+    real_compiler: Option<PathBuf>,
+    simulated: Option<PathBuf>,
+    translate: bool,
+    remaps: Vec<(PathBuf, PathBuf)>,
+}
+
+impl TranslationInputs {
+    fn matches(&self, tcx: TyCtxt<'_>) -> bool {
+        let opts = &tcx.sess.opts;
+        self.real_source == opts.real_rust_source_base_dir
+            && self.real_compiler == opts.real_rustc_dev_source_base_dir
+            && self.simulated == opts.unstable_opts.simulate_remapped_rust_src_base
+            && self.translate == opts.unstable_opts.translate_remapped_path_to_local_path
+            && self.remaps == opts.remap_path_prefix
+    }
+
+    fn capture(tcx: TyCtxt<'_>, budget: usize) -> Result<Self, ExternalSourceSnapshotError> {
+        fn copy_path(path: &std::path::Path) -> Result<PathBuf, ExternalSourceSnapshotError> {
+            let mut copy = std::ffi::OsString::new();
+            copy.try_reserve_exact(path.as_os_str().len())
+                .map_err(|_| ExternalSourceSnapshotError::Allocation)?;
+            copy.push(path);
+            Ok(copy.into())
+        }
+        let opts = &tcx.sess.opts;
+        let paths = opts
+            .real_rust_source_base_dir
+            .iter()
+            .chain(opts.real_rustc_dev_source_base_dir.iter())
+            .chain(opts.unstable_opts.simulate_remapped_rust_src_base.iter())
+            .chain(opts.remap_path_prefix.iter().flat_map(|(a, b)| [a, b]));
+        let mut bytes = 0usize;
+        for path in paths {
+            bytes = bytes
+                .checked_add(path.as_os_str().len())
+                .ok_or(ExternalSourceSnapshotError::SourceByteBudget)?;
+            if bytes > budget {
+                return Err(ExternalSourceSnapshotError::SourceByteBudget);
+            }
+        }
+        if opts.remap_path_prefix.len() > budget / std::mem::size_of::<(PathBuf, PathBuf)>() {
+            return Err(ExternalSourceSnapshotError::SourceByteBudget);
+        }
+        let mut remaps = Vec::new();
+        remaps
+            .try_reserve_exact(opts.remap_path_prefix.len())
+            .map_err(|_| ExternalSourceSnapshotError::Allocation)?;
+        for (from, to) in &opts.remap_path_prefix {
+            remaps.push((copy_path(from)?, copy_path(to)?));
+        }
+        Ok(Self {
+            real_source: opts.real_rust_source_base_dir.as_deref().map(copy_path).transpose()?,
+            real_compiler: opts
+                .real_rustc_dev_source_base_dir
+                .as_deref()
+                .map(copy_path)
+                .transpose()?,
+            simulated: opts
+                .unstable_opts
+                .simulate_remapped_rust_src_base
+                .as_deref()
+                .map(copy_path)
+                .transpose()?,
+            translate: opts.unstable_opts.translate_remapped_path_to_local_path,
+            remaps,
+        })
+    }
+}
+
+struct PublishedDecoders {
+    snapshot: ExternalSourceSnapshot,
+    source_map: Arc<SourceMap>,
+    translation: TranslationInputs,
+    states: Vec<(u32, Arc<ExternalDecoderIdentityState>)>,
+}
+
+#[derive(Default)]
+struct DecoderCache {
+    published: Option<PublishedDecoders>,
+    stats: ExternalDecoderCacheStats,
+}
+
+impl DecoderCache {
+    fn retire(&mut self) {
+        self.stats.retired = true;
+        self.stats.retirement_requests += 1;
+    }
+
+    fn publish(
+        &mut self,
+        capture: impl FnOnce() -> Result<PublishedDecoders, ExternalSourceSnapshotError>,
+    ) -> Result<(), ExternalSourceSnapshotError> {
+        self.published = None;
+        self.stats.retained_entries = 0;
+        if self.stats.retired {
+            return Err(ExternalSourceSnapshotError::Retired);
+        }
+        let published = match capture() {
+            Ok(published) => published,
+            Err(error) => {
+                self.retire();
+                return Err(error);
+            }
+        };
+        self.stats.retained_entries = published.states.len();
+        self.stats.publications += 1;
+        self.published = Some(published);
+        Ok(())
+    }
+}
+
+thread_local! {
+    static DECODERS: RefCell<Option<DecoderCache>> = const { RefCell::new(None) };
+}
+
+/// The caller must keep one SessionGlobals universe alive and use this same
+/// serial thread throughout the closure. No state survives scope exit or unwind.
+/// Enabled scopes cannot nest. A disabled scope masks any enclosing owner.
+pub fn with_resident_external_decoder_cache<R>(enabled: bool, f: impl FnOnce() -> R) -> R {
+    let previous = DECODERS.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        assert!(!enabled || slot.is_none(), "resident external decoder scopes cannot nest");
+        std::mem::replace(&mut *slot, enabled.then(DecoderCache::default))
+    });
+    struct Reset(Option<DecoderCache>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            DECODERS.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let _reset = Reset(previous);
+    f()
+}
+
+pub fn stats() -> ExternalDecoderCacheStats {
+    DECODERS.with(|slot| slot.borrow().as_ref().map(|c| c.stats).unwrap_or_default())
+}
+
+fn absent_text(source: &SourceFile) -> bool {
+    matches!(
+        &*source.external_src.read(),
+        ExternalSource::Foreign { kind: ExternalSourceKind::AbsentOk, .. }
+    )
+}
+
+fn mapped_targets_loaded(
+    current: u32,
+    mut map: impl Iterator<Item = u32>,
+    is_loaded: impl Fn(u32) -> bool,
+) -> bool {
+    map.all(|target| target == current || is_loaded(target))
+}
+
+impl PublishedDecoders {
+    fn candidate(
+        &self,
+        cnum: u32,
+        bytes: &[u8],
+        map: impl Iterator<Item = u32>,
+        source_map: &Arc<SourceMap>,
+        translation_matches: bool,
+        proc_macro: bool,
+    ) -> Option<Arc<ExternalDecoderIdentityState>> {
+        if proc_macro
+            || !Arc::ptr_eq(&self.source_map, source_map)
+            || !translation_matches
+            || !self.entry_matches(cnum, bytes, map)
+            || self.snapshot.files.iter().any(|file| !absent_text(&file.source))
+        {
+            return None;
+        }
+        self.state(cnum).cloned()
+    }
+
+    fn entry_matches(&self, cnum: u32, bytes: &[u8], map: impl Iterator<Item = u32>) -> bool {
+        self.snapshot.metadata.crates.iter().find(|entry| entry.current_crate == cnum).is_some_and(
+            |entry| entry.metadata == bytes && entry.crate_num_map.iter().copied().eq(map),
+        )
+    }
+
+    fn state(&self, cnum: u32) -> Option<&Arc<ExternalDecoderIdentityState>> {
+        self.states.iter().find(|(n, _)| *n == cnum).map(|(_, state)| state)
+    }
+
+    fn loaded_matches(
+        &self,
+        cnum: u32,
+        bytes: &[u8],
+        map: impl Iterator<Item = u32>,
+        state: &Arc<ExternalDecoderIdentityState>,
+        proc_macro: bool,
+    ) -> bool {
+        !proc_macro
+            && self.entry_matches(cnum, bytes, map)
+            && self.state(cnum).is_some_and(|retained| Arc::ptr_eq(retained, state))
+    }
+}
+
+impl CStore {
+    /// Publish only complete, already-imported source/hygiene storage. Failure
+    /// invalidates the previous universe rather than retaining a stale fallback.
+    pub fn publish_external_decoders(
+        &self,
+        tcx: TyCtxt<'_>,
+        limits: ExternalSourceSnapshotLimits,
+    ) -> Result<(), ExternalSourceSnapshotError> {
+        DECODERS.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let cache = slot.as_mut().ok_or(ExternalSourceSnapshotError::Disabled)?;
+            cache.publish(|| {
+                let snapshot = self.capture_external_sources(limits)?;
+                if snapshot.files.iter().any(|file| !absent_text(&file.source)) {
+                    return Err(ExternalSourceSnapshotError::CachedSourceText);
+                }
+                let translation =
+                    TranslationInputs::capture(tcx, limits.max_declared_source_bytes)?;
+                let mut states = Vec::new();
+                states
+                    .try_reserve_exact(snapshot.metadata.crates.len())
+                    .map_err(|_| ExternalSourceSnapshotError::Allocation)?;
+                for (cnum, data) in self.iter_crate_data() {
+                    states.push((cnum.as_u32(), data.resident_decoder_identity()));
+                }
+                Ok(PublishedDecoders {
+                    snapshot,
+                    source_map: tcx.sess.psess.clone_source_map(),
+                    translation,
+                    states,
+                })
+            })
+        })
+    }
+
+    pub(crate) fn select_external_decoder(
+        &self,
+        tcx: TyCtxt<'_>,
+        cnum: CrateNum,
+        bytes: &[u8],
+        map: &[CrateNum],
+        proc_macro: bool,
+    ) -> Arc<ExternalDecoderIdentityState> {
+        let selected = DECODERS.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let cache = slot.as_mut()?;
+            if cache.stats.retired {
+                return None;
+            }
+            let selected = cache.published.as_ref().and_then(|published| {
+                let candidate = published.candidate(
+                    cnum.as_u32(),
+                    bytes,
+                    map.iter().map(|n| n.as_u32()),
+                    &tcx.sess.psess.clone_source_map(),
+                    published.translation.matches(tcx),
+                    proc_macro,
+                )?;
+                for (loaded, data) in self.iter_crate_data() {
+                    let (bytes, map) = data.resident_metadata_inputs();
+                    if !published.loaded_matches(
+                        loaded.as_u32(),
+                        bytes,
+                        map.iter().map(|n| n.as_u32()),
+                        &data.resident_decoder_identity(),
+                        data.is_proc_macro_crate(),
+                    ) {
+                        return None;
+                    }
+                }
+                // Self is not inserted yet. Every other mapped target must be
+                // actually loaded, not merely present in the retained universe.
+                if !mapped_targets_loaded(cnum.as_u32(), map.iter().map(|n| n.as_u32()), |dep| {
+                    self.iter_crate_data().any(|(loaded, _)| loaded.as_u32() == dep)
+                }) {
+                    return None;
+                }
+                let mut sources = Vec::new();
+                sources.try_reserve_exact(published.snapshot.files.len()).ok()?;
+                for file in &published.snapshot.files {
+                    if file.current_crate == cnum.as_u32() {
+                        sources.push(Arc::clone(&file.source));
+                    }
+                }
+                tcx.sess.source_map().activate_resident_imported_sources(&sources).ok()?;
+                Some(candidate)
+            });
+            if selected.is_some() {
+                cache.stats.hits += 1;
+            } else {
+                cache.stats.misses += 1;
+                if cache.published.is_some() {
+                    cache.stats.rejected += 1;
+                    cache.retire();
+                }
+            }
+            selected
+        });
+        // Global foreign expansion data is keyed by numeric CrateNum/ExpnIndex,
+        // independently of this decoder bundle. A fresh bundle cannot sanitize
+        // that universe after a rejection. Only dropping SessionGlobals can.
+        if stats().retired {
+            tcx.dcx().fatal("resident external decoder identity changed; retire the SessionGlobals owner before retrying");
+        }
+        selected.unwrap_or_else(|| Arc::new(ExternalDecoderIdentityState::default()))
+    }
+}
 
 /// The actual per-metadata decoder import relation. Shared here so capture can
 /// inspect it without exposing the private decoder module or forcing an import.
@@ -19,8 +344,8 @@ pub(crate) struct ImportedSourceFile {
     pub(crate) translated_source_file: Arc<SourceFile>,
 }
 
-/// Native identity-bearing decoder storage, allocated afresh for each crate metadata.
-/// Keeping these together does not authorize reuse across compiler contexts.
+/// Native identity-bearing decoder storage. Fresh by default, or selected from
+/// one explicit scoped owner only after exact metadata/source validation.
 #[derive(Default)]
 pub(crate) struct ExternalDecoderIdentityState {
     pub(crate) source_map_import_info: Lock<Vec<Option<ImportedSourceFile>>>,
@@ -43,6 +368,9 @@ pub struct ExternalSourceSnapshotLimits {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExternalSourceSnapshotError {
+    Disabled,
+    CachedSourceText,
+    Retired,
     Metadata(MetadataSnapshotError),
     IncompleteImports,
     UnsupportedMapping,
@@ -324,6 +652,158 @@ mod tests {
     use rustc_data_structures::sync::FreezeLock;
     use rustc_span::def_id::CrateNum;
     use rustc_span::{BytePos, ExternalSourceKind, FileName, SourceFileHashAlgorithm};
+
+    fn published() -> PublishedDecoders {
+        let import = imported(0);
+        let state = Arc::new(ExternalDecoderIdentityState::default());
+        state.source_map_import_info.lock().push(Some(import.clone()));
+        PublishedDecoders {
+            snapshot: ExternalSourceSnapshot {
+                metadata: snapshot(&[1, 2, 3], &[1]),
+                files: vec![mapping(&import)],
+            },
+            source_map: Arc::new(SourceMap::new(rustc_span::source_map::FilePathMapping::empty())),
+            translation: TranslationInputs {
+                real_source: None,
+                real_compiler: None,
+                simulated: None,
+                translate: true,
+                remaps: Vec::new(),
+            },
+            states: vec![(1, state)],
+        }
+    }
+
+    #[test]
+    fn candidate_selects_actual_native_owner_only_for_exact_inputs() {
+        let p = published();
+        let select =
+            |cnum, bytes: &[u8], map: &[u32], sm: &Arc<SourceMap>, translation, proc_macro| {
+                p.candidate(cnum, bytes, map.iter().copied(), sm, translation, proc_macro)
+            };
+        let selected = select(1, &[1, 2, 3], &[1], &p.source_map, true, false).unwrap();
+        assert!(Arc::ptr_eq(&selected, p.state(1).unwrap()));
+        assert!(select(2, &[1, 2, 3], &[1], &p.source_map, true, false).is_none());
+        assert!(select(1, &[1, 2, 4], &[1], &p.source_map, true, false).is_none());
+        assert!(select(1, &[1, 2, 3], &[1, 1], &p.source_map, true, false).is_none());
+        assert!(select(1, &[1, 2, 3], &[2], &p.source_map, true, false).is_none());
+        assert!(select(1, &[1, 2, 3], &[1], &p.source_map, false, false).is_none());
+        assert!(select(1, &[1, 2, 3], &[1], &p.source_map, true, true).is_none());
+        let other_map = Arc::new(SourceMap::new(rustc_span::source_map::FilePathMapping::empty()));
+        assert!(select(1, &[1, 2, 3], &[1], &other_map, true, false).is_none());
+    }
+
+    #[test]
+    fn loaded_dependency_requires_exact_bytes_map_and_actual_owner() {
+        let p = published();
+        let owner = p.state(1).unwrap();
+        assert!(p.loaded_matches(1, &[1, 2, 3], [1].into_iter(), owner, false));
+        assert!(!p.loaded_matches(1, &[1, 2, 4], [1].into_iter(), owner, false));
+        assert!(!p.loaded_matches(1, &[1, 2, 3], [1, 1].into_iter(), owner, false));
+        assert!(!p.loaded_matches(2, &[1, 2, 3], [1].into_iter(), owner, false));
+        assert!(!p.loaded_matches(1, &[1, 2, 3], [1].into_iter(), owner, true));
+        let fresh = Arc::new(ExternalDecoderIdentityState::default());
+        assert!(!p.loaded_matches(1, &[1, 2, 3], [1].into_iter(), &fresh, false));
+    }
+
+    #[test]
+    fn retained_universe_does_not_substitute_for_actually_loaded_dependencies() {
+        assert!(mapped_targets_loaded(1, [1].into_iter(), |_| false));
+        assert!(!mapped_targets_loaded(1, [1, 2].into_iter(), |_| false));
+        assert!(mapped_targets_loaded(1, [1, 2].into_iter(), |n| n == 2));
+        assert!(!mapped_targets_loaded(1, [1, 2, 3].into_iter(), |n| n == 2));
+    }
+
+    #[test]
+    fn any_retained_foreign_text_cache_change_rejects_selection() {
+        for kind in
+            [ExternalSourceKind::AbsentErr, ExternalSourceKind::Present(Arc::new("abc".into()))]
+        {
+            let mut p = published();
+            // An additional retained file must also remain AbsentOk, even when
+            // it is not the source selected by this candidate's metadata entry.
+            let mut source = imported(0);
+            Arc::get_mut(&mut source.translated_source_file).unwrap().external_src =
+                FreezeLock::new(ExternalSource::Foreign { kind, metadata_index: 0 });
+            p.snapshot.files.push(mapping(&source));
+            assert!(
+                p.candidate(1, &[1, 2, 3], [1].into_iter(), &p.source_map, true, false).is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn failed_publication_clears_previous_native_owner_before_capture() {
+        let mut cache = DecoderCache::default();
+        cache.publish(|| Ok(published())).unwrap();
+        let old = Arc::downgrade(cache.published.as_ref().unwrap().state(1).unwrap());
+        assert_eq!(cache.stats.retained_entries, 1);
+        assert_eq!(
+            cache.publish(|| {
+                assert!(old.upgrade().is_none());
+                Err(ExternalSourceSnapshotError::IncompleteImports)
+            }),
+            Err(ExternalSourceSnapshotError::IncompleteImports)
+        );
+        assert!(cache.published.is_none());
+        assert_eq!(cache.stats.retained_entries, 0);
+        assert_eq!(cache.stats.publications, 1);
+        assert!(cache.stats.retired);
+        assert_eq!(cache.stats.retirement_requests, 1);
+        assert_eq!(
+            cache.publish(|| panic!("retired owner must not capture again")),
+            Err(ExternalSourceSnapshotError::Retired)
+        );
+        assert!(cache.stats.retired);
+    }
+
+    #[test]
+    fn even_initial_capture_failure_retires_the_owner() {
+        let mut cache = DecoderCache::default();
+        assert_eq!(
+            cache.publish(|| Err(ExternalSourceSnapshotError::IncompleteImports)),
+            Err(ExternalSourceSnapshotError::IncompleteImports)
+        );
+        assert!(cache.stats.retired);
+        assert_eq!(cache.stats.publications, 0);
+        assert_eq!(cache.stats.retirement_requests, 1);
+    }
+
+    #[test]
+    fn decoder_owner_is_default_off_and_dropped_on_unwind() {
+        assert!(DECODERS.with(|slot| slot.borrow().is_none()));
+        let result = std::panic::catch_unwind(|| {
+            with_resident_external_decoder_cache(true, || {
+                DECODERS
+                    .with(|slot| slot.borrow_mut().as_mut().unwrap().published = Some(published()));
+                panic!("test owner unwind");
+            });
+        });
+        assert!(result.is_err());
+        assert!(DECODERS.with(|slot| slot.borrow().is_none()));
+        assert_eq!(stats().retained_entries, 0);
+        assert!(!stats().retired);
+    }
+
+    #[test]
+    fn disabled_scope_masks_and_restores_owner_and_enabled_nesting_rejects() {
+        with_resident_external_decoder_cache(true, || {
+            DECODERS.with(|slot| slot.borrow_mut().as_mut().unwrap().stats.hits = 7);
+            with_resident_external_decoder_cache(false, || {
+                assert!(DECODERS.with(|slot| slot.borrow().is_none()));
+                assert_eq!(stats().hits, 0);
+            });
+            assert_eq!(stats().hits, 7);
+            assert!(
+                std::panic::catch_unwind(|| {
+                    with_resident_external_decoder_cache(true, || panic!("must not enter"));
+                })
+                .is_err()
+            );
+            assert_eq!(stats().hits, 7);
+        });
+        assert!(DECODERS.with(|slot| slot.borrow().is_none()));
+    }
 
     fn source_limits() -> ExternalSourceSnapshotLimits {
         ExternalSourceSnapshotLimits {
