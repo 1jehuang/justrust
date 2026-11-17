@@ -19,6 +19,9 @@ import stable_resident_cargo_suite as safety
 import stable_resident_cargo_dependency_suite as rss_helpers
 from stable_resident_cargo_dependency_suite import observed_runner
 
+DIAGNOSTIC_SCHEMA = 'stable-resident-own-loop-diagnostic/v1'
+DIAGNOSTIC_CLAIM = ('Resident-on-only correctness diagnostic. '
+                    'Not performance evidence or a speedup, comparison, or default-promotion claim.')
 SCHEMA = 'stable-resident-own-loop/v1'
 CLAIM = ('Focused actual-client justrust-source check/build lib edit loop only. '
          'No general speedup, default promotion, peak RSS, or retained-heap claim.')
@@ -110,11 +113,17 @@ def selected_commands(commands):
 def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
             checkout=None, edit_mode='body', commands=('check', 'build'), root_native_frozen=False, idle_authorized=False,
             expected_compiler_sha256=None, expected_driver_sha256=None,
-            expected_cargo_sha256=None, expected_client_sha256=None, runner=None):
+            expected_cargo_sha256=None, expected_client_sha256=None, runner=None,
+            diagnostic_on_only=False):
     commands = selected_commands(commands)
     if root_native_frozen is not True or idle_authorized is not True:
         raise ValueError('Root native freeze and idle authorization required')
-    if type(repetitions) is not int or repetitions < 2 or repetitions % 2:
+    if type(diagnostic_on_only) is not bool:
+        raise ValueError('Diagnostic on-only flag must be boolean')
+    if diagnostic_on_only:
+        if type(repetitions) is not int or repetitions < 1:
+            raise ValueError('Positive diagnostic repetition count required')
+    elif type(repetitions) is not int or repetitions < 2 or repetitions % 2:
         raise ValueError('Even repetition count >= 2 required')
     if type(timeout) not in (float, int) or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError('Finite positive timeout required')
@@ -139,7 +148,8 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
     attested = safety.attest(compiler, cargo, client, expected)
     root = shared.private_directory(output)
     (root / 'original-lib.rs').write_bytes(original)
-    report = dict(schema=SCHEMA, claim=CLAIM, verdict='incomplete',
+    report = dict(schema=DIAGNOSTIC_SCHEMA if diagnostic_on_only else SCHEMA,
+                  claim=DIAGNOSTIC_CLAIM if diagnostic_on_only else CLAIM, verdict='incomplete',
                   provenance=dict(attestation=attested, expected=expected, checkout=str(checkout),
                                   source_path=str(source), original_b64=shared.native.encoded(original),
                                   original_sha256=digest_bytes(original), manifest_b64=shared.native.encoded(manifest),
@@ -154,7 +164,7 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
     try:
         for index in range(repetitions):
             nonce = uuid.uuid4().hex
-            order = ['off', 'on'] if index % 2 == 0 else ['on', 'off']
+            order = ['on'] if diagnostic_on_only else (['off', 'on'] if index % 2 == 0 else ['on', 'off'])
             pair = dict(order=order, nonce=nonce, arms={})
             report['repetitions'].append(pair)
             for mode in order:
@@ -191,8 +201,11 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
             raise AssertionError('Manifest changed during capture')
         if safety.host() != report['provenance']['host']:
             raise AssertionError('Host/boot/affinity changed during capture')
-        report['verdict'] = 'passed'
-        report['summary'] = validate(report)
+        report['verdict'] = 'diagnostic-passed' if diagnostic_on_only else 'passed'
+        if diagnostic_on_only:
+            _validate(report, diagnostic=True)
+        else:
+            report['summary'] = validate(report)
     except BaseException as error:
         report.update(verdict='failed', error=f'{type(error).__name__}: {error}')
         raise
@@ -215,7 +228,14 @@ def capture(compiler, cargo, output, justrust, repetitions=2, timeout=180, *,
 
 
 def validate(report):
-    if report.get('schema') != SCHEMA or report.get('verdict') != 'passed':
+    # Diagnostic receipts must never enter comparisons or performance summaries.
+    return _validate(report, diagnostic=False)
+
+
+def _validate(report, *, diagnostic):
+    schema = DIAGNOSTIC_SCHEMA if diagnostic else SCHEMA
+    verdict = 'diagnostic-passed' if diagnostic else 'passed'
+    if report.get('schema') != schema or report.get('verdict') != verdict:
         raise ValueError('Not a passed own-source loop receipt')
     provenance = report['provenance']
     original = base64.b64decode(provenance['original_b64'], validate=True)
@@ -225,7 +245,8 @@ def validate(report):
         if provenance['attestation'][name]['sha256'] != provenance['expected'][name + '_sha256']:
             raise ValueError('Component attestation mismatch')
     count = provenance['repetitions']
-    if type(count) is not int or count < 2 or count % 2 or len(report['repetitions']) != count:
+    if (type(count) is not int or count < (1 if diagnostic else 2)
+            or (not diagnostic and count % 2) or len(report['repetitions']) != count):
         raise ValueError('Missing counterbalanced repetitions')
     if provenance.get('root_native_frozen') is not True or provenance.get('idle_authorized') is not True:
         raise ValueError('Missing root execution authorization')
@@ -235,10 +256,11 @@ def validate(report):
                          for stage in measured} for command in commands}
     environment_reference = None
     for index, pair in enumerate(report['repetitions']):
-        if pair['order'] != (['off', 'on'] if index % 2 == 0 else ['on', 'off']):
+        order = ['on'] if diagnostic else (['off', 'on'] if index % 2 == 0 else ['on', 'off'])
+        if pair['order'] != order or set(pair['arms']) != set(order):
             raise ValueError('Wrong counterbalanced order')
         expected_stages = stages(original, pair['nonce'], provenance['edit_mode'])
-        for mode in ('off', 'on'):
+        for mode in order:
             observations = pair['arms'][mode]['observations']
             if len(observations) != len(commands) * len(STAGES):
                 raise ValueError('Missing selected command stages')
@@ -291,6 +313,8 @@ def validate(report):
                         raise ValueError('Invalid actual client wall time')
                     if name in measured:
                         samples[command][name][mode].append(wall)
+    if diagnostic:
+        return None
     return {command: {name: dict(samples=arms,
                                 medians={mode: statistics.median(values) for mode, values in arms.items()},
                                 paired_off_over_on=[off / on for off, on in zip(arms['off'], arms['on'])])
@@ -356,7 +380,8 @@ def console_summary(report, output):
     """Keep raw source, environments and command streams only in the receipt."""
     return dict(schema=report['schema'], verdict=report['verdict'], claim=report['claim'],
                 receipt=str(Path(output).absolute() / 'receipt.json'),
-                summary=report.get('summary', {}), restoration=report.get('restoration', {}))
+                summary={} if report.get('schema') == DIAGNOSTIC_SCHEMA else report.get('summary', {}),
+                restoration=report.get('restoration', {}))
 
 
 def main():
@@ -368,6 +393,8 @@ def main():
     parser.add_argument('--checkout', type=Path)
     parser.add_argument('--commands', nargs='+', choices=('check', 'build'), default=['check', 'build'])
     parser.add_argument('--edit-mode', choices=('body', 'comment'), default='body')
+    parser.add_argument('--diagnostic-on-only', action='store_true',
+                        help='Run only resident-on as a correctness diagnostic, never performance evidence')
     parser.add_argument('--repetitions', type=int, default=2)
     parser.add_argument('--timeout', type=float, default=180)
     parser.add_argument('--root-native-frozen', action='store_true', required=True)

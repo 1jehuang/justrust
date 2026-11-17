@@ -66,8 +66,10 @@ class OwnLoopTests(unittest.TestCase):
                         stderr_b64=encoded(b'raw stderr\xff\x00\n'))
         return run, calls
 
-    def capture(self, root, commands=('check', 'build'), **runner_options):
+    def capture(self, root, commands=('check', 'build'), *, diagnostic_on_only=False,
+                repetitions=2, **runner_options):
         source, options, attestation = self.prepare(root)
+        options.update(diagnostic_on_only=diagnostic_on_only, repetitions=repetitions)
         original = source.read_bytes()
         stat = source.stat()
         runner, calls = self.runner(**runner_options)
@@ -99,6 +101,66 @@ class OwnLoopTests(unittest.TestCase):
                         self.assertEqual(base64.b64decode(row['cargo']['stderr_b64']), b'raw stderr\xff\x00\n')
                         self.assertIn('resident_worker_rss', row['cargo'])
             self.assertEqual(json.loads((options['output'] / 'receipt.json').read_text()), report)
+
+    def test_diagnostic_on_only_is_correctness_not_performance(self):
+        for repetitions in (1, 2, 3):
+            with self.subTest(repetitions=repetitions), tempfile.TemporaryDirectory() as directory:
+                report, calls, options = self.capture(
+                    Path(directory), commands=('check',), diagnostic_on_only=True,
+                    repetitions=repetitions)
+                self.assertEqual(report['schema'], suite.DIAGNOSTIC_SCHEMA)
+                self.assertEqual(report['claim'], suite.DIAGNOSTIC_CLAIM)
+                self.assertEqual(report['verdict'], 'diagnostic-passed')
+                self.assertNotIn('summary', report)
+                self.assertEqual(len(calls), 5 * repetitions)
+                self.assertTrue(all(pair['order'] == ['on'] and set(pair['arms']) == {'on'}
+                                    for pair in report['repetitions']))
+                self.assertTrue(all(env['JUSTRUST_CARGO_RESIDENT'] == 'serial'
+                                    for _, _, _, env in calls))
+                self.assertTrue(report['restoration']['restored'])
+                self.assertEqual(json.loads((options['output'] / 'receipt.json').read_text()), report)
+                with self.assertRaises(ValueError):
+                    suite.validate(report)
+                with self.assertRaises(ValueError):
+                    suite.compare(report, report)
+                # Even a stray summary must not leak as diagnostic performance evidence.
+                report['summary'] = {'unsafe': 'performance'}
+                self.assertEqual(suite.console_summary(report, options['output'])['summary'], {})
+
+    def test_one_repetition_requires_explicit_diagnostic_opt_in(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, options, _ = self.prepare(Path(directory))
+            options['repetitions'] = 1
+            runner, calls = self.runner()
+            with self.assertRaisesRegex(ValueError, 'Even repetition'):
+                suite.capture(**options, runner=runner)
+            self.assertEqual(calls, [])
+            for value in (0, -1, True, 1.5):
+                options.update(repetitions=value, diagnostic_on_only=True)
+                with self.subTest(repetitions=value), self.assertRaisesRegex(ValueError, 'Positive diagnostic'):
+                    suite.capture(**options, runner=runner)
+            self.assertEqual(calls, [])
+
+    def test_diagnostic_failure_restores_and_preserves_raw_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, options, attestation = self.prepare(Path(directory))
+            options.update(repetitions=1, diagnostic_on_only=True)
+            stat = source.stat()
+            runner, calls = self.runner(fail_at=4)
+            with patch.object(suite.safety, 'attest', return_value=attestation):
+                with self.assertRaisesRegex(RuntimeError, 'injected'):
+                    suite.capture(**options, runner=runner)
+            self.assertEqual(len(calls), 4)
+            self.assertEqual(source.read_bytes(), ORIGINAL)
+            self.assertEqual(source.stat().st_mtime_ns, stat.st_mtime_ns)
+            receipt = json.loads((options['output'] / 'receipt.json').read_text())
+            self.assertEqual(receipt['schema'], suite.DIAGNOSTIC_SCHEMA)
+            self.assertEqual(receipt['claim'], suite.DIAGNOSTIC_CLAIM)
+            self.assertEqual(receipt['verdict'], 'failed')
+            self.assertTrue(receipt['restoration']['restored'])
+            row = receipt['repetitions'][0]['arms']['on']['observations'][0]
+            self.assertEqual(base64.b64decode(row['cargo']['stderr_b64']), b'raw stderr\xff\x00\n')
+            self.assertNotIn('summary', receipt)
 
     def test_failure_restores_backup_and_retains_failure_receipt(self):
         with tempfile.TemporaryDirectory() as directory:
