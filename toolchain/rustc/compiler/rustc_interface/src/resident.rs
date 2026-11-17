@@ -385,8 +385,28 @@ mod tests {
         };
         use rustc_middle::ty::resident_identity::IdentityBudget;
 
+        // Unit executables live below stageN-rustc, not the compiler's bin/.
+        // Default DLL-based sysroot discovery therefore cannot locate this std.
+        // Select the sibling bootstrap sysroot, never an installed stock toolchain.
+        let executable = std::env::current_exe().expect("native test executable");
+        let sysroot = executable
+            .ancestors()
+            .find_map(|path| {
+                let stage = path.file_name()?.to_str()?.strip_suffix("-rustc")?;
+                let number = stage.strip_prefix("stage")?;
+                if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return None;
+                }
+                Some(path.with_file_name(stage))
+            })
+            .expect("run the loaded-metadata acceptance with bootstrap x test");
+        assert!(
+            sysroot.join("lib/rustlib").is_dir(),
+            "build matching standard libraries with x build --stage 1 library first"
+        );
         let make_config = || {
             let mut config = config(0);
+            config.opts.sysroot = rustc_session::config::Sysroot::new(Some(sysroot.clone()));
             config.input = Input::Str {
                 name: FileName::Custom("resident-external-metadata.rs".into()),
                 input: "pub fn value() -> bool { std::hint::black_box(true) }".into(),
