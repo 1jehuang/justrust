@@ -684,6 +684,7 @@ mod tests {
             ExternalSourceSnapshotLimits, MetadataSnapshotLimits,
             with_resident_external_decoder_cache,
         };
+        use rustc_middle::ty::TyCtxt;
         use rustc_session::config::{ExternEntry, ExternLocation, Externs};
         use rustc_session::utils::CanonicalizedPath;
         use std::process::{Command, Stdio};
@@ -802,7 +803,7 @@ mod tests {
             max_files: 128 * 1024,
             max_declared_source_bytes: 1024 * 1024 * 1024,
         };
-        let decode_and_publish = |tcx: rustc_middle::ty::TyCtxt<'_>, expected: &[u8]| {
+        let decode_and_publish = |tcx: TyCtxt<'_>, expected: &[u8]| {
             tcx.ensure_ok().analysis(());
             let dependency = tcx
                 .crates(())

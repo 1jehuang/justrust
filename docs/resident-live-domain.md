@@ -479,11 +479,22 @@ standard libraries were rebuilt normally after compiler source identity changes.
 The expected retired-owner diagnostics are caught by the negative acceptance
 checks, not suppressed or converted into successful compilations.
 
-This closes the native allocation-decoder ownership prerequisite only. External
-typed-query admission remains rejected, and default compiler/client selection is
-unchanged. No speed improvement or broad external typed reuse follows from these
-tests. Demand-driven bounded publication, complete typed identity, mutation/error
-acceptance and representative performance remain separate gates.
+The additional real dependency-mutation test builds an rlib with the matching
+bootstrap compiler, decodes its exported string allocation, imports its sources
+and publishes the owner. It then builds changed string/signature metadata into a
+separate artifact and atomically replaces the configured `--extern` path, preserving
+the old mmap-backed inode. The next compile in the same owner is refused before
+constant decoding. A fresh owner successfully decodes the replacement string.
+All 22 interface tests pass, including that actual replacement/retirement/fresh-owner
+oracle. The test compiler's full diagnostics are retained in failure output; no
+version override or mismatch suppression is used.
+
+This closes native allocation-decoder ownership and scoped metadata-mutation
+refusal prerequisites only. External typed-query admission remains rejected, and
+default compiler/client selection is unchanged. No speed improvement or broad
+external typed reuse follows from these tests. Demand-driven bounded publication,
+complete typed identity, managed mutation/error fallback acceptance and
+representative performance remain separate gates.
 
 ## Native Cargo routing boundary
 
