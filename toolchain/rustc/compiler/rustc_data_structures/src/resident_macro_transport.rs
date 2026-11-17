@@ -20,6 +20,7 @@ pub const MAX_REQUEST_BYTES: usize = 256 * 1024 * 1024;
 const MAGIC: [u8; 8] = *b"JRPMRPC\0";
 const VERSION: u16 = 1;
 const HEADER_BYTES: usize = 16;
+const BUFFER_BYTES: usize = 4096;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Frame {
@@ -59,8 +60,15 @@ pub fn write_frame<W: Write + ?Sized>(writer: &mut W, frame: &Frame) -> io::Resu
     header[8..10].copy_from_slice(&VERSION.to_le_bytes());
     header[10] = kind;
     header[12..16].copy_from_slice(&(payload.len() as u32).to_le_bytes());
-    writer.write_all(&header)?;
-    writer.write_all(payload)?;
+    if payload.len() <= BUFFER_BYTES - HEADER_BYTES {
+        let mut bytes = [0; BUFFER_BYTES];
+        bytes[..HEADER_BYTES].copy_from_slice(&header);
+        bytes[HEADER_BYTES..HEADER_BYTES + payload.len()].copy_from_slice(payload);
+        writer.write_all(&bytes[..HEADER_BYTES + payload.len()])?;
+    } else {
+        writer.write_all(&header)?;
+        writer.write_all(payload)?;
+    }
     writer.flush()
 }
 
@@ -152,12 +160,57 @@ pub enum Outcome {
     Shutdown,
 }
 
+// Retain prefetched bytes for the whole session, not merely one exchange.
+// Writes bypass the read buffer and preserve write/flush error semantics.
+struct BufferedDuplex<S> {
+    inner: S,
+    bytes: [u8; BUFFER_BYTES],
+    start: usize,
+    end: usize,
+}
+
+impl<S> BufferedDuplex<S> {
+    fn new(inner: S) -> Self {
+        Self { inner, bytes: [0; BUFFER_BYTES], start: 0, end: 0 }
+    }
+}
+
+impl<S: Read> Read for BufferedDuplex<S> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        if self.start == self.end {
+            if output.len() >= BUFFER_BYTES {
+                return self.inner.read(output);
+            }
+            self.start = 0;
+            self.end = 0;
+            self.end = self.inner.read(&mut self.bytes)?;
+        }
+        let len = output.len().min(self.end - self.start);
+        output[..len].copy_from_slice(&self.bytes[self.start..self.start + len]);
+        self.start += len;
+        Ok(len)
+    }
+}
+
+impl<S: Write> Write for BufferedDuplex<S> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.inner.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// An explicitly sequenced session of exchanges. Unlike a bare pump, this may
 /// reuse its connection after Complete. Every invocation, callback, reply and
 /// successful completion carries the same monotonically increasing exchange ID.
 /// Errors poison the entire session, including errors after sending Invoke.
 pub struct Session<S> {
-    stream: S,
+    stream: BufferedDuplex<S>,
     next: u64,
     poisoned: bool,
 }
@@ -181,7 +234,7 @@ fn unenvelope(id: u64, payload: Vec<u8>) -> io::Result<Vec<u8>> {
 
 impl<S: Read + Write> Session<S> {
     pub fn new(stream: S) -> Self {
-        Self { stream, next: 1, poisoned: false }
+        Self { stream: BufferedDuplex::new(stream), next: 1, poisoned: false }
     }
 
     fn begin(&mut self) -> io::Result<u64> {
@@ -308,6 +361,125 @@ mod tests {
         let mut bytes = Vec::new();
         write_frame(&mut bytes, &frame).unwrap();
         bytes
+    }
+
+    struct CountingIo {
+        input: Cursor<Vec<u8>>,
+        output: Vec<u8>,
+        reads: usize,
+        writes: usize,
+        flushes: usize,
+        chunk: usize,
+        fail_after: usize,
+        fail_flush: bool,
+    }
+
+    impl CountingIo {
+        fn new(input: Vec<u8>) -> Self {
+            Self {
+                input: Cursor::new(input),
+                output: Vec::new(),
+                reads: 0,
+                writes: 0,
+                flushes: 0,
+                chunk: usize::MAX,
+                fail_after: usize::MAX,
+                fail_flush: false,
+            }
+        }
+    }
+
+    impl Read for CountingIo {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            self.reads += 1;
+            let len = bytes.len().min(self.chunk);
+            self.input.read(&mut bytes[..len])
+        }
+    }
+
+    impl Write for CountingIo {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.writes += 1;
+            if self.output.len() >= self.fail_after {
+                return Err(io::Error::other("injected write failure"));
+            }
+            let len = bytes.len().min(self.chunk).min(self.fail_after - self.output.len());
+            self.output.extend_from_slice(&bytes[..len]);
+            Ok(len)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushes += 1;
+            if self.fail_flush { Err(io::Error::other("injected flush failure")) } else { Ok(()) }
+        }
+    }
+
+    #[test]
+    fn coalesced_write_boundary_and_large_fallback() {
+        for len in [0, 1, BUFFER_BYTES - HEADER_BYTES, BUFFER_BYTES - HEADER_BYTES + 1] {
+            let frame = Frame::Callback(vec![7; len]);
+            let mut io = CountingIo::new(vec![]);
+            write_frame(&mut io, &frame).unwrap();
+            assert_eq!(io.writes, if len <= BUFFER_BYTES - HEADER_BYTES { 1 } else { 2 });
+            assert_eq!(io.flushes, 1);
+            assert_eq!(read_frame(&mut Cursor::new(io.output)).unwrap(), frame);
+        }
+    }
+
+    #[test]
+    fn chunked_write_and_read_preserve_exact_frames() {
+        for len in [31, BUFFER_BYTES + 1] {
+            let frame = Frame::Reply(vec![3; len]);
+            let mut io = CountingIo::new(vec![]);
+            io.chunk = 7;
+            write_frame(&mut io, &frame).unwrap();
+            let mut reader = CountingIo::new(io.output);
+            reader.chunk = 3;
+            let mut reader = BufferedDuplex::new(reader);
+            assert_eq!(read_frame(&mut reader).unwrap(), frame);
+            assert_eq!(io.flushes, 1);
+        }
+    }
+
+    #[test]
+    fn partial_write_and_flush_failure_poison_without_replay() {
+        for fail_after in [0, 5, HEADER_BYTES + 2, usize::MAX] {
+            let mut io = CountingIo::new(vec![]);
+            io.fail_after = fail_after;
+            io.fail_flush = fail_after == usize::MAX;
+            let mut session = Session::new(io);
+            assert!(session.invoke(vec![7; 8], |_| unreachable!()).is_err());
+            let writes = session.stream.inner.writes;
+            let bytes = session.stream.inner.output.len();
+            assert!(session.invoke(vec![7; 8], |_| unreachable!()).is_err());
+            assert_eq!(session.stream.inner.writes, writes);
+            assert_eq!(session.stream.inner.output.len(), bytes);
+            assert_eq!(session.stream.inner.flushes, usize::from(fail_after == usize::MAX));
+        }
+    }
+
+    #[test]
+    fn session_retains_prefetched_frames_across_exchanges() {
+        let mut input = encoded(Frame::Callback(envelope(1, vec![9]).unwrap()));
+        input.extend(encoded(Frame::Complete(envelope(1, vec![1]).unwrap())));
+        input.extend(encoded(Frame::Complete(envelope(2, vec![2]).unwrap())));
+        let mut session = Session::new(CountingIo::new(input));
+        assert_eq!(session.invoke(vec![], |bytes| Ok(bytes)).unwrap(), Outcome::Complete(vec![1]));
+        assert_eq!(session.stream.inner.reads, 1);
+        assert_eq!(session.invoke(vec![], |_| unreachable!()).unwrap(), Outcome::Complete(vec![2]));
+        assert_eq!(session.stream.inner.reads, 1);
+        assert_eq!(session.stream.inner.writes, 3);
+    }
+
+    #[test]
+    fn bare_read_frame_does_not_prefetch() {
+        let first = encoded(Frame::Reply(vec![1]));
+        let mut input = first.clone();
+        input.extend(encoded(Frame::Complete(vec![2])));
+        let mut io = CountingIo::new(input);
+        assert_eq!(read_frame(&mut io).unwrap(), Frame::Reply(vec![1]));
+        assert_eq!(io.input.position() as usize, first.len());
+        assert_eq!(read_frame(&mut io).unwrap(), Frame::Complete(vec![2]));
     }
 
     #[test]
@@ -450,9 +622,9 @@ mod tests {
             Outcome::Complete(vec![4])
         );
         assert!(session.invoke(vec![], |_| panic!("unexpected callback")).is_err());
-        let written = session.stream.output.len();
+        let written = session.stream.inner.output.len();
         assert!(session.invoke(vec![], |_| panic!("unexpected callback")).is_err());
-        assert_eq!(session.stream.output.len(), written);
+        assert_eq!(session.stream.inner.output.len(), written);
     }
 
     #[test]
