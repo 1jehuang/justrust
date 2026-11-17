@@ -38,7 +38,7 @@ tracing = "0.1"
 twox-hash = { version = "2", default-features = false, features = ["xxhash3_128", "std"] }
 # tidy-alphabetical-end
 
-[target.'cfg(target_os = "aix")'.dependencies]
+[target.'cfg(any(target_os = "aix", target_os = "linux"))'.dependencies]
 # tidy-alphabetical-start
 libc = "0.2"
 # tidy-alphabetical-end

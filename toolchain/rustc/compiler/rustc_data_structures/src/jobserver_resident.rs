@@ -13,6 +13,12 @@ use std::time::Duration;
 
 use jobserver_crate::{Acquired, Client, HelperThread};
 
+#[cfg(unix)]
+#[path = "jobserver_resident_child.rs"]
+mod child;
+#[cfg(unix)]
+pub use child::RequestChild;
+
 static ADMISSION: Admission = Admission::new();
 static CURRENT: Mutex<Option<RequestClient>> = Mutex::new(None);
 
@@ -191,6 +197,14 @@ pub struct RequestClient {
 }
 
 impl RequestClient {
+    /// Spawn a structured child borrowing this request's delegated execution
+    /// slot. The caller must suspend its CPU work while the child uses that
+    /// slot. Consuming Command prevents reuse of inherited capability hooks.
+    #[cfg(unix)]
+    pub fn spawn_child(&self, command: std::process::Command) -> io::Result<RequestChild> {
+        child::spawn(self, command)
+    }
+
     /// Creates a tracked worker. Tokens sent to other threads remain request-owned.
     ///
     /// Dropping the helper requests shutdown, but does not prove worker retirement. Use the
