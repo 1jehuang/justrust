@@ -952,7 +952,10 @@ fn record(
         }
     }
 
-    let start = paths::now();
+    // Establish the CPU interval before Cargo can do any work. A baseline
+    // taken by the sampler thread after spawn loses most of a short build.
+    let baseline = SampleBaseline::capture();
+    let start = baseline.sample.t;
     // Early diagnostics (opt-in): a resident rust-analyzer answers in
     // parallel with cargo. Never touches cargo's command or output.
     let build_done: Arc<std::sync::atomic::AtomicBool> = Arc::default();
@@ -1020,6 +1023,7 @@ fn record(
                 &done,
                 &lines,
                 &log_availability,
+                baseline,
             )
         })
     };
@@ -1041,13 +1045,15 @@ fn record(
     }
     let end = paths::now();
     crate::e2e::mark("cargo_done");
-    let sched = scope.map(crate::sched::Scope::finish);
-    trace.mark("drain-scope");
     {
         let (lock, cv) = &*done;
         *lock.lock().unwrap() = true;
         cv.notify_all();
     }
+    // Do not postpone the endpoint observation behind cgroup accounting.
+    // That work is outside the build interval and can be slow.
+    let sched = scope.map(crate::sched::Scope::finish);
+    trace.mark("drain-scope");
     build_done.store(true, Ordering::SeqCst);
     // A short grace period only: the daemon answers in about 0.1 s, and a
     // slow or stuck one must not hold up the build's exit.
@@ -1523,6 +1529,48 @@ fn sampled_tree_cpu_delta(
 /// outside cargo's process tree and writes its pid here.
 const DAEMON_PID_FILE: &str = "cargo-daemon.pid";
 
+struct SampleBaseline {
+    sample: Sample,
+    cpu: Option<procfs::CpuTimes>,
+    psi: Option<procfs::Pressure>,
+    tracked: HashMap<(i32, u64), Tracked>,
+}
+
+impl SampleBaseline {
+    fn capture() -> Self {
+        let mem_available_mb = procfs::meminfo().map(|m| m.available_mb).unwrap_or(0);
+        let processes: Vec<_> = procfs::all_pids()
+            .into_iter()
+            .filter_map(procfs::read_stat)
+            .collect();
+        let foreign_rustc_procs = processes.iter().filter(|p| p.comm == "rustc").count();
+        // Existing daemons can join the build tree later. Their pre-build
+        // lifetime CPU is not work done during this run.
+        let mut tracked = HashMap::new();
+        sampled_tree_cpu_delta(&processes, &mut tracked);
+        let psi = procfs::pressure();
+        let cpu = procfs::cpu_times();
+        Self {
+            sample: Sample {
+                t: paths::now(),
+                sys_cores: 0.0,
+                build_cores: 0.0,
+                build_rss_mb: 0.0,
+                mem_available_mb,
+                rustc_procs: 0,
+                foreign_rustc_procs,
+                psi_cpu_ms: 0.0,
+                psi_mem_ms: 0.0,
+                psi_io_ms: 0.0,
+                psi_unavailable: psi.is_none(),
+            },
+            cpu,
+            psi,
+            tracked,
+        }
+    }
+}
+
 fn sample_loop(
     root: i32,
     daemon_pid: &Path,
@@ -1530,6 +1578,7 @@ fn sample_loop(
     done: &(Mutex<bool>, std::sync::Condvar),
     lines: &Mutex<OutputCapture>,
     log_availability: &std::sync::atomic::AtomicBool,
+    baseline: SampleBaseline,
 ) -> (Vec<Sample>, Vec<ProcRecord>) {
     let sample_start = std::time::Instant::now();
     let mut last_log_flush = sample_start;
@@ -1537,18 +1586,13 @@ fn sample_loop(
     let hz = procfs::clk_tck();
     let page_mb = procfs::page_size() as f64 / 1_048_576.0;
     let ncpu = procfs::ncpu() as f64;
-    let mut samples = Vec::new();
-    let mut tracked: HashMap<(i32, u64), Tracked> = HashMap::new();
-    let mut prev_cpu = procfs::cpu_times();
-    let mut prev_psi = procfs::pressure();
-    let mut prev_t = paths::now();
+    let mut prev_cpu = baseline.cpu;
+    let mut prev_psi = baseline.psi;
+    let mut prev_t = baseline.sample.t;
+    let mut samples = vec![baseline.sample];
+    let mut tracked = baseline.tracked;
     loop {
         let stop = *done.0.lock().unwrap();
-        if stop || last_log_flush.elapsed() >= Duration::from_secs(1) {
-            let persisted = lines.lock().unwrap().journal.flush();
-            log_availability.store(persisted, Ordering::Relaxed);
-            last_log_flush = std::time::Instant::now();
-        }
         let t = paths::now();
         let all: Vec<procfs::ProcStat> = procfs::all_pids()
             .into_iter()
@@ -1605,6 +1649,8 @@ fn sample_loop(
 
         let cpu = procfs::cpu_times();
         let psi = procfs::pressure();
+        // Timestamp the counter observation, not the start of the process scan.
+        let t = paths::now();
         let stall = |f: fn(&procfs::Pressure) -> u64| match (&psi, &prev_psi) {
             (Some(b), Some(a)) => f(b).saturating_sub(f(a)) as f64 / 1000.0,
             _ => 0.0,
@@ -1617,49 +1663,37 @@ fn sample_loop(
             _ => 0.0,
         };
         let build_cores = tree_delta_ticks as f64 / hz / dt;
-        if !samples.is_empty() {
-            write_live_cpu(
-                run_dir,
-                &LiveCpu {
-                    t,
-                    build_cores: build_cores.min(ncpu),
-                    ncpu: ncpu as usize,
-                },
-            );
-        }
-        if !samples.is_empty() || stop {
-            samples.push(Sample {
+        write_live_cpu(
+            run_dir,
+            &LiveCpu {
                 t,
-                sys_cores,
                 build_cores: build_cores.min(ncpu),
-                build_rss_mb: rss as f64 * page_mb,
-                mem_available_mb: procfs::meminfo().map(|m| m.available_mb).unwrap_or(0),
-                rustc_procs,
-                foreign_rustc_procs: foreign,
-                psi_cpu_ms: stall(|p| p.cpu_us),
-                psi_mem_ms: stall(|p| p.memory_us),
-                psi_io_ms: stall(|p| p.io_us),
-                psi_unavailable: psi.is_none(),
-            });
-        } else {
-            // First pass only establishes baselines.
-            samples.push(Sample {
-                t,
-                sys_cores: 0.0,
-                build_cores: 0.0,
-                build_rss_mb: rss as f64 * page_mb,
-                mem_available_mb: procfs::meminfo().map(|m| m.available_mb).unwrap_or(0),
-                rustc_procs,
-                foreign_rustc_procs: foreign,
-                psi_cpu_ms: 0.0,
-                psi_mem_ms: 0.0,
-                psi_io_ms: 0.0,
-                psi_unavailable: psi.is_none(),
-            });
-        }
+                ncpu: ncpu as usize,
+            },
+        );
+        samples.push(Sample {
+            t,
+            sys_cores,
+            build_cores: build_cores.min(ncpu),
+            build_rss_mb: rss as f64 * page_mb,
+            mem_available_mb: procfs::meminfo().map(|m| m.available_mb).unwrap_or(0),
+            rustc_procs,
+            foreign_rustc_procs: foreign,
+            psi_cpu_ms: stall(|p| p.cpu_us),
+            psi_mem_ms: stall(|p| p.memory_us),
+            psi_io_ms: stall(|p| p.io_us),
+            psi_unavailable: psi.is_none(),
+        });
         prev_cpu = cpu;
         prev_psi = psi;
         prev_t = t;
+        // Persist output after observing counters. In particular, a contended
+        // output lock or slow journal flush must not delay the final endpoint.
+        if stop || last_log_flush.elapsed() >= Duration::from_secs(1) {
+            let persisted = lines.lock().unwrap().journal.flush();
+            log_availability.store(persisted, Ordering::Relaxed);
+            last_log_flush = std::time::Instant::now();
+        }
         if stop {
             break;
         }
@@ -2039,6 +2073,123 @@ mod tests {
         assert_eq!(
             after_slow_collection + super::sample_interval(after_slow_collection),
             Duration::from_millis(675)
+        );
+    }
+
+    #[test]
+    fn short_sampling_keeps_pre_spawn_baseline_and_wakes_for_endpoint() {
+        let dir =
+            std::env::temp_dir().join(format!("justrust-short-sample-{}", super::new_run_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let baseline = super::SampleBaseline::capture();
+        let start = baseline.sample.t;
+        let lines = Mutex::new(super::OutputCapture {
+            lines: Vec::new(),
+            journal: crate::log_journal::Journal::new(&dir.join("output.jsonl")),
+        });
+        let done = (Mutex::new(false), std::sync::Condvar::new());
+        let available = std::sync::atomic::AtomicBool::new(false);
+        let (samples, stop) = std::thread::scope(|scope| {
+            let sampler = scope.spawn(|| {
+                super::sample_loop(
+                    std::process::id() as i32,
+                    &dir.join(super::DAEMON_PID_FILE),
+                    &dir,
+                    &done,
+                    &lines,
+                    &available,
+                    baseline,
+                )
+            });
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            // Stop as soon as the first genuine interval has been observed,
+            // before the normal 50 ms sampling wait has to expire.
+            while !dir.join("cpu.json").exists() {
+                if std::time::Instant::now() >= deadline {
+                    *done.0.lock().unwrap() = true;
+                    done.1.notify_all();
+                    panic!("sampler did not start");
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let stop = crate::paths::now();
+            *done.0.lock().unwrap() = true;
+            done.1.notify_all();
+            (sampler.join().unwrap().0, stop)
+        });
+        assert!(samples.len() >= 3);
+        assert_eq!(samples[0].t, start);
+        assert_eq!(samples[0].sys_cores, 0.0);
+        assert_eq!(samples[0].build_cores, 0.0);
+        assert!(samples[1].t <= stop);
+        assert!(samples.last().unwrap().t >= stop);
+        assert!(samples.windows(2).all(|pair| pair[1].t > pair[0].t));
+        assert!(samples.iter().all(|sample| {
+            sample.sys_cores.is_finite()
+                && sample.build_cores.is_finite()
+                && sample.sys_cores >= 0.0
+                && sample.build_cores >= 0.0
+                && sample.build_cores <= crate::procfs::ncpu() as f64
+        }));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn already_finished_sampling_does_not_pad_short_series() {
+        let dir =
+            std::env::temp_dir().join(format!("justrust-finished-sample-{}", super::new_run_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let baseline = super::SampleBaseline::capture();
+        let start = baseline.sample.t;
+        let stop = crate::paths::now();
+        let lines = Mutex::new(super::OutputCapture {
+            lines: Vec::new(),
+            journal: crate::log_journal::Journal::new(&dir.join("output.jsonl")),
+        });
+        let samples = std::thread::scope(|scope| {
+            let output_guard = lines.lock().unwrap();
+            let sampler = scope.spawn(|| {
+                super::sample_loop(
+                    std::process::id() as i32,
+                    &dir.join(super::DAEMON_PID_FILE),
+                    &dir,
+                    &(Mutex::new(true), std::sync::Condvar::new()),
+                    &lines,
+                    &std::sync::atomic::AtomicBool::new(false),
+                    baseline,
+                )
+            });
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            // The final CPU observation must precede the journal flush, even
+            // when the output lock is held by another thread.
+            while !dir.join("cpu.json").exists() {
+                if std::time::Instant::now() >= deadline {
+                    drop(output_guard);
+                    panic!("output journal lock delayed the CPU endpoint");
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            drop(output_guard);
+            sampler.join().unwrap().0
+        });
+        // An unobservably short build must still fail strict provenance gates,
+        // not gain a duplicated/interpolated row or wait for an artificial one.
+        assert_eq!(samples.len(), 2);
+        assert_eq!(samples[0].t, start);
+        assert!(samples[1].t >= stop);
+        assert!(samples[1].t > samples[0].t);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sampling_baseline_excludes_existing_daemon_lifetime_cpu() {
+        let mut tracked = std::collections::HashMap::new();
+        super::sampled_tree_cpu_delta(&[cpu_stat(1, 1, 500)], &mut tracked);
+        // An existing daemon joins alongside freshly spawned cargo. Only its
+        // interval work plus the new child's work belong to the first row.
+        assert_eq!(
+            super::sampled_tree_cpu_delta(&[cpu_stat(1, 1, 503), cpu_stat(2, 2, 4)], &mut tracked,),
+            7
         );
     }
 
