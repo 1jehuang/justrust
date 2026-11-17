@@ -24,7 +24,7 @@ def environment(mode):
     if mode not in ('control', '1'):
         raise ValueError('Expected control or 1')
     env = owned.environment()
-    env['JUSTRUST_RUSTC_RESIDENT_LEXER'] = mode
+    env['JUSTRUST_RUSTC_RESIDENT_LEXER'] = '0' if mode == 'control' else '1'
     return env
 
 

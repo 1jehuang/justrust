@@ -65,6 +65,14 @@ class Contract(unittest.TestCase):
         with self.assertRaises(AssertionError):
             lexer.validate_lexer(response(rejected=1), None, '1', 'error')
 
+    def test_control_native_gate_is_zero(self):
+        with patch.dict('os.environ', {'JUSTRUST_RUSTC_RESIDENT_LEXER': '1',
+                                     'JUSTRUST_RUSTC_RESIDENT_TYPED': 'leaf'}):
+            env = lexer.environment('control')
+        self.assertEqual(env['JUSTRUST_RUSTC_RESIDENT_LEXER'], '0')
+        self.assertNotIn('JUSTRUST_RUSTC_RESIDENT_TYPED', env)
+        self.assertEqual(lexer.environment('1')['JUSTRUST_RUSTC_RESIDENT_LEXER'], '1')
+
     def test_environment_attribution(self):
         with patch.dict('os.environ', {'JUSTRUST_RUSTC_RESIDENT_TYPED': 'leaf',
                                      'JUSTRUST_RUSTC_RESIDENT_OTHER': '1'}):
