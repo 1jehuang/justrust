@@ -89,7 +89,7 @@ pub fn validate_proc_macro_elf(bytes: &[u8]) -> Result<Vec<String>> {
     let headers = range(bytes, u64_at(header, 32), (count as u64) * 56)?;
     let mut loads = Vec::new();
     let mut dynamic = None;
-    for ph in headers.chunks_exact(56) {
+    for ph in headers.as_chunks::<56>().0 {
         let kind = u32_at(ph, 0);
         let offset = u64_at(ph, 8);
         let address = u64_at(ph, 16);
@@ -123,7 +123,7 @@ pub fn validate_proc_macro_elf(bytes: &[u8]) -> Result<Vec<String>> {
     let mut string_size = None;
     let mut needed = Vec::new();
     let mut terminated = false;
-    for entry in table.chunks_exact(16) {
+    for entry in table.as_chunks::<16>().0 {
         let tag = u64_at(entry, 0);
         let value = u64_at(entry, 8);
         if terminated {
@@ -150,8 +150,14 @@ pub fn validate_proc_macro_elf(bytes: &[u8]) -> Result<Vec<String>> {
                     return Err(Error("duplicate DT_STRSZ"));
                 }
             }
-            15 | 29 | 0x7fff_fffd | 0x7fff_ffff => {
-                return Err(Error("forbidden dynamic loader directive"))
+            15 | 29 | 0x6fff_fefb | 0x6fff_fefc | 0x7fff_fffd | 0x7fff_ffff => {
+                return Err(Error("forbidden dynamic loader directive"));
+            }
+            // DT_FLAGS: DF_ORIGIN requests $ORIGIN processing.
+            30 if value & 1 != 0 => return Err(Error("forbidden dynamic loader flags")),
+            // DT_FLAGS_1: DF_1_ORIGIN and DF_1_NODEFLIB alter loader resolution.
+            0x6fff_fffb if value & (0x80 | 0x800) != 0 => {
+                return Err(Error("forbidden dynamic loader flags"));
             }
             _ => {}
         }

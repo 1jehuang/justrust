@@ -68,8 +68,29 @@ fn accepts_only_known_runtime_names_in_order() {
 }
 #[test]
 fn rejects_loader_overrides() {
-    for tag in [15, 29, 0x7fff_fffd, 0x7fff_ffff] {
-        assert!(validate(&fixture(&["libc.so.6"], &[(tag, 0)])).is_err());
+    for tag in [15, 29, 0x6fff_fefb, 0x6fff_fefc, 0x7fff_fffd, 0x7fff_ffff] {
+        for value in [0, 1, u64::MAX] {
+            assert!(
+                validate(&fixture(&["libc.so.6"], &[(tag, value)])).is_err(),
+                "tag {tag:#x}, value {value:#x}"
+            );
+        }
+    }
+}
+#[test]
+fn rejects_resolution_changing_loader_flags() {
+    for (tag, forbidden) in [(30, 1), (0x6fff_fffb, 0x80), (0x6fff_fffb, 0x800)] {
+        for value in [forbidden, forbidden | 8, u64::MAX] {
+            assert!(
+                validate(&fixture(&["libc.so.6"], &[(tag, value)])).is_err(),
+                "tag {tag:#x}, value {value:#x}"
+            );
+        }
+        // A later benign duplicate must not conceal forbidden flags.
+        assert!(validate(&fixture(&[], &[(tag, forbidden), (tag, 0)])).is_err());
+    }
+    for (tag, value) in [(30, 0), (30, 8), (0x6fff_fffb, 0), (0x6fff_fffb, 1)] {
+        assert!(validate(&fixture(&[], &[(tag, value)])).is_ok());
     }
 }
 #[test]
