@@ -121,15 +121,35 @@ and control -0.93%. This larger diagnostic also provides no added cache win.
 Consumer correctness, exact per-cache telemetry and cache bounds passed.
 
 Both original receipts and raw evidence remain local and unchanged. Automatic
-record upload failed with HTTP 413, so these two larger receipts are **not**
-claimed remotely archived or readback-verified. Their sizes are 3,762,220 and
+direct-record upload failed with HTTP 413. Their sizes are 3,762,220 and
 3,762,206 bytes, exceeding the bounded record endpoint. Original SHA256 values:
 
 - `a`: `1dde304801b00ce93ed108647dbd4a31b8c009a45f77da8d7b5e2c5eda3e043a`
 - `b`: `d1d5f5602d01f4c90ed08354ade8745299cfb4af7405ed6d0ba290bae863f43a`
 
-Do not raise the D1-backed endpoint cap without a safe large-record storage
-protocol, truncate receipts, or substitute a summary as the original evidence.
+The size blocker was resolved using `bench/record_archive.py`, not a larger
+backend limit. Distinct account-private records contain schema-versioned
+bounded gzip/base64 envelopes:
+
+- `bench/stable-resident-composed-suite-20261117-0401-large-a-lossless`
+- `bench/stable-resident-composed-suite-20261117-0401-large-b-lossless`
+
+Authenticated retrieval reconstructed **every original byte** and matched the
+independently pinned SHA256 values above. Both original files were checked
+unchanged after readback. These are lossless archive records, not direct receipt
+JSON records. The helper rejects malformed schemas, oversized input/output,
+corruption, trailing or concatenated gzip members, changed source files and
+existing output paths. Its 16 tests passed. No backend cap, credentials,
+production client or compiler defaults changed.
+
+To reconstruct an original, supply the corresponding pinned hash:
+
+```sh
+python3 bench/record_archive.py --justrust /path/to/published/justrust \
+  get stable-resident-composed-suite-20261117-0401-large-a-lossless \
+  /new/private/receipt.json \
+  --sha256 1dde304801b00ce93ed108647dbd4a31b8c009a45f77da8d7b5e2c5eda3e043a
+```
 
 ## Hosted correctness acceptance
 
