@@ -66,7 +66,7 @@ benchmark_binary() {
     export JUSTRUST_LOCAL=1
     export JUSTRUST_LOCAL_REASON='Controlled clean GitHub runner before/after local synthetic benchmark'
     export JUSTRUST_NO_UPDATE=1 JUSTRUST_BENCH_DIRTY=0
-    export JUSTRUST_BENCH_RUNTIME_CONTEXT=jcode-isolated-v3
+    export JUSTRUST_BENCH_RUNTIME_CONTEXT=jcode-isolated-v4
     export JUSTRUST="$work/bin/$label" JUSTRUST_BIN="$work/bin/$label"
     export JUSTRUST_BENCH_REV="$revision"
     # GitHub runners install stock Cargo through rustup, not /usr/bin/cargo.
@@ -114,6 +114,12 @@ main() {
   git clone --filter=blob:none --no-checkout \
     https://github.com/1jehuang/jcode-desktop.git "$HOME/jcode-desktop"
   git -C "$HOME/jcode-desktop" cat-file -e '7d38fb72a0beadbca366da1104c915689cc0fd8e^{commit}'
+  # Fixtures make real commits under private HOME. Use the exact fixture pin's
+  # author, never a fabricated agent identity or persistent/global Git config.
+  local fixture_identity
+  fixture_identity=$(python3 "$root/bench/git_fixture_identity.py" "$HOME/jcode-desktop" \
+    7d38fb72a0beadbca366da1104c915689cc0fd8e)
+  eval "$fixture_identity"
   git -C "$root" cat-file -e 'f97fcc2^{commit}'
   python3 "$root/bench/suite.py" preflight
   "$hosted" remote use hosted

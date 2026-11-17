@@ -87,7 +87,7 @@ class HybridSuiteGateTests(unittest.TestCase):
                                                 fixture_latex_unicode=True,
                                                 fixture_no_tex=True))
             adapter.chmod(0o700)
-            selected = dict(os.environ, JUSTRUST_BENCH_RUNTIME_CONTEXT='jcode-isolated-v3')
+            selected = dict(os.environ, JUSTRUST_BENCH_RUNTIME_CONTEXT='jcode-isolated-v4')
             with patch.dict(os.environ, selected, clear=True):
                 with runtime_context(selected, self.root) as env:
                     # Real stack_env intentionally does not forward the parent
@@ -137,7 +137,7 @@ print(json.dumps(dict(identity=git('log','-1','--format=%an|%ae|%cn|%ce').strip(
                                                 self.toolchain if native else None,
                                                 fixture_xdg_home=True, fixture_git_identity=True))
             adapter.chmod(0o700)
-            selected = dict(os.environ, JUSTRUST_BENCH_RUNTIME_CONTEXT='jcode-isolated-v3',
+            selected = dict(os.environ, JUSTRUST_BENCH_RUNTIME_CONTEXT='jcode-isolated-v4',
                             GIT_AUTHOR_NAME='ambient wrong identity', GIT_AUTHOR_EMAIL='ambient@example.invalid')
             with patch.dict(os.environ, selected, clear=True):
                 with runtime_context(selected, self.root) as env:
@@ -190,7 +190,7 @@ print(json.dumps(dict(identity=git('log','-1','--format=%an|%ae|%cn|%ce').strip(
         env.pop('JUSTRUST_BENCH_RUNTIME_CONTEXT', None)
         child = subprocess.run([str(adapter), 'test'], env=env, text=True, capture_output=True)
         self.assertNotEqual(child.returncode, 0)
-        self.assertIn('requires jcode-isolated-v3', child.stderr)
+        self.assertIn('requires jcode-isolated-v4', child.stderr)
         self.assertFalse(child.stdout)
 
     def test_missing_native_toolchain_refuses_before_creating_evidence(self):

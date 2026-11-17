@@ -54,7 +54,7 @@ if {fixture_xdg_home!r} and args and args[0] in {BUILD_COMMANDS!r}:
                and os.environ.get('XDG_CONFIG_HOME') == os.path.join(home, '.config')
                and 'JCODE_HOME' not in os.environ)
     if not private:
-        sys.exit('fixture XDG mode requires jcode-isolated-v3 private HOME runtime context')
+        sys.exit('fixture XDG mode requires jcode-isolated-v4 private HOME runtime context')
     # The pinned fixtures override XDG_CONFIG_HOME themselves. A forced
     # JCODE_HOME takes precedence and defeats their own credential isolation.
     # HOME and XDG remain private under the suite runtime context.
@@ -295,7 +295,7 @@ def main(argv=None):
     p.add_argument('--native-toolchain', default=os.environ.get('JUSTRUST_HYBRID_TOOLCHAIN'),
                    help='existing matching engine toolchain, defaults to JUSTRUST_HYBRID_TOOLCHAIN')
     p.add_argument('--fixture-xdg-home', action='store_true',
-                   help='both adapters remove forced JCODE_HOME, requires private jcode-isolated-v3 runtime context')
+                   help='both adapters remove forced JCODE_HOME, requires private jcode-isolated-v4 runtime context')
     p.add_argument('--fixture-latex-unicode', action='store_true',
                    help='both private-runtime adapters select supported Unicode math rendering for synchronous fixture expectations')
     p.add_argument('--fixture-no-tex', action='store_true',

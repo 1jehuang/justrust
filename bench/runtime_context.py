@@ -2,12 +2,13 @@
 from contextlib import contextmanager
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
 SELECTOR = "JUSTRUST_BENCH_RUNTIME_CONTEXT"
-POLICY = "jcode-isolated-v3"
-LEGACY_POLICIES = ("jcode-isolated-v1", "jcode-isolated-v2")
+POLICY = "jcode-isolated-v4"
+LEGACY_POLICIES = ("jcode-isolated-v1", "jcode-isolated-v2", "jcode-isolated-v3")
 PREFIXES = ("JCODE_", "ANTHROPIC_", "OPENAI_", "OPENROUTER_", "CLAUDE_", "CODEX_", "GEMINI_", "GOOGLE_API_", "GIT_")
 
 
@@ -19,7 +20,30 @@ def provenance():
         raise ValueError(f"unsupported {SELECTOR}: {value!r}")
     return {"policy": POLICY, "state": "fresh per command", "git": "temporary empty repository if absent",
             "credentials": "provider/session environment removed, private HOME and XDG directories",
+            "git_identity": "configured caller author and committer names/emails only",
             "compiler_environment": "unchanged"}
+
+
+def configured_git_identity(env, cwd):
+    """Resolve identity before isolating HOME, without copying Git configuration.
+
+    useConfigOnly forbids Git's guessed machine/login identity. git var applies
+    Git's own environment/config precedence, including caller XDG configuration.
+    Dates, signing, credentials, hooks and repository overrides are not retained.
+    Missing identity stays missing so fixture requirements remain observable.
+    """
+    identity = {}
+    for role in ("AUTHOR", "COMMITTER"):
+        result = subprocess.run(
+            ["git", "-c", "user.useConfigOnly=true", "var", f"GIT_{role}_IDENT"],
+            cwd=cwd, env=env, capture_output=True, text=True)
+        if result.returncode:
+            continue
+        match = re.fullmatch(r"(.+) <([^<>\n]+)> -?\d+ [+-]\d{4}\n?", result.stdout)
+        if match:
+            identity[f"GIT_{role}_NAME"] = match[1]
+            identity[f"GIT_{role}_EMAIL"] = match[2]
+    return identity
 
 
 def require_matching_context(a, b):
@@ -63,11 +87,13 @@ def runtime_context(env, cwd):
         yield env
         return
     cwd = Path(cwd).resolve()
+    identity = configured_git_identity(env, cwd)
     with tempfile.TemporaryDirectory(prefix="justrust-runtime-") as temporary:
         private = Path(temporary)
         home = private / "home"
         home.mkdir(mode=0o700)
         child = {key: value for key, value in env.items() if not key.startswith(PREFIXES)}
+        child.update(identity)
         old_home = Path(env.get("HOME", str(Path.home())))
         child.setdefault("JUSTRUST_HOME", str(old_home / ".justrust"))
         child.setdefault("CARGO_HOME", str(old_home / ".cargo"))

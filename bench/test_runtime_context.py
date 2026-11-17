@@ -78,6 +78,41 @@ class RuntimeContextTests(unittest.TestCase):
         self.assertEqual(env, original)
         self.assertTrue(compiler_home.exists())
 
+    def test_caller_config_identity_survives_but_other_git_settings_do_not(self):
+        home = Path(self.env["HOME"])
+        home.mkdir()
+        config = home / ".gitconfig"
+        original = '[user]\n name = Caller Configured Identity\n email = caller@example.invalid\n[commit]\n gpgsign = true\n[credential]\n helper = forbidden-helper\n'
+        config.write_text(original)
+        env = {"PATH": os.environ["PATH"], "HOME": str(home),
+               "GIT_CONFIG_NOSYSTEM": "1", "GIT_TRACE": "1"}
+        with patch.dict(os.environ, {runtime.SELECTOR: runtime.POLICY}, clear=True):
+            with runtime.runtime_context(env, self.cwd) as child:
+                for role in ("AUTHOR", "COMMITTER"):
+                    self.assertEqual(child[f"GIT_{role}_NAME"], "Caller Configured Identity")
+                    self.assertEqual(child[f"GIT_{role}_EMAIL"], "caller@example.invalid")
+                self.assertNotIn("GIT_TRACE", child)
+                self.assertFalse((Path(child["HOME"]) / ".gitconfig").exists())
+                for key in ("commit.gpgsign", "credential.helper"):
+                    result = subprocess.run(["git", "config", "--global", "--get", key],
+                                            cwd=self.cwd, env=child, capture_output=True)
+                    self.assertEqual(result.returncode, 1)
+        self.assertEqual(config.read_text(), original)
+
+    def test_explicit_distinct_author_committer_identity_wins_over_config(self):
+        env = {"PATH": os.environ["PATH"], "HOME": self.env["HOME"],
+               "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_AUTHOR_NAME": "Configured Author", "GIT_AUTHOR_EMAIL": "author@example.invalid",
+               "GIT_COMMITTER_NAME": "Configured Committer", "GIT_COMMITTER_EMAIL": "committer@example.invalid",
+               "GIT_AUTHOR_DATE": "1234567890 +0000", "GIT_COMMITTER_DATE": "1234567890 +0000"}
+        with patch.dict(os.environ, {runtime.SELECTOR: runtime.POLICY}, clear=True):
+            with runtime.runtime_context(env, self.cwd) as child:
+                for role in ("AUTHOR", "COMMITTER"):
+                    for field in ("NAME", "EMAIL"):
+                        key = f"GIT_{role}_{field}"
+                        self.assertEqual(child[key], env[key])
+                    self.assertNotIn(f"GIT_{role}_DATE", child)
+
     def test_v1_history_is_readable_but_not_comparable_or_selectable_as_v2(self):
         old = {"env": {"runtime_context": {"policy": "jcode-isolated-v1"}}}
         new = {"env": {"runtime_context": {"policy": runtime.POLICY}}}
@@ -108,6 +143,17 @@ class RuntimeContextTests(unittest.TestCase):
                 with runtime.runtime_context(self.env, self.cwd):
                     raise RuntimeError("test failure")
         self.assertTrue(marker.is_dir())
+
+    def test_v3_history_remains_readable_but_not_selectable_or_comparable(self):
+        old = {"env": {"runtime_context": {"policy": "jcode-isolated-v3"}}}
+        current = {"env": {"runtime_context": runtime.provenance()}}
+        runtime.require_matching_context(old, old)
+        with self.assertRaisesRegex(ValueError, "runtime contexts differ"):
+            runtime.require_matching_context(old, current)
+        with patch.dict(os.environ, {runtime.SELECTOR: "jcode-isolated-v3"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "unsupported"):
+                with runtime.runtime_context(self.env, self.cwd):
+                    self.fail("obsolete runtime policy executed")
 
     def test_new_marker_cleaned_after_failure(self):
         with patch.dict(os.environ, {runtime.SELECTOR: runtime.POLICY}, clear=True):

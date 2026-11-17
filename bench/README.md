@@ -367,7 +367,7 @@ the SQLite shared library. Supply it explicitly on `PATH`, optionally from a
 verified private package extraction. The harness never installs packages or
 changes shared configuration. Synthetic runs check this before toolchain
 installation or compilation. For application test isolation, select
-`JUSTRUST_BENCH_RUNTIME_CONTEXT=jcode-isolated-v3`. Each command gets fresh
+`JUSTRUST_BENCH_RUNTIME_CONTEXT=jcode-isolated-v4`. Each command gets fresh
 application HOME/XDG state, while explicit or implicit `JUSTRUST_HOME`,
 `CARGO_HOME`, and `RUSTUP_HOME` stay fixed outside that temporary home.
 This preserves installed owned toolchains, registry and dependency caches,
@@ -376,6 +376,14 @@ and recording state across commands. Version 1 failed to preserve an implicit
 home cleanup. Version 2 forced `JCODE_HOME`, overriding pinned tests' own
 per-test `XDG_CONFIG_HOME` and leaking saved provider configuration between tests.
 Version 3 relies on private HOME/XDG paths without injecting `JCODE_HOME`.
+Version 4 retains only explicitly configured caller Git author/committer names
+and emails, resolved before HOME isolation. It does not retain Git credentials,
+hooks, signing, dates, repository overrides, or arbitrary configuration. Missing
+identity remains missing. The clean release-gate runner exports an ephemeral
+identity from the exact pinned Desktop commit author using
+`bench/git_fixture_identity.py`, with a source-SHA receipt, without writing user
+or global Git configuration. This lets unchanged version fixtures make real
+commits inside their temporary repositories.
 New runs reject obsolete selectors, and comparisons reject mixing policy versions.
 Results retain the executable's version and SHA256
 (not its private path), and comparisons reject changed prerequisite provenance.
