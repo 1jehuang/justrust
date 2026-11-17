@@ -70,6 +70,8 @@ pub mod owned_slice;
 pub mod packed;
 pub mod profiling;
 pub mod range_set;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub mod resident_macro_shm;
 #[cfg(unix)]
 pub mod resident_macro_transport;
 pub mod sharded;
