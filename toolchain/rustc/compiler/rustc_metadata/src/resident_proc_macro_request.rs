@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
+use std::time::Instant;
 
 use rustc_data_structures::jobserver::resident::RequestClient;
 use rustc_expand::proc_macro_client::{
@@ -19,11 +20,49 @@ use crate::resident_proc_macro_parent::MacroHelper;
 static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
 static OWNER: Mutex<Option<Owner>> = Mutex::new(None);
 
+/// Native request-local operation totals. Expansion time includes callbacks and
+/// lazy helper startup; load time includes lazy helper startup. Counts include
+/// failed attempts. These measurements never participate in cache identity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RequestMacroStats {
+    pub helper_spawn_count: u64,
+    pub helper_spawn_ns: u64,
+    pub load_count: u64,
+    pub load_ns: u64,
+    pub expand_count: u64,
+    pub expand_ns: u64,
+    pub callback_count: u64,
+    pub callback_input_bytes: u64,
+    pub callback_output_bytes: u64,
+    pub callback_ns: u64,
+}
+
+fn add(counter: &mut u64, value: u128) {
+    *counter = counter.saturating_add(u64::try_from(value).unwrap_or(u64::MAX));
+}
+
+impl RequestMacroStats {
+    fn callback(
+        &mut self,
+        input: Vec<u8>,
+        callback: &mut dyn FnMut(Vec<u8>) -> Vec<u8>,
+    ) -> Vec<u8> {
+        add(&mut self.callback_count, 1);
+        add(&mut self.callback_input_bytes, input.len() as u128);
+        let started = Instant::now();
+        let output = callback(input);
+        add(&mut self.callback_ns, started.elapsed().as_nanos());
+        add(&mut self.callback_output_bytes, output.len() as u128);
+        output
+    }
+}
+
 struct Owner {
     request: u64,
     executable: PathBuf,
     scheduler: RequestClient,
     helper: Option<MacroHelper>,
+    stats: RequestMacroStats,
 }
 
 fn selected() -> io::Result<MutexGuard<'static, Option<Owner>>> {
@@ -51,8 +90,25 @@ impl RequestMacros {
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| value.checked_add(1))
             .map_err(|_| io::Error::other("proc-macro request identity exhausted"))?;
         REMOTE_DISPATCH.swap(&(dispatch as RemoteDispatch));
-        *current = Some(Owner { request, executable, scheduler, helper: None });
+        *current = Some(Owner {
+            request,
+            executable,
+            scheduler,
+            helper: None,
+            stats: RequestMacroStats::default(),
+        });
         Ok(Self { request })
+    }
+
+    /// Snapshot only this request's totals. Retired identities and unavailable
+    /// owners fail closed rather than returning another request's measurements.
+    pub fn stats(&self) -> io::Result<RequestMacroStats> {
+        let current = selected()?;
+        current
+            .as_ref()
+            .filter(|owner| owner.request == self.request)
+            .map(|owner| owner.stats)
+            .ok_or_else(|| io::Error::other("retired proc-macro request statistics"))
     }
 }
 
@@ -69,7 +125,11 @@ impl Drop for RequestMacros {
 
 fn helper(owner: &mut Owner) -> io::Result<&mut MacroHelper> {
     if owner.helper.is_none() {
-        owner.helper = Some(MacroHelper::spawn(&owner.executable, &owner.scheduler)?);
+        add(&mut owner.stats.helper_spawn_count, 1);
+        let started = Instant::now();
+        let spawned = MacroHelper::spawn(&owner.executable, &owner.scheduler);
+        add(&mut owner.stats.helper_spawn_ns, started.elapsed().as_nanos());
+        owner.helper = Some(spawned?);
     }
     Ok(owner.helper.as_mut().unwrap())
 }
@@ -81,7 +141,11 @@ pub fn active() -> bool {
 pub fn load(path: &Path, symbol: &str) -> io::Result<Vec<ProcMacroClient>> {
     let mut current = selected()?;
     let owner = current.as_mut().ok_or_else(|| io::Error::other("no proc-macro request owner"))?;
-    let (library, count) = helper(owner)?.load(path, symbol)?;
+    add(&mut owner.stats.load_count, 1);
+    let started = Instant::now();
+    let loaded = helper(owner).and_then(|helper| helper.load(path, symbol));
+    add(&mut owner.stats.load_ns, started.elapsed().as_nanos());
+    let (library, count) = loaded?;
     Ok((0..count)
         .map(|client| {
             ProcMacroClient::Remote(RemoteMacro { request: owner.request, library, client })
@@ -104,9 +168,21 @@ fn dispatch(
         }
         // Keep the owner selected across callbacks. Reentry uses try_lock and
         // fails explicitly, never waits for itself and never replays a macro.
-        helper(owner)?.expand(remote.library, remote.client, show_panics, &input, |request| {
-            Ok(callback(request))
-        })
+        add(&mut owner.stats.expand_count, 1);
+        let started = Instant::now();
+        let expanded = (|| {
+            helper(owner)?;
+            let Owner { helper, stats, .. } = owner;
+            helper.as_mut().unwrap().expand(
+                remote.library,
+                remote.client,
+                show_panics,
+                &input,
+                |request| Ok(stats.callback(request, callback)),
+            )
+        })();
+        add(&mut owner.stats.expand_ns, started.elapsed().as_nanos());
+        expanded
     })();
     result.map_err(|error: io::Error| {
         PanicMessage::String(format!("request-owned proc-macro transport failed: {error}"))
@@ -118,6 +194,82 @@ mod tests {
     use super::*;
     use crate::resident_proc_macro_parent::REQUEST_MACRO_TEST_LOCK;
     use rustc_data_structures::jobserver::resident::RequestLease;
+
+    #[test]
+    fn counters_saturate_and_callbacks_preserve_payloads() {
+        let mut counter = u64::MAX - 1;
+        add(&mut counter, 2);
+        assert_eq!(counter, u64::MAX);
+        counter = 0;
+        add(&mut counter, u128::MAX);
+        assert_eq!(counter, u64::MAX);
+
+        let mut stats = RequestMacroStats::default();
+        let output = stats.callback(vec![1, 2, 3], &mut |input| {
+            assert_eq!(input, [1, 2, 3]);
+            vec![4, 5]
+        });
+        assert_eq!(output, [4, 5]);
+        assert_eq!(stats.callback_count, 1);
+        assert_eq!(stats.callback_input_bytes, 3);
+        assert_eq!(stats.callback_output_bytes, 2);
+        assert_eq!(stats.expand_count, 0);
+        stats.callback_count = u64::MAX;
+        stats.callback_input_bytes = u64::MAX;
+        stats.callback_output_bytes = u64::MAX;
+        stats.callback_ns = u64::MAX;
+        stats.callback(vec![1], &mut |input| input);
+        assert_eq!(stats.callback_count, u64::MAX);
+        assert_eq!(stats.callback_input_bytes, u64::MAX);
+        assert_eq!(stats.callback_output_bytes, u64::MAX);
+        assert_eq!(stats.callback_ns, u64::MAX);
+    }
+
+    #[test]
+    fn statistics_reset_and_stale_access_fails_closed() {
+        let _serial = REQUEST_MACRO_TEST_LOCK.lock().unwrap();
+        let mut retired = None;
+        for _ in 0..2 {
+            let lease = RequestLease::begin_serial().unwrap();
+            let owner = RequestMacros::begin(
+                PathBuf::from("/nonexistent-justrust-test-helper/statistics"),
+                lease.client(),
+            )
+            .unwrap();
+            assert_eq!(owner.stats().unwrap(), RequestMacroStats::default());
+            if let Some(request) = retired {
+                assert!(RequestMacros { request }.stats().is_err());
+            }
+            assert!(load(Path::new("/must-not-be-opened.so"), "unused").is_err());
+            let loaded = owner.stats().unwrap();
+            assert_eq!(loaded.load_count, 1);
+            assert_eq!(loaded.helper_spawn_count, 1);
+            assert_eq!(loaded.expand_count, 0);
+            assert!(loaded.load_ns >= loaded.helper_spawn_ns);
+            assert!(
+                dispatch(
+                    RemoteMacro { request: owner.request, library: 0, client: 0 },
+                    false,
+                    vec![],
+                    &mut |_| panic!("failed spawn reached callback"),
+                )
+                .is_err()
+            );
+            let expanded = owner.stats().unwrap();
+            assert_eq!(expanded.expand_count, 1);
+            assert_eq!(expanded.helper_spawn_count, 2);
+            assert_eq!(expanded.callback_count, 0);
+            assert_eq!(expanded.load_count, 1);
+            assert_eq!(expanded.load_ns, loaded.load_ns);
+            assert!(expanded.helper_spawn_ns >= loaded.helper_spawn_ns);
+            assert!(expanded.expand_ns >= expanded.helper_spawn_ns - loaded.helper_spawn_ns);
+            let request = owner.request;
+            drop(owner);
+            assert!(RequestMacros { request }.stats().is_err());
+            retired = Some(request);
+            lease.finish().unwrap();
+        }
+    }
 
     #[test]
     fn generations_and_overlap_fail_before_process_access() {
