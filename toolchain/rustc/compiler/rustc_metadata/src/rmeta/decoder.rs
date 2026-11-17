@@ -1190,16 +1190,22 @@ impl CrateMetadata {
                     attributes.into_iter().map(|attr| Symbol::intern(&attr)).collect();
                 (
                     trait_name,
-                    SyntaxExtensionKind::Derive(Arc::new(DeriveProcMacro { client })),
+                    SyntaxExtensionKind::Derive(Arc::new(DeriveProcMacro {
+                        client: client.into(),
+                    })),
                     helper_attrs,
                 )
             }
-            (client, ProcMacroKind::Attr { name }) => {
-                (name, SyntaxExtensionKind::Attr(Arc::new(AttrProcMacro { client })), Vec::new())
-            }
-            (client, ProcMacroKind::Bang { name }) => {
-                (name, SyntaxExtensionKind::Bang(Arc::new(BangProcMacro { client })), Vec::new())
-            }
+            (client, ProcMacroKind::Attr { name }) => (
+                name,
+                SyntaxExtensionKind::Attr(Arc::new(AttrProcMacro { client: client.into() })),
+                Vec::new(),
+            ),
+            (client, ProcMacroKind::Bang { name }) => (
+                name,
+                SyntaxExtensionKind::Bang(Arc::new(BangProcMacro { client: client.into() })),
+                Vec::new(),
+            ),
         };
 
         let sess = tcx.sess;

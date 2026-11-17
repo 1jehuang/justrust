@@ -11,6 +11,7 @@ use rustc_span::profiling::SpannedEventArgRecorder;
 use rustc_span::{LocalExpnId, Span};
 
 use crate::base::{self, *};
+use crate::proc_macro_client::ProcMacroClient;
 use crate::{diagnostics, proc_macro_server};
 
 fn exec_strategy(sess: &Session) -> impl pm::bridge::server::ExecutionStrategy + 'static {
@@ -31,7 +32,7 @@ fn record_expand_proc_macro<'a>(
 }
 
 pub struct BangProcMacro {
-    pub client: pm::bridge::client::Client,
+    pub client: ProcMacroClient,
 }
 
 impl base::BangProcMacro for BangProcMacro {
@@ -59,7 +60,7 @@ impl base::BangProcMacro for BangProcMacro {
 }
 
 pub struct AttrProcMacro {
-    pub client: pm::bridge::client::Client,
+    pub client: ProcMacroClient,
 }
 
 impl base::AttrProcMacro for AttrProcMacro {
@@ -76,16 +77,17 @@ impl base::AttrProcMacro for AttrProcMacro {
         if ecx.sess.opts.incremental.is_some()
             && ecx.sess.opts.unstable_opts.cache_proc_macros
             && std::env::var_os("JUSTRUST_RUSTC_ATTR_CACHE").is_none_or(|v| v != "0")
+            && let Some(client) = self.client.local()
         {
             let invoc_id = ecx.current_expansion.id;
-            return (*EXPAND_ATTR_MACRO_CACHED)(invoc_id, annotation, annotated, ecx, self.client)
+            return (*EXPAND_ATTR_MACRO_CACHED)(invoc_id, annotation, annotated, ecx, client)
                 .map_err(|()| {
                     // The error was emitted when the macro ran (possibly in an
                     // earlier session, then replayed with the query result).
                     ecx.dcx().span_delayed_bug(span, "cached attribute proc macro failed")
                 });
         }
-        expand_attr_macro(ecx, span, annotation, annotated, self.client)
+        expand_attr_macro_owned(ecx, span, annotation, annotated, self.client)
     }
 }
 
@@ -95,6 +97,16 @@ pub fn expand_attr_macro(
     annotation: TokenStream,
     annotated: TokenStream,
     client: pm::bridge::client::Client,
+) -> Result<TokenStream, ErrorGuaranteed> {
+    expand_attr_macro_owned(ecx, span, annotation, annotated, client.into())
+}
+
+fn expand_attr_macro_owned(
+    ecx: &mut ExtCtxt<'_>,
+    span: Span,
+    annotation: TokenStream,
+    annotated: TokenStream,
+    client: ProcMacroClient,
 ) -> Result<TokenStream, ErrorGuaranteed> {
     let _timer = record_expand_proc_macro(ecx, "expand_proc_macro", span);
     let _jr_phase = rustc_data_structures::profiling::jr_phase("expand_proc_macro");
@@ -129,7 +141,7 @@ pub static EXPAND_ATTR_MACRO_CACHED: AtomicRef<
 );
 
 pub struct DeriveProcMacro {
-    pub client: DeriveClient,
+    pub client: ProcMacroClient,
 }
 
 impl MultiItemModifier for DeriveProcMacro {
@@ -153,10 +165,11 @@ impl MultiItemModifier for DeriveProcMacro {
 
         let res = if ecx.sess.opts.incremental.is_some()
             && ecx.sess.opts.unstable_opts.cache_proc_macros
+            && let Some(client) = self.client.local()
         {
-            (*EXPAND_DERIVE_MACRO_CACHED)(invoc_id, input, ecx, self.client)
+            (*EXPAND_DERIVE_MACRO_CACHED)(invoc_id, input, ecx, client)
         } else {
-            expand_derive_macro(invoc_id, input, ecx, self.client)
+            expand_derive_macro_owned(invoc_id, input, ecx, self.client)
         };
 
         let Ok(output) = res else {
@@ -204,6 +217,15 @@ pub fn expand_derive_macro(
     input: TokenStream,
     ecx: &mut ExtCtxt<'_>,
     client: DeriveClient,
+) -> Result<TokenStream, ()> {
+    expand_derive_macro_owned(invoc_id, input, ecx, client.into())
+}
+
+fn expand_derive_macro_owned(
+    invoc_id: LocalExpnId,
+    input: TokenStream,
+    ecx: &mut ExtCtxt<'_>,
+    client: ProcMacroClient,
 ) -> Result<TokenStream, ()> {
     let _timer =
         ecx.sess.prof.generic_activity_with_arg_recorder("expand_proc_macro", |recorder| {
