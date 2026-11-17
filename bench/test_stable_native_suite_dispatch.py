@@ -61,7 +61,9 @@ class StableNativeDispatchTests(unittest.TestCase):
                 compare.assert_called_once_with(a, b, 10)
 
     def test_mixed_native_workloads_are_rejected_before_dispatch(self):
-        for first, second in (('leaf', 'arithmetic'), ('arithmetic', 'leaf')):
+        for first, second in (('leaf', 'arithmetic'), ('arithmetic', 'leaf'),
+                              ('lexer', 'leaf'), ('leaf', 'lexer'),
+                              ('lexer', 'arithmetic'), ('arithmetic', 'lexer')):
             with self.assertRaisesRegex(SystemExit, 'different stable native workloads'):
                 self.invoke({'schema': f'stable_native_{first}/v1'},
                             {'schema': f'stable_native_{second}/v1'},
@@ -101,6 +103,33 @@ class StableNativeDispatchTests(unittest.TestCase):
         run.assert_called_once()
         args = run.call_args.args[0]
         self.assertEqual(args.compiler, Path('/fixture/rustc'))
+        self.assertEqual(args.items, 8)
+        self.assertEqual(args.expected_driver_sha256, '1' * 64)
+        self.assertEqual(args.expected_compiler_sha256, '2' * 64)
+
+    def test_lexer_dispatch_preserves_strict_gates(self):
+        a = {'schema': 'stable_native_lexer/v1'}
+        b = {'schema': 'stable_native_lexer/v1'}
+        for changed in (False, True):
+            compare = self.invoke(a, b, allow_compiler_change=changed,
+                                  module_name='stable_resident_lexer_suite')
+            if changed:
+                compare.assert_called_once_with(a, b, 10, allow_compiler_change=True)
+            else:
+                compare.assert_called_once_with(a, b, 10)
+        with self.assertRaisesRegex(SystemExit, 'only synthetic'):
+            self.invoke(a, b, require_valid=True, module_name='stable_resident_lexer_suite')
+
+    def test_root_lexer_cli_requires_hash_attestations_and_uses_fn(self):
+        import stable_resident_lexer_suite as adapter
+        argv = ['suite.py', 'stable-native-lexer', '--compiler', '/fixture/rustc',
+                '--output', '/fixture/output', '--items', '8', '-n', '1',
+                '--expected-driver-sha256', '1' * 64,
+                '--expected-compiler-sha256', '2' * 64]
+        with patch.object(adapter, 'run') as run, patch.object(sys, 'argv', argv):
+            suite.main()
+        run.assert_called_once()
+        args = run.call_args.args[0]
         self.assertEqual(args.items, 8)
         self.assertEqual(args.expected_driver_sha256, '1' * 64)
         self.assertEqual(args.expected_compiler_sha256, '2' * 64)

@@ -72,7 +72,7 @@ class LexerSuiteTests(unittest.TestCase):
         with patch.dict('os.environ', {'JUSTRUST_RUSTC_RESIDENT_TYPED': 'leaf', 'JUSTRUST_RUSTC_RESIDENT_VALUES': '1'}):
             environments = {arm: suite.environment(arm) for arm in suite.ARMS}
         for arm, env in environments.items():
-            self.assertEqual(env['JUSTRUST_RUSTC_RESIDENT_TYPED'], '0')
+            self.assertEqual(env['JUSTRUST_RUSTC_RESIDENT_TYPED'], 'control')
             self.assertNotIn('JUSTRUST_RUSTC_RESIDENT_VALUES', env)
             self.assertEqual(env['JUSTRUST_RUSTC_RESIDENT_LEXER'], '1' if arm == 'lexer' else '0')
         self.assertEqual(environments['fresh'], environments['control'])
@@ -330,6 +330,45 @@ class LexerSuiteTests(unittest.TestCase):
             self.assertEqual(suite.artifact_bytes(receipt['rows'][0]['artifacts']['rlib']), b'original failed artifact')
             self.assertEqual(receipt['rows'][0]['record']['stderr_b64'], suite.shared.encoded(b'full original error'))
             self.assertEqual(len(receipt['source_blobs']), 3)
+
+
+    def test_primary_compile_error_survives_shutdown_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            compiler = root / 'bin/rustc'
+            compiler.parent.mkdir()
+            compiler.write_bytes(b'compiler')
+            (root / 'lib').mkdir()
+            (root / 'lib/librustc_driver.so').write_bytes(b'driver')
+            identity = dict(path=str(compiler), sha256=suite.sha(b'compiler'),
+                            drivers=[dict(sha256=suite.sha(b'driver'))])
+
+            class Worker:
+                def __init__(self, compiler, cwd, arm, timeout):
+                    self.command = [str(compiler), '--jr-resident-owned']
+                    self.process = SimpleNamespace(pid=999)
+                    self.environment_sha256 = suite.sha(suite.canonical(suite.environment(arm)))
+                    for name in ('resident.stdout', 'resident.stderr', 'resident.jsonl'):
+                        (cwd / name).write_bytes(b'original raw evidence')
+
+                def compile(self, argv):
+                    raise ValueError('primary compilation protocol failure')
+
+                def close(self):
+                    raise RuntimeError('secondary shutdown failure')
+
+            with patch.object(suite.shared, 'identity', return_value=identity), \
+                    patch.object(suite, 'order', return_value=['control']), \
+                    patch.object(suite, 'LexerResident', Worker):
+                with self.assertRaisesRegex(ValueError, 'primary compilation protocol failure'):
+                    suite.capture(compiler, root / 'out', 1, 2, 1,
+                                  expected_compiler_sha256=identity['sha256'],
+                                  expected_driver_sha256=identity['drivers'][0]['sha256'])
+            receipt = json.loads((root / 'out/receipt.json').read_text())
+            self.assertIn('primary compilation protocol failure', receipt['error'])
+            self.assertIn('secondary shutdown failure', receipt['sessions'][0]['close_error'])
+            for artifact in receipt['sessions'][0]['streams'].values():
+                self.assertEqual(suite.artifact_bytes(artifact), b'original raw evidence')
 
 
 if __name__ == '__main__':

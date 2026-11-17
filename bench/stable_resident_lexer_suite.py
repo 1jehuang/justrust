@@ -9,6 +9,7 @@ import base64
 import os
 import selectors
 import subprocess
+import sys
 import json
 import math
 from pathlib import Path
@@ -43,7 +44,9 @@ def aggregate(rows):
 def environment(arm):
     require(arm in ARMS, 'invalid arm')
     env = typed.environment('control')
-    env['JUSTRUST_RUSTC_RESIDENT_TYPED'] = '0'
+    # Native control enables the ordinary incremental source-view lifecycle,
+    # but never constructs live typed-query retention state.
+    env['JUSTRUST_RUSTC_RESIDENT_TYPED'] = 'control'
     env['JUSTRUST_RUSTC_RESIDENT_LEXER'] = '1' if arm == 'lexer' else '0'
     return env
 
@@ -278,9 +281,15 @@ def capture(compiler, output, items=128, edits=6, repetitions=3, timeout=180,
                             if active.exists():
                                 active.rename(bank)
                 finally:
+                    failing = sys.exc_info()[0] is not None
                     try:
                         if worker is not None:
-                            worker.close()
+                            try:
+                                worker.close()
+                            except BaseException as close_error:
+                                session['close_error'] = f'{type(close_error).__name__}: {close_error}'
+                                if not failing:
+                                    raise
                     finally:
                         for stream in ('resident.stdout', 'resident.stderr', 'resident.jsonl'):
                             path = workspace / stream
@@ -319,7 +328,7 @@ def validate(report, allow_compiler_change=False):
     require(set(execution['environment_sha256']) == set(ARMS) and all(re.fullmatch('[0-9a-f]{64}', v) for v in execution['environment_sha256'].values()), 'invalid environment identity')
     require(set(execution['common_environment_sha256']) == set(ARMS) and len(set(execution['common_environment_sha256'].values())) == 1 and all(re.fullmatch('[0-9a-f]{64}', v) for v in execution['common_environment_sha256'].values()), 'arms differ beyond lexer flag')
     require(execution['environment_sha256']['fresh'] == execution['environment_sha256']['control'], 'fresh/control environments differ')
-    require(execution['gates'] == {a: {'JUSTRUST_RUSTC_RESIDENT_TYPED': '0', 'JUSTRUST_RUSTC_RESIDENT_LEXER': '1' if a == 'lexer' else '0'} for a in ARMS}, 'unsafe retention gates')
+    require(execution['gates'] == {a: {'JUSTRUST_RUSTC_RESIDENT_TYPED': 'control', 'JUSTRUST_RUSTC_RESIDENT_LEXER': '1' if a == 'lexer' else '0'} for a in ARMS}, 'unsafe retention gates')
     host = report['host']
     require(re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', host.get('boot_id', '')) and host.get('affinity') and host.get('execution') == 'local-native-owned', 'missing host boot/affinity/execution')
     require(host['affinity'] == sorted(set(host['affinity'])) and all(type(v) is int and v >= 0 for v in host['affinity']), 'invalid affinity')
