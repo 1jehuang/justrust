@@ -83,5 +83,27 @@ AST caching. No compiler optimization before/after change was measured here.
 
 The comprehensive session-weighted synthetic gate, full-project Cargo routing,
 general changed-source Typeck/HIR residency, external-type reuse and default
-promotion are not established by this experiment. Hosted AST correctness is a
-separate remaining acceptance step.
+promotion are not established by this experiment.
+
+## Hosted correctness acceptance
+
+The same immutable compiler and complete matching library sysroot passed native
+AST transitions, AST-enabled safety guards and three shipping-module dogfood
+repetitions on the authenticated hosted guest on November 17, 2026:
+
+- `bench/stable-resident-ast-host-20261117-0344-native`
+- `bench/stable-resident-ast-host-20261117-0344-guard`
+- `bench/stable-resident-ast-host-20261117-0344-dogfood`
+
+The launcher SHA256 was
+`8cb4b7089e2e70cbd4832fdf53a24ef2e27db676dcc3632c2501134e6f3dd567`
+and the driver SHA256 was
+`5d1f35080f0c2c0e0d5d6c6039318a200e96b7b6e8f29f6b57fc6260084588bb`,
+matching the local frozen candidate. Original guest evidence directories,
+including raw streams, were preserved locally. All three generated receipts
+passed authenticated exact JSON readback, without float tolerance or rewriting.
+
+This low-priority guest run establishes correctness only. It is not hosted
+performance evidence, Cargo-path acceptance, proof of general typed-query reuse,
+or a reason to enable AST retention by default. The published client and
+production defaults were not replaced.
