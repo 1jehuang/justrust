@@ -1812,8 +1812,40 @@ def named_test_failure_issues(result: dict) -> list[str]:
     return issues
 
 
+def own_loop_macro_spins(value):
+    if not value.isascii() or not value.isdecimal() or str(int(value)) != value or not 0 <= int(value) <= 256:
+        raise argparse.ArgumentTypeError("expected canonical integer in 0..256")
+    return int(value)
+
+
 def cmd_compare(args) -> None:
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
+    own_loop_options = {
+        "expected_" + side + "_macro_" + control: getattr(args, "own_loop_" + side + "_macro_" + control, None)
+        for side in ("before", "after") for control in ("shm", "spins")}
+    own_loop_schema = "stable-resident-own-loop/v1"
+    own_loop_receipt = any(str(result.get("schema", "")).startswith("stable-resident-own-loop") for result in (a, b))
+    if own_loop_receipt:
+        if any(result.get("schema") != own_loop_schema for result in (a, b)):
+            sys.exit("bench: own-loop comparison requires two exact stable-resident-own-loop/v1 receipts, never diagnostics")
+        if getattr(args, "require_valid", False):
+            sys.exit("bench: --require-valid supports only synthetic comparisons")
+        if getattr(args, "allow_compiler_change", False):
+            sys.exit("bench: own-loop comparison requires identical compiler/driver candidates, broad --allow-compiler-change is refused")
+        for side in ("before", "after"):
+            key = "expected_" + side + "_macro_shm"
+            if own_loop_options[key] is not None:
+                if own_loop_options[key] not in ("0", "1"):
+                    sys.exit("bench: own-loop macro SHM expectation must be 0 or 1")
+                own_loop_options[key] = own_loop_options[key] == "1"
+        from stable_resident_own_loop import compare
+        result = compare(a, b, args.floor, **own_loop_options)
+        print(json.dumps(dict(schema="stable-resident-own-loop-comparison/v1",
+                              claim="Scoped own-loop real-source comparison only. No general performance or default-promotion claim.",
+                              comparison=result), indent=2))
+        return
+    if any(value is not None for value in own_loop_options.values()):
+        sys.exit("bench: --own-loop-* flags require two own-loop receipts")
     leaf_receipt = any(str(result.get("schema", "")).startswith("stable_native_leaf/") for result in (a, b))
     arithmetic_receipt = any(str(result.get("schema", "")).startswith("stable_native_arithmetic/") for result in (a, b))
     lexer_receipt = any(str(result.get("schema", "")).startswith("stable_native_lexer/") for result in (a, b))
@@ -2034,6 +2066,11 @@ def main() -> None:
     s.add_argument("file")
     s.set_defaults(fn=cmd_show)
     c = sub.add_parser("compare")
+    for side in ("before", "after"):
+        c.add_argument("--own-loop-" + side + "-macro-spins", type=own_loop_macro_spins,
+                       help="exact expected own-loop macro spin count, 0..256")
+        c.add_argument("--own-loop-" + side + "-macro-shm", choices=("0", "1"),
+                       type=str, help="exact expected own-loop SHM mode, 0 or 1")
     c.add_argument("a")
     c.add_argument("b")
     c.add_argument("--require-valid", action="store_true",
