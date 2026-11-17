@@ -315,3 +315,38 @@ original generated evidence. General speed claims or managed-hosted default
 promotion additionally require the comprehensive session-weighted suite and
 managed worker integration. The published client and ordinary compiler path
 remain unchanged during development.
+
+## Strict Typeck demand diagnostic (2026-11-17)
+
+`bench/stable_resident_typeck.py` requires a positive actual `typeck_hits`
+delta on successful unchanged repeats. MIR hits cannot satisfy this oracle.
+Against the frozen memoized compiler from `20261116-1555`, this acceptance
+**fails**: unchanged repeats record zero Typeck hits while MIR hits increase
+to 15. Exact diagnostics, primitive LLVM output, disabled controls and error
+recovery still pass. The original failed receipt is stored as
+`bench/stable-typeck-acceptance-20261117-0047-final-original`, with authenticated
+exact JSON readback verified. The dedicated harness has 26 passing mock tests.
+
+The observed unchanged repeats have zero Typeck misses as well as zero hits.
+That is consistent with normal green `ensure_ok` checks avoiding materializing
+the Typeck result, rather than evidence that a retained lookup is succeeding.
+This is a diagnostic inference, not a demonstrated explanation for every query.
+Forcing unnecessary Typeck work merely to increase a hit counter would not
+demonstrate a faster edit loop.
+
+The native query telemetry now distinguishes revision-level identity begin and
+completion rejections from query misses, and counts successful publications and
+aborted revisions. Disabled mode does not increment these revision counters.
+Driver typecheck, 69 resident middle tests, two lifetime-escape doctests and eight
+metadata tests passed after this additive change. These counters are not present
+in the earlier frozen timing compiler, and do not change its measured results.
+
+`CStore::capture_external_metadata` now provides a bounded owned prerequisite
+snapshot of the actual loaded metadata bytes and encoded-to-current crate-number
+maps, including transitive crates. It does not reopen paths or substitute hashes
+for bytes. Proc macros and unsupported numeric maps reject capture. This is not
+permission to reuse external types: imported source translations, hygiene,
+allocation decoding, complete invocation inputs and other session-local decoder
+state still require validation. The existing external-crate rejection remains
+in force. Neither this prerequisite nor the strict Typeck diagnostic completes
+general real-project frontend residency.
