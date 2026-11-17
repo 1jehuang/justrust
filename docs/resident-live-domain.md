@@ -350,3 +350,26 @@ allocation decoding, complete invocation inputs and other session-local decoder
 state still require validation. The existing external-crate rejection remains
 in force. Neither this prerequisite nor the strict Typeck diagnostic completes
 general real-project frontend residency.
+
+The actual loaded-`std` acceptance also passes: two fresh contexts capture equal
+owned metadata snapshots, repeated captures match, all three budgets reject,
+and recapture after rejection still matches. The test explicitly requires the
+external-crate reuse gate to keep rejecting. It selects the matching bootstrap
+sysroot rather than the unit executable's default location. After that test-only
+source change, matching std was rebuilt normally. No metadata version override
+or incompatible-artifact acceptance was used.
+
+The frozen `stable-resident-metadata-20261117-0057-sysroot` candidate's driver is
+`d351240a07c8e4db4cb9422393787b0c1382ed7bf34b0f42cd91597de46efa96`.
+Its actual same-source native-query, safety-guard and shipping-module `n=3`
+correctness regressions pass. Exact original records are stored and authenticated
+JSON readback verified as `bench/stable-resident-metadata-20261117-0057-{typed,guard,dogfood}`.
+The enabled query fixture reports nine published and two aborted revisions;
+control revision counters remain zero. These are local correctness runs, not
+production performance or full-client typed-reuse acceptance.
+
+The shared query harness now explicitly reports `observed_hit_kinds`, so its
+either-kind acceptance cannot be mistaken for Typeck-specific acceptance.
+The fresh report `bench/stable-resident-metadata-20261117-0100-observed-kinds`
+passes and names only `mir`; its exact original JSON readback is verified.
+The separate strict Typeck receipt remains failed and unchanged.
