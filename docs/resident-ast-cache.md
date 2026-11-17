@@ -110,6 +110,27 @@ cache effect amid larger repeat drift does not establish a reproducible speedup.
 All three untouched generated receipts passed exact authenticated JSON readback.
 No compiler code, production default or published client was changed.
 
+The larger unchanged admission-boundary diagnostic used 128 functions, 8 helper
+edits and 6 repetitions, with 48 measured observations per arm. Local original
+evidence directories are
+`~/.jcode/scratch/stable-resident-composed-suite-20261117-0401-large-{a,b}`.
+The process-only/combined medians were 27.463/27.872 ms and 27.208/27.814 ms,
+respectively. Combined retention was 1.0149x and 1.0223x the process-only time.
+The repeat comparison validated identical provenance and reported fresh +6.85%
+and control -0.93%. This larger diagnostic also provides no added cache win.
+Consumer correctness, exact per-cache telemetry and cache bounds passed.
+
+Both original receipts and raw evidence remain local and unchanged. Automatic
+record upload failed with HTTP 413, so these two larger receipts are **not**
+claimed remotely archived or readback-verified. Their sizes are 3,762,220 and
+3,762,206 bytes, exceeding the bounded record endpoint. Original SHA256 values:
+
+- `a`: `1dde304801b00ce93ed108647dbd4a31b8c009a45f77da8d7b5e2c5eda3e043a`
+- `b`: `d1d5f5602d01f4c90ed08354ade8745299cfb4af7405ed6d0ba290bae863f43a`
+
+Do not raise the D1-backed endpoint cap without a safe large-record storage
+protocol, truncate receipts, or substitute a summary as the original evidence.
+
 ## Hosted correctness acceptance
 
 The same immutable compiler and complete matching library sysroot passed native
