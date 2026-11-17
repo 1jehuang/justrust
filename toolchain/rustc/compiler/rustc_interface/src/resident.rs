@@ -377,6 +377,112 @@ mod tests {
     }
 
     #[test]
+    fn resident_batch_captures_actual_loaded_external_metadata() {
+        use rustc_metadata::creader::CStore;
+        use rustc_metadata::resident_metadata::{MetadataSnapshotError, MetadataSnapshotLimits};
+        use rustc_middle::ty::resident_compiler_identity::{
+            CompilerIdentityError, FrozenSemanticInvocation, build_revision_identity,
+        };
+        use rustc_middle::ty::resident_identity::IdentityBudget;
+
+        let make_config = || {
+            let mut config = config(0);
+            config.input = Input::Str {
+                name: FileName::Custom("resident-external-metadata.rs".into()),
+                input: "pub fn value() -> bool { std::hint::black_box(true) }".into(),
+            };
+            config
+        };
+        let limits = MetadataSnapshotLimits {
+            max_crates: 1024,
+            max_metadata_bytes: 512 * 1024 * 1024,
+            max_mapping_entries: 1024 * 1024,
+        };
+        with_resident_compiler_batch(make_config(), |batch, first| {
+            let mut snapshots = Vec::new();
+            for config in [first, make_config()] {
+                let snapshot = batch.run(config, |compiler, domain| {
+                    let krate = crate::passes::parse(&compiler.sess);
+                    let (snapshot, locks) = crate::passes::create_and_enter_global_ctxt_in_domain(
+                        compiler,
+                        domain,
+                        krate,
+                        |tcx| {
+                            tcx.ensure_ok().analysis(());
+                            assert!(
+                                tcx.crates(())
+                                    .iter()
+                                    .any(|&cnum| { tcx.crate_name(cnum) == rustc_span::sym::std }),
+                                "fixture must load actual standard-library metadata"
+                            );
+                            let snapshot = {
+                                let cstore = CStore::from_tcx(tcx);
+                                let snapshot = cstore
+                                    .capture_external_metadata(limits)
+                                    .expect("bounded actual loaded metadata snapshot");
+                                assert_eq!(
+                                    snapshot,
+                                    cstore.capture_external_metadata(limits).unwrap(),
+                                    "repeat capture must compare actual loaded bytes and maps"
+                                );
+                                for (bounded, error) in [
+                                    (
+                                        MetadataSnapshotLimits { max_crates: 0, ..limits },
+                                        MetadataSnapshotError::CrateBudget,
+                                    ),
+                                    (
+                                        MetadataSnapshotLimits { max_metadata_bytes: 0, ..limits },
+                                        MetadataSnapshotError::MetadataBudget,
+                                    ),
+                                    (
+                                        MetadataSnapshotLimits { max_mapping_entries: 0, ..limits },
+                                        MetadataSnapshotError::MappingBudget,
+                                    ),
+                                ] {
+                                    assert_eq!(
+                                        cstore.capture_external_metadata(bounded),
+                                        Err(error)
+                                    );
+                                }
+                                assert_eq!(
+                                    snapshot,
+                                    cstore.capture_external_metadata(limits).unwrap(),
+                                    "budget rejection must not change loaded compiler inputs"
+                                );
+                                snapshot
+                            };
+                            assert!(matches!(
+                                build_revision_identity(
+                                    tcx,
+                                    FrozenSemanticInvocation {
+                                        namespace: b"native-loaded-metadata-prerequisite-v1",
+                                        options: b"fixed-std-fixture",
+                                        body_revision: b"unchanged",
+                                    },
+                                    IdentityBudget {
+                                        max_crates: 1024,
+                                        max_definitions: 1024,
+                                        max_identity_bytes: 1024 * 1024,
+                                    },
+                                ),
+                                Err(CompilerIdentityError::UnsupportedExternalCrates)
+                            ));
+                            snapshot
+                        },
+                    )
+                    .expect("available context storage");
+                    assert!(locks.is_none());
+                    snapshot
+                });
+                snapshots.push(snapshot);
+            }
+            // These owned values survive their original contexts. Equal inputs do
+            // not authorize external DefId/source/interner or typed query reuse.
+            assert_eq!(snapshots[0], snapshots[1]);
+        });
+    }
+
+    #[test]
     fn resident_batch_keeps_project_typeck_alive_across_fresh_contexts() {
         let first = config(0);
         let second = config(1);
