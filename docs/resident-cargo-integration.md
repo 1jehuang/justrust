@@ -1,5 +1,47 @@
 # Native resident Cargo integration, 2026-11-17
 
+## Own-source macro transport and measurement contract
+
+The dependency-bearing justrust library now passes real hosted edit loops through
+native resident Cargo workers, including fresh per-request proc-macro helper
+processes. This remains explicit experimental routing, not the default toolchain.
+The published client is alpha.37. Retaining the process does not yet retain
+arbitrary live typed queries across these macro-bearing revisions.
+
+`JUSTRUST_CARGO_RESIDENT_MACRO_SHM=1` selects authenticated shared-memory helper
+transport. The original Unix socket remains alive and authenticates the peer
+before the inherited sealed memfd is attached. Fixed-size rings use bounded
+futex waits, permanent role claims, and terminal failure without replay.
+`JUSTRUST_CARGO_RESIDENT_MACRO_SPINS` accepts only canonical decimal `0..=256`.
+It defaults to zero and a nonzero value requires shared-memory transport.
+The explicit spin budget does not change the request timeout or admission rules.
+
+The real-source benchmark is `bench/stable_resident_own_loop.py`. It changes a
+function expression in this repository, checks the root RPC and stable worker
+identity, retains raw output, and restores the exact source in `finally`.
+Diagnostic-only and `-Ztime-passes` captures cannot be performance evidence.
+`bench/suite.py compare` accepts these original receipts and requires all four
+exact compiler/driver hashes when comparing different native candidates. Host,
+workload, client, Cargo identity, harness and unrelated settings stay matched.
+
+The exact `stable-resident-own-loop-spin0-20261117-1923` and
+`stable-resident-own-loop-spin256-20261117-1923` originals show resident body-edit
+medians of 8.20 to 4.96 seconds and 8.39 to 5.37 seconds, with residency-off near
+4.2 seconds. This is a focused reduction in resident overhead, not a 10× result,
+a general build speedup, or grounds for default promotion. A later cacheline
+padding/local-copy experiment did not consistently improve the matched loop and
+was withdrawn. Its original candidate and matched control are archived as
+`stable-resident-own-loop-local-layout-20261117-1943` and
+`stable-resident-own-loop-matched-baseline-20261117-1947`.
+
+Native request telemetry now includes a bounded 256-counter callback wire-tag
+histogram, reset per request and serialized sparsely without retaining payloads.
+The actual-source diagnostic `stable-resident-own-loop-wire-tags-20261117-1953`
+identified token concatenation, cloning and dropping as the dominant round trips.
+Wire tags are interpreted against that exact compiler's bridge API, not assumed
+to be an independently stable protocol. This telemetry does not affect cache
+identity, admission, or macro execution.
+
 ## Production-hosted compiler-owner followthrough, 13:00 UTC
 
 With `JUSTRUST_CARGO_RESIDENT_OWNED=1` and external admission enabled, the actual
