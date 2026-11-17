@@ -184,6 +184,40 @@ than being included in the local evidence transfer. This remains the narrow
 std-only library fixture, not the dependency-heavy client crate or the complete
 session-weighted synthetic gate. No installed client or default was changed.
 
+## Dependency-bearing fallback acceptance, 2026-11-17
+
+A separate real `justrust cargo test` acceptance now covers an offline local
+path dependency while keeping external-crate resident admission rejected.
+`bench/stable_resident_cargo_dependency.py` runs ten stages in each of the
+ordinary-off and enabled arms. It exercises a root-only edit and compiler error,
+recovery, dependency signature, exported constant and runtime-body changes,
+a dependency compiler error and recovery, and a final root-only edit. Dependency
+source paths remain unchanged throughout the edits.
+
+The actual frozen guest run passed all 20 observations. Runtime nonce/value
+checks and full diagnostic JSON matched the ordinary-process oracle. Every
+root-only stage required Cargo to report the dependency fresh and required zero
+resident completion events, proving those dependent-root builds stayed on the
+ordinary fallback path. A std-only dependency may itself use the worker when
+rebuilt. Such an event is not evidence of retained external typed state or
+admission of the dependent root. Artifact hashes are recorded as observations,
+not treated as a byte-equivalence oracle.
+
+The frozen helper and original Cargo helper regression selection passed 43
+Python tests before native execution. The native run used the same immutable
+compiler, Cargo and explicit client candidates listed above, with SHA
+attestations checked before candidate execution. No compiler gate was relaxed.
+Original source snapshots, complete command streams, artifact observations and
+trace events are preserved in the private record:
+
+```text
+justrust records show bench stable-resident-cargo-dependency-20261117-0439
+```
+
+This is fallback correctness evidence only. It is not dependency-bearing
+resident acceleration, unrestricted external metadata compatibility, or a
+performance result.
+
 ## Performance status and next gate
 
 The focused gate above adds actual-client timing evidence, but no tenfold,
