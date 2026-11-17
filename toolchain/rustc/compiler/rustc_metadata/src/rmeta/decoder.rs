@@ -1043,6 +1043,12 @@ impl CrateRoot {
 }
 
 impl CrateMetadata {
+    /// Borrow the exact loaded decoder input and its numeric crate translation.
+    /// Resident capture copies these bytes rather than reopening artifact paths.
+    pub(crate) fn resident_metadata_inputs(&self) -> (&[u8], &CrateNumMap) {
+        (&self.blob, &self.cnum_map)
+    }
+
     fn missing(&self, descr: &str, id: DefIndex) -> ! {
         bug!("missing `{descr}` for {:?}", self.local_def_id(id))
     }
