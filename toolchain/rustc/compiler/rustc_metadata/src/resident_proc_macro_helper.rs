@@ -150,17 +150,18 @@ fn load(libraries: &mut Vec<Library>, path: &str, symbol: &str) -> io::Result<Ve
 
 /// Runs only inside the fresh helper, with resident mode disabled. Shutdown or
 /// any Failure ends the session. No operation is retried after an Invoke.
-pub fn run(mut stream: UnixStream) -> io::Result<()> {
+pub fn run(stream: UnixStream) -> io::Result<()> {
     if rustc_session::resident::is_process() {
         return Err(io::Error::other("proc-macro helper must be a fresh non-resident process"));
     }
     let mut libraries = Vec::new();
+    let mut session = transport::Session::new(stream);
     loop {
         // The ABI callback returns bytes rather than Result. Keep the first IO
         // failure outside that ABI, so an encoded client-side decode panic cannot
         // obscure it or turn an interrupted expansion into a successful reply.
         let mut callback_error = None;
-        let result = transport::helper_pump(&mut stream, |payload, callback| {
+        let result = session.respond(|payload, callback| {
             if payload.len() > MAX_FRAME_BYTES {
                 return Err(invalid("proc-macro command exceeds frame limit"));
             }

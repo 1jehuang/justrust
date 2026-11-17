@@ -20,25 +20,34 @@ SCHEMA = 'stable-resident-cargo-proc-macro/v1'
 MANIFEST = dependency.MANIFEST.replace('fixture_dep', 'fixture_macro')
 DEP_MANIFEST = dependency.DEP_MANIFEST.replace('fixture_dep', 'fixture_macro') + '\n[lib]\nproc-macro=true\n'
 MACRO = br'''extern crate proc_macro;
-use proc_macro::TokenStream;
+use proc_macro::{TokenStream, TokenTree};
+use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
+thread_local! { static THREAD_COUNTER: Cell<usize> = const { Cell::new(0) }; }
 #[proc_macro]
 pub fn probe(input: TokenStream) -> TokenStream {
     let count = COUNTER.fetch_add(1, Ordering::SeqCst) + 1;
-    let name = input.to_string();
-    let nonce = std::env::var("JR_PM_NONCE").expect("request nonce");
+    let thread_count = THREAD_COUNTER.with(|counter| {
+        let next = counter.get() + 1;
+        counter.set(next);
+        next
+    });
+    let mut input = input.into_iter();
+    let name = match input.next() { Some(TokenTree::Ident(name)) => name.to_string(), _ => panic!("probe name") };
+    let nonce = match input.next() { Some(TokenTree::Literal(value)) => value.to_string(), _ => panic!("probe nonce literal") };
+    assert!(input.next().is_none());
     let value = match std::env::var("JR_PM_VALUE") {
         Ok(value) => value,
-        Err(_) => return format!("compile_error!({:?});", format!("JR_PM_ERROR={}:env", nonce)).parse().unwrap(),
+        Err(_) => return format!("compile_error!(concat!(\"JR_PM_ERROR=\", {}, \":env\"));", nonce).parse().unwrap(),
     };
     let path = std::env::var("JR_PM_FILE").expect("input path");
     let file = match std::fs::read_to_string(path) {
         Ok(value) => value,
-        Err(_) => return format!("compile_error!({:?});", format!("JR_PM_ERROR={}:file", nonce)).parse().unwrap(),
+        Err(_) => return format!("compile_error!(concat!(\"JR_PM_ERROR=\", {}, \":file\"));", nonce).parse().unwrap(),
     };
-    format!("const {}: (usize, &str, &str, &str) = ({}, {:?}, {:?}, {:?});",
-            name, count, value, file, nonce).parse().unwrap()
+    format!("const {}: (usize, &str, &str, &str, usize) = ({}, {:?}, {:?}, {}, {});",
+            name, count, value, file, nonce, thread_count).parse().unwrap()
 }
 '''
 
@@ -57,13 +66,16 @@ def stages(nonce):
     for name, env, file, error in specs:
         token = f'{nonce}-{name}'
         root = f'''// forced actual root edit: {token}
-fixture_macro::probe!(A);
-fixture_macro::probe!(B);
+fixture_macro::probe!(A {json.dumps(token)});
+fixture_macro::probe!(B {json.dumps(token)});
 #[test]
 fn proc_macro_nonce_probe() {{
     let mut counts = [A.0, B.0];
     counts.sort();
     assert_eq!(counts, [1, 2]);
+    let mut thread_counts = [A.4, B.4];
+    thread_counts.sort();
+    assert_eq!(thread_counts, [1, 2]);
     assert_eq!((A.1, A.2, A.3), ({json.dumps(env or '')}, {json.dumps(file or '')}, {json.dumps(token)}));
     assert_eq!((B.1, B.2, B.3), (A.1, A.2, A.3));
     eprintln!("JR_PM_RUNTIME={{}}:1,2:{{}}:{{}}", A.3, A.1, A.2);
@@ -71,7 +83,7 @@ fn proc_macro_nonce_probe() {{
 '''.encode()
         if error:
             root = (f'// forced actual root edit: {token}\n'
-                    'fixture_macro::probe!(A);\nfixture_macro::probe!(B);\n'
+                    f'fixture_macro::probe!(A {json.dumps(token)});\nfixture_macro::probe!(B {json.dumps(token)});\n'
                     '#[test]\nfn proc_macro_nonce_probe() {}\n').encode()
         rows.append(dict(name=name, root=root, env=env, file=file, token=token,
                          expectation='error' if error else 'pass', error=error,
@@ -127,6 +139,7 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
         env['JUSTRUST_CARGO_RESIDENT_EXTERNAL'] = '1'
     report = dict(mode=mode, verdict='incomplete', observations=[])
     previous_macro = previous_root = None
+    previous_environment = object()
     try:
         for index, stage in enumerate(workload):
             (fixture / 'src/lib.rs').write_bytes(stage['root'])
@@ -135,7 +148,6 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
                 input_path.unlink(missing_ok=True)
             else:
                 input_path.write_text(stage['file'])
-            env['JR_PM_NONCE'] = stage['token']
             env['JR_PM_FILE'] = str(input_path)
             env.pop('JR_PM_VALUE', None)
             if stage['env'] is not None:
@@ -158,7 +170,13 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
             previous_macro = validate_artifacts(row['metadata'], previous_macro)
             row['residency'] = dependency.validate_trace(stage, row['trace'], mode, require_resident_root)
             if require_resident_root and mode == 'on':
+                # Environment is part of the worker key. Changed environment
+                # correctly selects a new worker, while same-environment root
+                # edits and file mutations must reuse the existing worker.
+                if previous_environment != stage['env']:
+                    previous_root = None
                 previous_root = dependency.validate_root_transition(stage, row['residency'], previous_root)
+                previous_environment = stage['env']
         report['verdict'] = 'passed'
     except BaseException as error:
         report.update(verdict='failed', error=f'{type(error).__name__}: {error}')

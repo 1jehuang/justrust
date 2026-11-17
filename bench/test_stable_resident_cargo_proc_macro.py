@@ -41,13 +41,18 @@ class ProcMacroOracleTests(unittest.TestCase):
         self.assertEqual(len({s['root'] for s in rows}), len(rows))
         self.assertEqual([s['error'] for s in rows if s['error']], ['env', 'file'])
         for stage in rows:
-            self.assertIn(b'fixture_macro::probe!(A)', stage['root'])
-            self.assertIn(b'fixture_macro::probe!(B)', stage['root'])
+            self.assertIn(b'fixture_macro::probe!(A "', stage['root'])
+            self.assertIn(b'fixture_macro::probe!(B "', stage['root'])
             self.assertIn(stage['token'].encode(), stage['root'])
             if not stage['error']:
                 self.assertIn(b'assert_eq!(counts, [1, 2])', stage['root'])
         self.assertIn(b'static COUNTER: AtomicUsize', subject.MACRO)
         self.assertIn(b'fetch_add(1, Ordering::SeqCst)', subject.MACRO)
+        self.assertIn(b'static THREAD_COUNTER: Cell<usize>', subject.MACRO)
+        self.assertNotIn(b'JR_PM_NONCE', subject.MACRO)
+        for stage in rows:
+            if not stage['error']:
+                self.assertIn(b'assert_eq!(thread_counts, [1, 2])', stage['root'])
 
     def test_exact_success_and_diagnostic_nonces(self):
         for stage in subject.stages('unique'):
@@ -101,7 +106,7 @@ class ProcMacroOracleTests(unittest.TestCase):
             calls.append(dict(argv=argv, env=dict(env)))
             self.assertEqual((cwd / 'src/lib.rs').read_bytes(), stage['root'])
             self.assertEqual(env.get('JR_PM_VALUE'), stage['env'])
-            self.assertEqual(env['JR_PM_NONCE'], stage['token'])
+            self.assertNotIn('JR_PM_NONCE', env)
             path = Path(env['JR_PM_FILE'])
             self.assertEqual(path.read_text() if path.exists() else None, stage['file'])
             return record(stage)

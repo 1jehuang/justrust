@@ -70,6 +70,8 @@ pub mod owned_slice;
 pub mod packed;
 pub mod profiling;
 pub mod range_set;
+#[cfg(unix)]
+pub mod resident_macro_transport;
 pub mod sharded;
 pub mod small_c_str;
 pub mod snapshot_map;

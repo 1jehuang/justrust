@@ -131,6 +131,159 @@ macro_rules! define_dispatcher {
 }
 with_api!(define_dispatcher, MarkedTokenStream<S>, MarkedSpan<S>, MarkedSymbol<S>);
 
+impl<S: Server> Dispatcher<S> {
+    /// Dispatch one owned wire request without sharing allocator-owned buffers
+    /// with another process. Handles remain owned by this expansion's server.
+    pub fn dispatch_bytes(&mut self, request: Vec<u8>) -> Vec<u8> {
+        self.dispatch(Buffer::from(request)).to_vec()
+    }
+}
+
+/// Execute a one-input expansion through an external byte transport. This does
+/// not change the dylib `Client` ABI or permit executing a client function pointer
+/// in another process. The caller must independently identify and load that
+/// client in its fresh helper process.
+pub fn run1_external<S: Server>(
+    server: S,
+    input: S::TokenStream,
+    execute: impl FnOnce(&mut Dispatcher<S>, Vec<u8>) -> Result<Vec<u8>, PanicMessage>,
+) -> Result<S::TokenStream, PanicMessage> {
+    run_server_external(server, <MarkedTokenStream<S>>::mark(input), execute)
+        .map(|s| <Option<MarkedTokenStream<S>>>::unmark(s).unwrap_or_default())
+}
+
+/// Two-input counterpart used by attribute macros.
+pub fn run2_external<S: Server>(
+    server: S,
+    input: S::TokenStream,
+    input2: S::TokenStream,
+    execute: impl FnOnce(&mut Dispatcher<S>, Vec<u8>) -> Result<Vec<u8>, PanicMessage>,
+) -> Result<S::TokenStream, PanicMessage> {
+    run_server_external(
+        server,
+        (<MarkedTokenStream<S>>::mark(input), <MarkedTokenStream<S>>::mark(input2)),
+        execute,
+    )
+    .map(|s| <Option<MarkedTokenStream<S>>>::unmark(s).unwrap_or_default())
+}
+
+fn run_server_external<
+    S: Server,
+    I: Encode<HandleStore<S>>,
+    O: for<'a, 's> Decode<'a, 's, HandleStore<S>>,
+>(
+    server: S,
+    input: I,
+    execute: impl FnOnce(&mut Dispatcher<S>, Vec<u8>) -> Result<Vec<u8>, PanicMessage>,
+) -> Result<O, PanicMessage> {
+    let mut dispatcher = Dispatcher { handle_store: HandleStore::new(), server };
+    let globals = dispatcher.server.globals();
+    let mut buf = Buffer::new();
+    (<ExpnGlobals<MarkedSpan<S>> as Mark>::mark(globals), input)
+        .encode(&mut buf, &mut dispatcher.handle_store);
+    let output = execute(&mut dispatcher, buf.to_vec())?;
+    Result::decode(&mut &output[..], &mut dispatcher.handle_store)
+}
+
+impl client::Client {
+    /// Run a helper-local client against a byte callback transport. The input,
+    /// output and callbacks are copied into buffers owned by this process.
+    pub fn run_external_bytes(
+        &self,
+        input: Vec<u8>,
+        mut dispatch: impl FnMut(Vec<u8>) -> Vec<u8>,
+        force_show_panics: bool,
+    ) -> Vec<u8> {
+        let mut callback = |request: Buffer| Buffer::from(dispatch(request.to_vec()));
+        (self.run)(BridgeConfig {
+            input: Buffer::from(input),
+            dispatch: (&mut callback).into(),
+            force_show_panics,
+        })
+        .to_vec()
+    }
+}
+
+#[cfg(test)]
+mod external_tests {
+    use super::*;
+
+    struct TestServer;
+
+    macro_rules! test_dispatch {
+        (ts_drop, $stream:ident) => { drop($stream) };
+        (ts_clone, $stream:ident) => { $stream.clone() };
+        (ts_is_empty, $stream:ident) => { $stream.is_empty() };
+        ($method:ident $(, $arg:ident)*) => {{
+            $(let _ = $arg;)*
+            panic!("unexpected bridge method {}", stringify!($method))
+        }};
+    }
+
+    macro_rules! test_server {
+        ($(fn $method:ident($($arg:ident: $arg_ty:ty),* $(,)?) $(-> $ret_ty:ty)?;)*) => {
+            impl Server for TestServer {
+                type TokenStream = Vec<u32>;
+                type Span = u32;
+                type Symbol = String;
+
+                fn globals(&mut self) -> ExpnGlobals<u32> {
+                    ExpnGlobals { def_site: 1, call_site: 2, mixed_site: 3 }
+                }
+
+                fn intern_symbol(ident: &str) -> String { ident.to_owned() }
+
+                fn with_symbol_string(symbol: &String, f: impl FnOnce(&str)) { f(symbol) }
+
+                $(fn $method(&mut self, $($arg: $arg_ty),*) $(-> $ret_ty)? {
+                    test_dispatch!($method $(, $arg)*)
+                })*
+            }
+        };
+    }
+    with_api!(test_server, Self::TokenStream, Self::Span, Self::Symbol);
+
+    #[test]
+    fn external_bytes_preserve_handles_and_callbacks() {
+        let client = client::Client::expand1(|input: crate::TokenStream| input.clone());
+        let expected = vec![7, 11, 19];
+        let result = run1_external(TestServer, expected.clone(), |dispatcher, input| {
+            Ok(client.run_external_bytes(
+                input,
+                |request| dispatcher.dispatch_bytes(request),
+                false,
+            ))
+        });
+        assert_eq!(result.unwrap_or_else(|_| panic!("external expansion failed")), expected);
+    }
+
+    #[test]
+    fn external_attribute_bytes_keep_inputs_separate() {
+        let client = client::Client::expand2(|_attr, input: crate::TokenStream| input);
+        let result = run2_external(TestServer, vec![2], vec![5, 8], |dispatcher, input| {
+            Ok(client.run_external_bytes(
+                input,
+                |request| dispatcher.dispatch_bytes(request),
+                false,
+            ))
+        });
+        assert_eq!(result.unwrap_or_else(|_| panic!("external expansion failed")), vec![5, 8]);
+    }
+
+    #[test]
+    fn external_transport_failure_does_not_run_client() {
+        let result = run1_external(TestServer, vec![3], |_, _| {
+            Err(PanicMessage::StaticStr("helper disconnected after request commit"))
+        });
+        match result {
+            Err(message) => {
+                assert_eq!(message.as_str(), Some("helper disconnected after request commit"))
+            }
+            Ok(_) => panic!("disconnected helper unexpectedly succeeded"),
+        }
+    }
+}
+
 // This trait is currently only implemented and used once, inside of this crate.
 // We keep it public to allow implementing more complex execution strategies in
 // the future, such as wasm proc-macros.

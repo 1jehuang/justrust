@@ -152,6 +152,89 @@ pub enum Outcome {
     Shutdown,
 }
 
+/// An explicitly sequenced session of exchanges. Unlike a bare pump, this may
+/// reuse its connection after Complete. Every invocation, callback, reply and
+/// successful completion carries the same monotonically increasing exchange ID.
+/// Errors poison the entire session, including errors after sending Invoke.
+pub struct Session<S> {
+    stream: S,
+    next: u64,
+    poisoned: bool,
+}
+
+fn envelope(id: u64, payload: Vec<u8>) -> io::Result<Vec<u8>> {
+    if payload.len() > MAX_FRAME_BYTES - 8 {
+        return Err(invalid("proc-macro session payload exceeds frame limit"));
+    }
+    let mut result = Vec::with_capacity(8 + payload.len());
+    result.extend_from_slice(&id.to_le_bytes());
+    result.extend_from_slice(&payload);
+    Ok(result)
+}
+
+fn unenvelope(id: u64, payload: Vec<u8>) -> io::Result<Vec<u8>> {
+    if payload.len() < 8 || payload[..8] != id.to_le_bytes() {
+        return Err(invalid("unexpected proc-macro session exchange ID"));
+    }
+    Ok(payload[8..].to_vec())
+}
+
+impl<S: Read + Write> Session<S> {
+    pub fn new(stream: S) -> Self {
+        Self { stream, next: 1, poisoned: false }
+    }
+
+    fn begin(&mut self) -> io::Result<u64> {
+        if self.poisoned || self.next == u64::MAX {
+            return Err(invalid("proc-macro session is poisoned or exhausted"));
+        }
+        self.poisoned = true;
+        Ok(self.next)
+    }
+
+    fn complete(&mut self, id: u64, outcome: Outcome) -> io::Result<Outcome> {
+        match outcome {
+            Outcome::Complete(payload) => {
+                let payload = unenvelope(id, payload)?;
+                self.next += 1;
+                self.poisoned = false;
+                Ok(Outcome::Complete(payload))
+            }
+            other => Ok(other),
+        }
+    }
+
+    pub fn invoke(
+        &mut self,
+        invocation: Vec<u8>,
+        mut callback: impl FnMut(Vec<u8>) -> io::Result<Vec<u8>>,
+    ) -> io::Result<Outcome> {
+        let id = self.begin()?;
+        let invocation = envelope(id, invocation)?;
+        let result = server_pump(&mut self.stream, invocation, |request| {
+            envelope(id, callback(unenvelope(id, request)?)?)
+        })?;
+        self.complete(id, result)
+    }
+
+    pub fn respond(
+        &mut self,
+        handler: impl FnOnce(
+            Vec<u8>,
+            &mut dyn FnMut(Vec<u8>) -> io::Result<Vec<u8>>,
+        ) -> io::Result<Vec<u8>>,
+    ) -> io::Result<Outcome> {
+        let id = self.begin()?;
+        let result = helper_pump(&mut self.stream, |request, callback| {
+            let request = unenvelope(id, request)?;
+            let result =
+                handler(request, &mut |request| unenvelope(id, callback(envelope(id, request)?)?))?;
+            envelope(id, result)
+        })?;
+        self.complete(id, result)
+    }
+}
+
 /// Compiler-side pump. Dispatches any number of callbacks before one terminal
 /// result. Callback errors/panics close this exchange without replaying Invoke.
 /// The caller must discard the underlying connection on every return path.
@@ -324,6 +407,65 @@ mod tests {
     struct Script {
         input: Cursor<Vec<u8>>,
         output: Vec<u8>,
+    }
+
+    #[test]
+    fn sequenced_session_preserves_helper_state_across_exchanges() {
+        let (compiler, helper) = std::os::unix::net::UnixStream::pair().unwrap();
+        let join = std::thread::spawn(move || {
+            let mut helper = Session::new(helper);
+            let mut count = 0u8;
+            for _ in 0..2 {
+                helper
+                    .respond(|request, callback| {
+                        count += 1;
+                        assert_eq!(callback(request)?, vec![9]);
+                        Ok(vec![count])
+                    })
+                    .unwrap();
+            }
+        });
+        let mut compiler = Session::new(compiler);
+        for count in 1..=2 {
+            assert_eq!(
+                compiler
+                    .invoke(vec![7], |request| {
+                        assert_eq!(request, vec![7]);
+                        Ok(vec![9])
+                    })
+                    .unwrap(),
+                Outcome::Complete(vec![count])
+            );
+        }
+        join.join().unwrap();
+    }
+
+    #[test]
+    fn sequenced_session_rejects_stale_completion_without_replay() {
+        let mut input = encoded(Frame::Complete(envelope(1, vec![4]).unwrap()));
+        input.extend(encoded(Frame::Complete(envelope(1, vec![5]).unwrap())));
+        let mut session = Session::new(Script { input: Cursor::new(input), output: Vec::new() });
+        assert_eq!(
+            session.invoke(vec![], |_| panic!("unexpected callback")).unwrap(),
+            Outcome::Complete(vec![4])
+        );
+        assert!(session.invoke(vec![], |_| panic!("unexpected callback")).is_err());
+        let written = session.stream.output.len();
+        assert!(session.invoke(vec![], |_| panic!("unexpected callback")).is_err());
+        assert_eq!(session.stream.output.len(), written);
+    }
+
+    #[test]
+    fn sequenced_session_rejects_replayed_invocation_before_handler() {
+        let mut input = encoded(Frame::Invoke(envelope(1, vec![]).unwrap()));
+        input.extend(encoded(Frame::Invoke(envelope(1, vec![]).unwrap())));
+        let mut session = Session::new(Script { input: Cursor::new(input), output: Vec::new() });
+        assert_eq!(session.respond(|_, _| Ok(vec![3])).unwrap(), Outcome::Complete(vec![3]));
+        assert!(matches!(
+            session.respond(|_, _| panic!("replayed handler ran")).unwrap(),
+            Outcome::Failure(_)
+        ));
+        assert!(session.respond(|_, _| panic!("poisoned handler ran")).is_err());
     }
 
     impl Read for Script {
