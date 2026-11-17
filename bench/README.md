@@ -416,6 +416,60 @@ live-catalog fixture (`20261117-032545127-395025`,
 availability. These are remaining blockers, not clean broad acceptance or a
 performance comparison. No speedup is claimed.
 
+### Pinned auth-reading TUI fixture ownership
+
+Repeated full-TUI runs then exposed two readers of credentials left in the
+shared test home. The subscription scaffold cleared runtime environment but
+still loaded the previous account's persisted `jcode.env`, hiding its required
+`/login jcode` prompt. The Changes widget checked whole terminal rows for an
+agent-edit dot, but unrelated persisted provider credentials painted auth-status
+dots on those same rows. The assertions correctly rejected the contaminated
+screens and are retained without narrowing their scope.
+
+`jcode-auth-reader-fixtures-v1.patch` wraps only those two test functions in the
+existing private `with_local_jcode_home` fixture. It removes the subscription
+test's now-redundant outer environment lock, because the private-home helper
+already owns that lock, and acquires it before the existing render lock. Every
+original test statement and assertion is otherwise unchanged. There is no
+production change, credential deletion, assertion filter, skip, thread-count
+change, or repin. Both exact input hashes and the versioned patch hash are
+required before applying the overlay and feed the shared snapshot identity.
+
+Real production credential writers demonstrate the original subscription
+failure (`20261117-033102217-502444`) and corrected positive
+(`20261117-033205512-518925`). Writing incorrect credentials inside the owning
+private home still fails the same original assertion
+(`20261117-033222082-520419`). Real saved provider credentials similarly trigger
+the original Changes assertion (`20261117-033157916-518121`), pass with private
+ownership (`20261117-033213939-519696`), and remain detectable when inserted
+inside the owning home (`20261117-033229703-521038`). All six controls completed
+before registration. They exist only in disposable diagnostic snapshots, never
+in measured source or the live checkout.
+
+```sh
+PYTHONPATH=bench python3 -m unittest test_auth_reader_fixtures
+python3 bench/test_auth_reader_fixtures.py --accept "$JCODE_SCRATCH_DIR/auth-reader-controls" --full
+```
+
+The full mode removes additive controls, runs two normal-parallel full TUI
+suites and each full pinned workspace twice, preserves Git metadata, and
+collects all failures before returning failure. Isolated automatic retries do
+not qualify as clean acceptance. These fixture corrections alone do not prove
+a full valid performance comparison or a speedup.
+
+Repeated stock-1.99.0 acceptance of snapshot `a9033278591f` executed both
+corrected auth-reading tests without failures. Neither full-TUI run was clean:
+`20261117-033506210-545326` required an isolated retry of the Unicode-math badge,
+and `20261117-033548708-588223` failed that badge outright. Both full jcode
+workspace runs also required badge retries (`20261117-033622753-630754`,
+`20261117-033937284-734608`); the first additionally retried a mermaid renderer
+fixture. The harness correctly returned failure for all four runs rather than
+accepting those retries. Both desktop workspace runs passed 1,755 tests without
+retries (`20261117-034030102-794059`, `20261117-034122856-820797`). The latter
+waited on another build's target lock, so these are correctness results, not
+performance evidence. The remaining badge contamination still blocks broad
+acceptance and is not concealed by these narrow ownership corrections.
+
 ### Pinned terminal Responses fixture protocol correction
 
 `jcode-terminal-websocket-catalog-v1.patch` corrects the loopback server in

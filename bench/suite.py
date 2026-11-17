@@ -150,6 +150,8 @@ SNAPSHOTS = {
         },
         "fixture_overlays": [pty_fixture.identity()],
         "fixture_patch_sha256": {
+            "bench/patches/jcode-auth-reader-fixtures-v1.patch":
+                "03a6d99d68e201e5fca55bc11a363222c9f7bb55ebd20dfcb5828b7a978308fc",
             "bench/patches/jcode-clipboard-capture-fixture-v1.patch":
                 "612a3976157bc95ea4dada68c1a5baa354debf1f95dd6329e815705816540849",
             "bench/patches/jcode-login-event-fixture-v1.patch":
@@ -168,6 +170,10 @@ SNAPSHOTS = {
                 "3f6b2c411a28cd26cd929e2787ded1d1cedee972e7df683d8eaab7f9ca75b788",
         },
         "fixture_input_sha256": {
+            "jcode/crates/jcode-tui/src/tui/app/tests/commands_accounts_01/part_02.rs":
+                "ed61b673c53131832e59fa74c35187dcdb71bd578582ac1acd6eeaf0744a19f5",
+            "jcode/crates/jcode-tui/src/tui/app/tests/scroll_copy_01/part_01.rs":
+                "ae43b7c6904caffc24f5089076d216758fb92bd49b4ef8021281f849d2f0c4f3",
             "jcode/crates/jcode-tui/src/tui/app/helpers.rs":
                 "51a69f2713ef780424eccf42e03178bdce32f621372dc62fd3da4ee67c991250",
             "jcode/crates/jcode-base/src/bus.rs":
@@ -221,6 +227,7 @@ SNAPSHOTS = {
             ("jcode", "bench/patches/jcode-base-global-fixtures-v1.patch"),
             ("jcode", "bench/patches/jcode-login-event-fixture-v1.patch"),
             ("jcode", "bench/patches/jcode-clipboard-capture-fixture-v1.patch"),
+            ("jcode", "bench/patches/jcode-auth-reader-fixtures-v1.patch"),
         ],
     },
     "justrust": {

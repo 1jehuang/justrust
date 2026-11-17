@@ -1,0 +1,31 @@
+--- a/crates/jcode-tui/src/tui/app/tests/commands_accounts_01/part_02.rs
++++ b/crates/jcode-tui/src/tui/app/tests/commands_accounts_01/part_02.rs
+@@ -222,6 +222,6 @@
+ #[test]
+ fn test_subscription_command_shows_jcode_status_scaffold() {
+-    let _guard = crate::storage::lock_test_env();
++    with_local_jcode_home(|| {
+     crate::subscription_catalog::clear_runtime_env();
+     crate::env::remove_var(crate::subscription_catalog::JCODE_API_KEY_ENV);
+     crate::env::remove_var(crate::subscription_catalog::JCODE_API_BASE_ENV);
+@@ -247,5 +247,6 @@
+     assert!(!msg.content.contains("$10/mo"));
+     assert!(!msg.content.contains("usable inference budget"));
+     assert!(!msg.content.contains("Claude Fable 5 - claude-fable-5 [Ultra]"));
++    });
+ }
+ 
+--- a/crates/jcode-tui/src/tui/app/tests/scroll_copy_01/part_01.rs
++++ b/crates/jcode-tui/src/tui/app/tests/scroll_copy_01/part_01.rs
+@@ -1424,4 +1424,5 @@
+ #[test]
+ fn changes_widget_end_to_end_on_real_git_repo() {
++    with_local_jcode_home(|| {
+     use std::process::Command;
+     let _lock = scroll_render_test_lock();
+@@ -1554,4 +1555,5 @@
+         changes_rows.iter().all(|line| !line.contains('●')),
+         "no agent-edit dot on clean Changes rows:\n{frame2}"
+     );
++    });
+ }
