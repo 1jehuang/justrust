@@ -298,7 +298,14 @@ unchanged. Only the two public-terminal server accepts are replaced.
 
 Both pristine input and correction SHA256 are pinned in `suite.py`; snapshot
 reuse/extraction fails closed on mismatches, and both sides use the same new
-fingerprint. Integrity and exact preservation tests run with:
+fingerprint. `jcode-prefix-websocket-catalog-v1.patch` applies the same strict
+connection classifier to all three accepts in `persistent_prefix.rs`. Four-CPU,
+stock-1.99 execution exposed the identical catalog race in that fixture after
+the terminal correction (`20261116-163611844-1234319`). This follow-up changes
+only those accepts: every prefix/input assertion, response frame, test body,
+and deadline is byte-for-byte unchanged after reversing the three substitutions.
+Its pristine input and overlay have separate pinned digests and contribute to
+the shared snapshot identity. Integrity and exact preservation tests run with:
 
 ```sh
 PYTHONPATH=bench python3 -m unittest test_terminal_websocket_fixture test_source_sync_gate

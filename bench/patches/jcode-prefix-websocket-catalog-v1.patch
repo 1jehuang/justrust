@@ -1,0 +1,31 @@
+--- a/crates/jcode-provider-openai-runtime/src/openai_tests/persistent_prefix.rs
++++ b/crates/jcode-provider-openai-runtime/src/openai_tests/persistent_prefix.rs
+@@ -121,8 +121,7 @@
+     );
+ 
+     let mut server = tokio::spawn(async move {
+-        let (tcp, _) = listener.accept().await.unwrap();
+-        let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
++        let mut socket = terminal_fixture_accept_response(&listener).await;
+         let first = prefix_test_request(&mut socket).await;
+         assert!(first.get("previous_response_id").is_none());
+         assert_eq!(first["input"], serde_json::json!(original_input));
+@@ -138,7 +137,6 @@
+             }
+         }
+-        let (tcp, _) = listener.accept().await.unwrap();
+-        let mut fresh = tokio_tungstenite::accept_async(tcp).await.unwrap();
++        let mut fresh = terminal_fixture_accept_response(&listener).await;
+         let request = prefix_test_request(&mut fresh).await;
+         assert_eq!(request["type"], "response.create");
+         assert!(request.get("previous_response_id").is_none(), "{request}");
+@@ -211,8 +209,7 @@
+         .collect();
+     let mut server = tokio::spawn(async move {
+         // Exactly one accept: reconnecting cannot satisfy this fixture.
+-        let (tcp, _) = listener.accept().await.unwrap();
+-        let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
++        let mut socket = terminal_fixture_accept_response(&listener).await;
+         let mut cursor = 0;
+         for (i, input) in inputs.iter().enumerate() {
+             let request = prefix_test_request(&mut socket).await;

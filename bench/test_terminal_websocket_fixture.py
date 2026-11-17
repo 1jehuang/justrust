@@ -69,6 +69,42 @@ class TerminalWebsocketFixture(unittest.TestCase):
         self.assertNotIn("if let Ok", corrected[:corrected.index("// Public Provider::complete")])
         self.assertIn("server.await.unwrap()", corrected[:corrected.index("// Public Provider::complete")])
 
+    def test_prefix_fixture_preserves_all_assertions_and_versions_exact_bytes(self):
+        prefix_patch = "bench/patches/jcode-prefix-websocket-catalog-v1.patch"
+        source = "crates/jcode-provider-openai-runtime/src/openai_tests/persistent_prefix.rs"
+        spec = suite.SNAPSHOTS["desktop"]
+        self.assertIn(("jcode", prefix_patch), spec["patches"])
+        overlay = (suite.ROOT / prefix_patch).read_bytes()
+        self.assertEqual(hashlib.sha256(overlay).hexdigest(),
+                         spec["fixture_patch_sha256"][prefix_patch])
+        repo, revision = spec["repos"]["jcode"]
+        original = subprocess.check_output(
+            ["git", "-C", str(repo), "show", f"{revision}:{source}"], text=True)
+        self.assertEqual(hashlib.sha256(original.encode()).hexdigest(),
+                         spec["fixture_input_sha256"]["jcode/" + source])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            destination = root / source
+            destination.parent.mkdir(parents=True)
+            destination.write_text(original)
+            subprocess.run(["git", "apply", "--check", str(suite.ROOT / prefix_patch)],
+                           cwd=root, check=True)
+            subprocess.run(["git", "apply", str(suite.ROOT / prefix_patch)],
+                           cwd=root, check=True)
+            corrected = destination.read_text()
+        self.assertEqual(corrected.count("terminal_fixture_accept_response(&listener)"), 3)
+        restored = corrected
+        for variable in ("socket", "fresh"):
+            restored = restored.replace(
+                f"        let mut {variable} = terminal_fixture_accept_response(&listener).await;",
+                "        let (tcp, _) = listener.accept().await.unwrap();\n"
+                f"        let mut {variable} = tokio_tungstenite::accept_async(tcp).await.unwrap();")
+        self.assertEqual(restored, original)
+        identity = suite.snapshot_fingerprint("desktop")
+        with patch.dict(suite.SNAPSHOTS, {"desktop": dict(
+                spec, patches=[item for item in spec["patches"] if item[1] != prefix_patch])}):
+            self.assertNotEqual(identity, suite.snapshot_fingerprint("desktop"))
+
 
 if __name__ == "__main__":
     unittest.main()
