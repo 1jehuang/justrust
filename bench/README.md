@@ -270,6 +270,49 @@ reader. Only the disposable diagnostic adds lock instrumentation/visibility.
 Complete pinned TUI acceptance and a fresh full 40-point seed-1 before/after
 comparison remain separate required gates, not replaced by this diagnostic.
 
+### Pinned terminal Responses fixture protocol correction
+
+`jcode-terminal-websocket-catalog-v1.patch` corrects the loopback server in
+`abff94eeb`'s `openai_tests/persistent_terminal.rs`, not the provider transport.
+`complete()` calls `model_id()`, which can spawn
+`refresh_openai_model_catalog_in_background()` for an unknown model.
+API-key discovery uses HTTP `GET /v1/models` on the same overridden API base as
+Responses. The fixture incorrectly assumed its next TCP accept was always a
+WebSocket. Discovery can reach the listener before the replacement Responses
+connection even while the test holds the environment mutex, because the
+background task runs inside that scope. This explains the second
+`accept_async()` failure `Protocol(MissingConnectionUpgradeHeader)` in full
+workspace run `20261116-161006451-17714157`, benchmark workflow `43894032344`.
+It is not evidence of a Responses HTTP fallback, clipboard race, or PTY issue.
+
+The correction reads without consuming the handshake, serves only the exact
+catalog GET with a valid HTTP response containing the fixture model, then
+accepts the exact Responses WebSocket endpoint. Malformed upgrades and other
+paths, including HTTP Responses POST fallback, still fail. The added regression
+forces catalog-first ordering without relying on global catalog freshness. It
+first proves the legacy accept reproduces the exact missing-Upgrade error,
+then requires the corrected server to finish catalog discovery and accept the
+Responses frame. All original test bodies, semantic assertions, two-second
+completion deadline, error frames, cursor/input checks, and parallelism remain
+unchanged. Only the two public-terminal server accepts are replaced.
+
+Both pristine input and correction SHA256 are pinned in `suite.py`; snapshot
+reuse/extraction fails closed on mismatches, and both sides use the same new
+fingerprint. Integrity and exact preservation tests run with:
+
+```sh
+PYTHONPATH=bench python3 -m unittest test_terminal_websocket_fixture test_source_sync_gate
+```
+
+`ci/check-pinned-runtime.py` now requires two complete OpenAI provider unit-suite
+passes and the exact `test --workspace` command, after the existing Bedrock
+checks, before either expensive forty-point measurement begins. A failure
+preserves diagnostics and stops the gate. No test filters, skips, thread-count
+reductions, retries that relabel failure, or reduced benchmark points are added.
+A passing fixture/preflight is not a full comparison: the full gate remains
+unmet until fresh valid seed-1, n=1, forty-point results exist for both unchanged
+client revisions and `suite.py compare --require-valid` accepts them.
+
 The credited patches currently restore Desktop's visible reload camera position
 (`764e429`, retaining the original viewport assertion) and import Jcode's existing
 description-consent/schema repair (`2474a4f81`, without removing consent text or

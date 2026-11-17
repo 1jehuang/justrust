@@ -17,7 +17,7 @@ runtime_spec.loader.exec_module(runtime_check)
 
 
 class PinnedRuntimePrerequisiteTests(unittest.TestCase):
-    def exercise(self, exit_code):
+    def exercise(self, exit_code, fail_at=0):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
             (work / "evidence").mkdir()
@@ -25,13 +25,21 @@ class PinnedRuntimePrerequisiteTests(unittest.TestCase):
             target.mkdir()
 
             def run(argv, cwd, env, log):
-                self.assertEqual(argv[1:], ["test", "-p", "jcode-provider-bedrock", "--lib"])
+                expected = [
+                    ["test", "-p", "jcode-provider-bedrock", "--lib"],
+                    ["test", "-p", "jcode-provider-bedrock", "--lib"],
+                    ["test", "-p", "jcode-provider-openai-runtime", "--lib"],
+                    ["test", "-p", "jcode-provider-openai-runtime", "--lib"],
+                    ["test", "--workspace"],
+                ]
+                self.assertEqual(argv[1:], expected[int(log.stem.rsplit("-", 1)[1])])
+                self.assertFalse(any("test-threads" in arg for arg in argv))
                 self.assertEqual(cwd, work / "snapshot" / "jcode")
                 self.assertEqual(env["CARGO_TARGET_DIR"], str(target))
                 self.assertEqual(env["JUSTRUST_LOCAL"], "1")
                 self.assertNotIn("JUSTRUST_REMOTE_REQUIRED", env)
                 log.write_text("pinned test diagnostics\n")
-                return {"exit": exit_code}
+                return {"exit": exit_code if int(log.stem.rsplit("-", 1)[1]) == fail_at else 0}
 
             with mock.patch.dict(runtime_check.os.environ, {}, clear=True), \
                     mock.patch.object(runtime_check.sys, "argv", ["check", "/candidate", str(work)]), \
@@ -41,18 +49,20 @@ class PinnedRuntimePrerequisiteTests(unittest.TestCase):
                     with self.assertRaises(SystemExit) as failure:
                         runtime_check.main()
                     self.assertEqual(failure.exception.code, exit_code)
-                    self.assertEqual(execute.call_count, 1)
+                    self.assertEqual(execute.call_count, fail_at + 1)
                     self.assertTrue(target.exists())
                 else:
                     runtime_check.main()
-                    self.assertEqual(execute.call_count, 2)
+                    self.assertEqual(execute.call_count, 5)
                     self.assertFalse(target.exists())
 
-    def test_success_runs_whole_binary_twice_and_reclaims_separate_target(self):
+    def test_success_runs_whole_provider_binaries_and_workspace_before_comparison(self):
         self.exercise(0)
 
     def test_failure_blocks_measurements_and_preserves_diagnostics(self):
-        self.exercise(101)
+        for fail_at in range(5):
+            with self.subTest(fail_at=fail_at):
+                self.exercise(101, fail_at)
 
 
 class ShellPrerequisiteTests(unittest.TestCase):

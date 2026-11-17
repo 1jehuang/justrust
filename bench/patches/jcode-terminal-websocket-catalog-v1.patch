@@ -1,0 +1,128 @@
+--- a/crates/jcode-provider-openai-runtime/src/openai_tests/persistent_terminal.rs
++++ b/crates/jcode-provider-openai-runtime/src/openai_tests/persistent_terminal.rs
+@@ -1,3 +1,105 @@
++// Catalog discovery and Responses share JCODE_OPENAI_API_BASE. complete() may
++// enqueue GET /v1/models before opening its replacement response socket. Serve
++// that distinct protocol instead of treating TCP accept order as WS identity.
++async fn terminal_fixture_accept_response(
++    listener: &tokio::net::TcpListener,
++) -> tokio_tungstenite::WebSocketStream<tokio::net::TcpStream> {
++    use tokio::io::{AsyncReadExt, AsyncWriteExt};
++    loop {
++        let (mut tcp, _) = listener.accept().await.unwrap();
++        let mut header = [0_u8; 8192];
++        let header_len = loop {
++            let size = tcp.peek(&mut header).await.unwrap();
++            assert!(size > 0, "fixture connection closed before request headers");
++            if let Some(end) = header[..size].windows(4).position(|w| w == b"\r\n\r\n") {
++                break end + 4;
++            }
++            assert!(size < header.len(), "fixture request headers too large");
++            tokio::task::yield_now().await;
++        };
++        if header[..header_len].starts_with(b"GET /v1/models HTTP/1.1\r\n") {
++            tcp.read_exact(&mut header[..header_len]).await.unwrap();
++            let body = r#"{"data":[{"id":"gpt-5.6-sol"}]}"#;
++            let response = format!(
++                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
++                body.len(),
++                body
++            );
++            tcp.write_all(response.as_bytes()).await.unwrap();
++            tcp.shutdown().await.unwrap();
++            continue;
++        }
++        assert!(
++            header[..header_len].starts_with(b"GET /v1/responses HTTP/1.1\r\n"),
++            "unexpected fixture request: {}",
++            String::from_utf8_lossy(&header[..header_len])
++        );
++        // Invalid Responses upgrades still fail loudly. Only the exact catalog
++        // endpoint above is HTTP, never a fallback Responses POST.
++        return tokio_tungstenite::accept_async(tcp).await.unwrap();
++    }
++}
++
++#[tokio::test]
++async fn persistent_terminal_fixture_serves_catalog_before_response_upgrade() {
++    use tokio::io::{AsyncReadExt, AsyncWriteExt};
++    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
++    let addr = listener.local_addr().unwrap();
++    tokio::time::timeout(Duration::from_secs(2), async move {
++        // Prove the original accept-order assumption produces the exact gate
++        // failure for this catalog request, not an HTTP Responses fallback.
++        let legacy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
++        let legacy_addr = legacy_listener.local_addr().unwrap();
++        let legacy_server = tokio::spawn(async move {
++            let (tcp, _) = legacy_listener.accept().await.unwrap();
++            let error = tokio_tungstenite::accept_async(tcp).await.unwrap_err();
++            assert!(
++                matches!(error, tokio_tungstenite::tungstenite::Error::Protocol(
++                tokio_tungstenite::tungstenite::error::ProtocolError::MissingConnectionUpgradeHeader
++            )),
++                "{error:?}"
++            );
++        });
++        let mut legacy_catalog = tokio::net::TcpStream::connect(legacy_addr).await.unwrap();
++        legacy_catalog
++            .write_all(b"GET /v1/models HTTP/1.1\r\nHost: fixture\r\n\r\n")
++            .await
++            .unwrap();
++        legacy_server.await.unwrap();
++
++        let server = tokio::spawn(async move {
++            let mut ws = terminal_fixture_accept_response(&listener).await;
++            assert_eq!(
++                ws.next().await.unwrap().unwrap().to_text().unwrap(),
++                "response.create"
++            );
++        });
++        // Force the exact formerly racy order, independent of catalog freshness
++        // or parallel tests. The HTTP response must complete before WS connects.
++        let mut catalog = tokio::net::TcpStream::connect(addr).await.unwrap();
++        catalog
++            .write_all(b"GET /v1/models HTTP/1.1\r\nHost: fixture\r\n\r\n")
++            .await
++            .unwrap();
++        let mut response = String::new();
++        catalog.read_to_string(&mut response).await.unwrap();
++        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
++        assert!(
++            response.ends_with(r#"{"data":[{"id":"gpt-5.6-sol"}]}"#),
++            "{response}"
++        );
++        let (mut ws, _) = connect_async(format!("ws://{addr}/v1/responses"))
++            .await
++            .unwrap();
++        ws.send(WsMessage::Text("response.create".into()))
++            .await
++            .unwrap();
++        server.await.unwrap();
++    })
++    .await
++    .expect("catalog-first fixture should not stall Responses");
++}
++
+ // Public Provider::complete + EventStream regressions using a loopback Responses
+ // server. These are deterministic protocol fixtures, not live OpenAI acceptance.
+ async fn persistent_terminal_public_case(
+@@ -22,8 +124,7 @@
+     let full_input = build_responses_input(&messages);
+     let expected_input = full_input.clone();
+     let server = tokio::spawn(async move {
+-        let (tcp, _) = listener.accept().await.unwrap();
+-        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
++        let mut ws = terminal_fixture_accept_response(&listener).await;
+         let delta: Value =
+             serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+         assert_eq!(delta["previous_response_id"], "resp_stale");
+@@ -47,8 +148,7 @@
+                 _ => break,
+             }
+         }
+-        let (tcp, _) = listener.accept().await.unwrap();
+-        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
++        let mut ws = terminal_fixture_accept_response(&listener).await;
+         let fresh: Value =
+             serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+         assert!(fresh.get("previous_response_id").is_none(), "{fresh}");

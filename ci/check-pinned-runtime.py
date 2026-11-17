@@ -27,11 +27,21 @@ def main():
     os.environ[runtime_context.SELECTOR] = runtime_context.POLICY
     # Run the entire Bedrock unit binary, not just the formerly failing test:
     # earlier tests write bedrock.env and exposed the JCODE_HOME contamination.
-    for index in range(2):
+    # Catalog discovery shares the Responses listener. Exercise the forced
+    # catalog-first regression and ALL provider tests with normal parallelism,
+    # then the exact formerly failing full-workspace command. No filtered test
+    # result can stand in for workspace acceptance before the forty-point gate.
+    commands = [
+        ["test", "-p", "jcode-provider-bedrock", "--lib"],
+        ["test", "-p", "jcode-provider-bedrock", "--lib"],
+        ["test", "-p", "jcode-provider-openai-runtime", "--lib"],
+        ["test", "-p", "jcode-provider-openai-runtime", "--lib"],
+        ["test", "--workspace"],
+    ]
+    for index, command in enumerate(commands):
         log = args.work / "evidence" / f"runtime-preflight-{index}.log"
         result = versus.run_counted(
-            [str(args.binary.resolve()), "test", "-p", "jcode-provider-bedrock", "--lib"],
-            root, env, log)
+            [str(args.binary.resolve()), *command], root, env, log)
         print(log.read_text(), end="", flush=True)
         if result["exit"]:
             raise SystemExit(result["exit"])
