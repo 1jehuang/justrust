@@ -255,8 +255,9 @@ def justrust_runner(client, cargo, runner=native.run):
         environment = dict(env, JUSTRUST_TOOLCHAIN='system',
                            JUSTRUST_REAL_CARGO=str(cargo),
                            JUSTRUST_SLOTS='0', JUSTRUST_TEST_PARALLEL='0')
-        return runner([client, '--local=resident acceptance already on authenticated hosted guest',
-                       'cargo', *command[1:]], timeout, cwd=cwd, env=environment)
+        return runner([client, 'cargo',
+                       '--local=resident acceptance already on authenticated hosted guest',
+                       *command[1:]], timeout, cwd=cwd, env=environment)
     return invoke
 
 
