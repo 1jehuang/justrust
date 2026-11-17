@@ -496,6 +496,38 @@ external typed reuse follows from these tests. Demand-driven bounded publication
 complete typed identity, managed mutation/error fallback acceptance and
 representative performance remain separate gates.
 
+## Demand-driven decoder source observations
+
+Complete external source capture still rejects sparse or missing imports. A
+separate opaque `ObservedExternalSourceSnapshot` now records only source slots
+already populated by ordinary native decoding. It preserves original metadata
+indices, including holes and an untouched tail, with exact metadata bytes/maps,
+actual source Arcs, endpoints and checked aggregate entry/declared-byte limits.
+Two-pass validation bounds retention without importing additional sources.
+Observations cannot be converted through the public API into a complete source
+snapshot or used as external typed-query authorization.
+
+The explicit decoder owner has a separate `publish_observed_external_decoders`
+entry point. Selection checks that its recorded entries cover every currently
+populated slot in that candidate's actual native decoder state. Added, removed,
+replaced or moved populated slots reject selection; undecoded holes do not carry
+source identity. Existing metadata, mapped dependency, allocation universe,
+source-map, translation, foreign-text and owner-retirement checks remain in force.
+The complete-capture/publication APIs retain their prior contract.
+
+The actual std macro and OS-allocation test now runs both forced-full-import and
+ordinary-demand modes, each with disabled controls and both retirement negatives.
+In ordinary-demand mode, complete capture remains `IncompleteImports` while bounded
+observational publication succeeds and the next context selects actual retained
+decoder storage. OS allocation IDs/pointers match, controls decode new IDs, and
+fresh maps or publication failures retire the owner. All 22 interface tests and
+28 metadata tests plus two metadata doctests pass against matching standard
+libraries. The separate real dependency-replacement test still passes.
+
+This removes forced source importing from the decoder-only publication path. It
+is not external typed-query admission, driver/Cargo routing, representative
+performance evidence or a production-default promotion.
+
 ## Native Cargo routing boundary
 
 **Update, 2026-11-17:** explicit std-only native Cargo and actual justrust client
