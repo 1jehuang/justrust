@@ -19,6 +19,12 @@ versions, or two dates are compared on identical work.
 
   bench/synth/gen.py show [--seed S] [-n N]     print the sampled plan
   bench/synth/gen.py probe [CRATE...]           (re)probe crates now
+
+Set JUSTRUST_SYNTH_PROBE_REMOTE=1 to compile discovery probes exclusively in
+an authenticated hosted guest. Sources retain their absolute snapshot paths,
+including sibling path dependencies. Hosted location caches include compiler
+provenance and never reuse locally discovered locations. Authentication, sync,
+and prerequisite failures abort discovery rather than falling back locally.
 """
 
 from __future__ import annotations
@@ -39,6 +45,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(HERE))
+import hosted_probe  # noqa: E402
 import suite  # noqa: E402
 
 WEIGHTS = HERE / "weights.json"
@@ -243,7 +251,8 @@ def _locked() -> None:
     _recover_journal()
 
 
-def _probe_run(ws: Workspace, p: Pkg, probes: dict[int, tuple[Path, int]], tests: bool) -> tuple[set[int], set[int], set[Path]]:
+def _probe_run(ws: Workspace, p: Pkg, probes: dict[int, tuple[Path, int]], tests: bool,
+               expected_identity: dict | None = None) -> tuple[set[int], set[int], set[Path]]:
     """Insert every probe, check, restore.
 
     Returns (live probe ids, broken probe ids, files with other errors). Only
@@ -256,7 +265,13 @@ def _probe_run(ws: Workspace, p: Pkg, probes: dict[int, tuple[Path, int]], tests
     for pid, (f, line) in probes.items():
         by_file[f].append((line, pid))
     _locked()  # before reading: another benchmark may have an edit in flight
+    if hosted_probe.enabled():
+        root = ws.root.resolve(strict=True)
+        for f in by_file:
+            if not f.resolve(strict=True).is_relative_to(root):
+                raise RuntimeError(f"synth: probe source escapes owned snapshot: {f}")
     saved = {f: f.read_text() for f in by_file}
+    remote = None
     JOURNAL.mkdir(parents=True, exist_ok=True)
     index = {}
     for k, f in enumerate(saved):
@@ -273,11 +288,20 @@ def _probe_run(ws: Workspace, p: Pkg, probes: dict[int, tuple[Path, int]], tests
         targets = _check_targets(p, tests)
         if not targets:
             return set(), set(), set()
-        env = stock_env()
-        env["CARGO_TARGET_DIR"] = str(WORK / "probe-target" / f"{ws.snap}-{ws.cwd.name}")
         home = home_workspace(p.name) or ws
-        r = subprocess.run([STOCK_CARGO, "check", "-p", p.name, *targets, "--message-format=json"],
-                           cwd=home.cwd, env=env, capture_output=True, text=True)
+        if hosted_probe.enabled():
+            remote = hosted_probe.HostedProbe()
+            identity = remote.identity(home.root, home.cwd)
+            if expected_identity is not None and identity != expected_identity:
+                raise RuntimeError("synth: hosted probe compiler changed during discovery; no locations cached")
+            r = remote.check(home.root, home.cwd,
+                             ["-p", p.name, *targets, "--message-format=json"],
+                             WORK / "probe-target-remote" / hosted_probe.cache_key(identity) / f"{ws.snap}-{ws.cwd.name}")
+        else:
+            env = stock_env()
+            env["CARGO_TARGET_DIR"] = str(WORK / "probe-target" / f"{ws.snap}-{ws.cwd.name}")
+            r = subprocess.run([STOCK_CARGO, "check", "-p", p.name, *targets, "--message-format=json"],
+                               cwd=home.cwd, env=env, capture_output=True, text=True)
         live, broken, bad = set(), set(), set()
         unrelated = []
         edited = {f.resolve() for f in by_file}
@@ -326,6 +350,8 @@ def _probe_run(ws: Workspace, p: Pkg, probes: dict[int, tuple[Path, int]], tests
             f.write_text(s)
         shutil.rmtree(JOURNAL, ignore_errors=True)
         signal.signal(signal.SIGTERM, old_term)
+        if remote is not None:
+            remote.sync(home.root, home.cwd)  # do not leave inserted errors in the guest mirror
 
 
 def _raise_interrupt(*_a) -> None:
@@ -335,9 +361,21 @@ def _raise_interrupt(*_a) -> None:
 def probe(ws: Workspace, name: str, force: bool = False) -> dict:
     """{rel file: {"body": [line...], "test": [line...]}} for one package."""
     p = ws.pkgs[name]
-    cache = WORK / "probe" / suite.snapshot_dir(ws.snap).name / f"{name}.json"
+    provenance = None
+    if hosted_probe.enabled():
+        _locked()  # recover canceled snapshot edits before mirroring/cache discovery
+        home = home_workspace(name) or ws
+        provenance = hosted_probe.HostedProbe().identity(home.root, home.cwd)
+        cache = (WORK / "probe-remote" / hosted_probe.cache_key(provenance)
+                 / suite.snapshot_dir(ws.snap).name / f"{name}.json")
+    else:
+        cache = WORK / "probe" / suite.snapshot_dir(ws.snap).name / f"{name}.json"
     if cache.exists() and not force:
         cached = json.loads(cache.read_text())
+        if provenance is not None:
+            if cached.get("provenance") != provenance:
+                raise RuntimeError("synth: hosted probe cache provenance mismatch")
+            cached = cached["locations"]
         if any(v.get("body") or v.get("test") for v in cached.values()):
             return cached
         print(f"synth: ignoring empty probe cache for {name}: {cache}", file=sys.stderr)
@@ -358,7 +396,7 @@ def probe(ws: Workspace, name: str, force: bool = False) -> dict:
         probes = {i: c for i, c in enumerate(cands)}
         live: set[int] = set()
         for _ in range(6):
-            live, broken, bad = _probe_run(ws, p, probes, tests)
+            live, broken, bad = _probe_run(ws, p, probes, tests, expected_identity=provenance)
             if not broken and not bad:
                 break
             # Drop broken probes (and every probe in a file with an error we
@@ -378,7 +416,8 @@ def probe(ws: Workspace, name: str, force: bool = False) -> dict:
         sys.exit(f"synth: probe of {name} found no live locations among {len(cands)} candidates; "
                  "check probe compiler, targets, and diagnostics; no locations cached")
     cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps(result, indent=0) + "\n")
+    payload = {"provenance": provenance, "locations": result} if provenance is not None else result
+    cache.write_text(json.dumps(payload, indent=0) + "\n")
     nb = sum(len(v["body"]) for v in result.values())
     nt = sum(len(v["test"]) for v in result.values())
     print(f"synth: {name}: {nb} live body, {nt} live test locations in {len(result)} files", file=sys.stderr)
@@ -721,7 +760,7 @@ def restore_all(snap: str) -> None:
 def fingerprint() -> str:
     """Identifies the generator + weights: results are comparable only within one."""
     h = hashlib.sha256()
-    for f in (Path(__file__), WEIGHTS):
+    for f in (Path(__file__), HERE / "hosted_probe.py", WEIGHTS):
         h.update(f.read_bytes())
     return h.hexdigest()[:12]
 
