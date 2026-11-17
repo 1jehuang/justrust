@@ -1,5 +1,6 @@
 // tidy-alphabetical-start
 #![allow(internal_features)]
+#![feature(clone_from_ref)]
 #![feature(error_iter)]
 #![feature(file_buffered)]
 #![feature(gen_blocks)]
