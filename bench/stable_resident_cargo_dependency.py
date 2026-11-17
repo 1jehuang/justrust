@@ -209,14 +209,35 @@ def validate_root_transition(stage, residency, previous):
     return current
 
 
+def validate_owned_batch(stage, events, previous):
+    roots = [event for event in events if event.get('event') == 'complete'
+             and event.get('crate_name') == 'dependency_fallback_root']
+    if stage['name'] == 'dependency-error':
+        if roots:
+            raise AssertionError('Failed dependency executed owned root')
+        return
+    if len(roots) != 1:
+        raise AssertionError('Owned root completion missing')
+    owned = roots[0].get('result', {}).get('owned', {})
+    if (owned.get('enabled') is not True or type(owned.get('revisions')) is not int
+            or owned['revisions'] < 1 or type(owned.get('contexts')) is not int
+            or owned['contexts'] < 1):
+        raise AssertionError('Actual retained compiler batch telemetry missing')
+    if (stage['root_only'] and previous is not None
+            and owned['revisions'] <= previous.get('owned_revisions', 0)):
+        raise AssertionError('Owned compiler revision did not advance')
+
+
 def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
-                require_resident_root=False):
+                require_resident_root=False, owned_batch=False):
     arm.mkdir(mode=0o700)
     workers = shared.private_directory(arm / 'workers')
     trace = arm / 'trace.jsonl'
     env = safety.safe_environment(shared.environment(compiler, fixture, mode, workers, trace))
     if require_resident_root:
         env['JUSTRUST_CARGO_RESIDENT_EXTERNAL'] = '1'
+    if owned_batch:
+        env['JUSTRUST_CARGO_RESIDENT_OWNED'] = '1'
     report = dict(mode=mode, verdict='incomplete', observations=[])
     try:
         previous_dependency = None
@@ -249,8 +270,15 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
             if require_resident_root:
                 previous_artifacts = validate_dependency_transition(stage, row['metadata'], previous_artifacts)
             row['residency'] = validate_trace(stage, row['trace'], mode, require_resident_root)
+            if owned_batch and mode == 'on':
+                validate_owned_batch(stage, row['trace'], previous_root)
             if require_resident_root and mode == 'on':
                 previous_root = validate_root_transition(stage, row['residency'], previous_root)
+                if owned_batch and previous_root is not None:
+                    roots = [event for event in row['trace'] if event.get('event') == 'complete'
+                             and event.get('crate_name') == 'dependency_fallback_root']
+                    if roots:
+                        previous_root['owned_revisions'] = roots[0]['result']['owned']['revisions']
         report['verdict'] = 'passed'
     except BaseException as error:
         report.update(verdict='failed', error=f'{type(error).__name__}: {error}')
@@ -263,7 +291,9 @@ def capture_arm(compiler, cargo, fixture, arm, mode, workload, timeout, runner,
 def capture(compiler, cargo, output, *, root_native_frozen=False, idle_authorized=False,
             timeout=180, justrust=None, require_resident_root=False, expected_compiler_sha256=None,
             expected_driver_sha256=None, expected_cargo_sha256=None, expected_client_sha256=None,
-            runner=None):
+            runner=None, owned_batch=False):
+    if owned_batch and not require_resident_root:
+        raise ValueError('Owned batch requires explicit resident root acceptance')
     if root_native_frozen is not True or idle_authorized is not True:
         raise ValueError('Root native freeze and idle authorization required before execution')
     if not math.isfinite(timeout) or timeout <= 0:
@@ -283,6 +313,7 @@ def capture(compiler, cargo, output, *, root_native_frozen=False, idle_authorize
                                   root_native_frozen=True, idle_authorized=True,
                                   manifest=MANIFEST, dependency_manifest=DEP_MANIFEST,
                                   timeout=timeout, require_resident_root=require_resident_root,
+                                  owned_batch=owned_batch,
                                   helpers={Path(module.__file__).name: shared.native.digest(Path(module.__file__))
                                            for module in (shared, safety, shared.native, shared.dogfood)},
                                   harness_sha256=shared.native.digest(Path(__file__))))
@@ -306,7 +337,8 @@ def capture(compiler, cargo, output, *, root_native_frozen=False, idle_authorize
             try:
                 report['arms'][mode] = capture_arm(compiler, cargo, fixture, arm,
                                                    mode, workload, timeout, invoke,
-                                                   require_resident_root=require_resident_root)
+                                                   require_resident_root=require_resident_root,
+                                                   owned_batch=owned_batch)
             finally:
                 # Include failed-arm raw evidence in the top-level receipt too.
                 receipt = arm / 'receipt.json'
@@ -335,6 +367,7 @@ def main():
         parser.add_argument('--expected-' + name + '-sha256')
     parser.add_argument('--root-native-frozen', action='store_true')
     parser.add_argument('--idle-authorized', action='store_true')
+    parser.add_argument('--owned-batch', action='store_true')
     parser.add_argument('--require-resident-root', action='store_true')
     parser.add_argument('--timeout', type=float, default=180)
     report = capture(**vars(parser.parse_args()))

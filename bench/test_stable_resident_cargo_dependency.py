@@ -87,6 +87,8 @@ class DependencyAcceptanceTests(unittest.TestCase):
                              result=dict(pid=200 + generation + (index if restart else 0),
                                          id=0 if stale_request else index,
                                          status=1 if stage['expectation'] == 'error' else 0))
+                if env.get('JUSTRUST_CARGO_RESIDENT_OWNED') == '1':
+                    event['result']['owned'] = dict(enabled=True, revisions=index + 1, contexts=index + 1)
                 with Path(env['JUSTRUST_CARGO_RESIDENT_TRACE']).open('a') as trace:
                     trace.write(json.dumps(event) + '\n')
             result = record(stage)
@@ -277,6 +279,31 @@ class DependencyAcceptanceTests(unittest.TestCase):
         runner, _ = self.mock_runner(resident_root=True, restart=True)
         with self.assertRaisesRegex(AssertionError, 'replaced the resident worker'):
             self.capture(runner, require_resident_root=True)
+
+    def test_owned_batch_requires_explicit_root_and_sets_both_arm_environments(self):
+        with self.assertRaisesRegex(ValueError, 'explicit resident root'):
+            self.capture(lambda *a, **k: self.fail('executed'), owned_batch=True)
+        runner, calls = self.mock_runner(resident_root=True, stale_request=True)
+        report = self.capture(runner, require_resident_root=True, owned_batch=True)
+        self.assertEqual(report['verdict'], 'passed')
+        self.assertTrue(report['provenance']['owned_batch'])
+        for call in calls:
+            self.assertEqual(call['env']['JUSTRUST_CARGO_RESIDENT_OWNED'], '1')
+            self.assertEqual(call['env']['JUSTRUST_CARGO_RESIDENT_EXTERNAL'], '1')
+
+    def test_owned_batch_requires_server_revision_evidence(self):
+        stage = subject.stages('nonce')[1]
+        event = dict(event='complete', crate_name='dependency_fallback_root', result={})
+        with self.assertRaisesRegex(AssertionError, 'telemetry missing'):
+            subject.validate_owned_batch(stage, [event], None)
+        event['result']['owned'] = dict(enabled=True, revisions=2, contexts=2)
+        subject.validate_owned_batch(stage, [event], dict(owned_revisions=1))
+        with self.assertRaisesRegex(AssertionError, 'did not advance'):
+            subject.validate_owned_batch(stage, [event], dict(owned_revisions=2))
+        for field in ('revisions', 'contexts'):
+            invalid = dict(event, result=dict(owned={**event['result']['owned'], field: True}))
+            with self.assertRaisesRegex(AssertionError, 'telemetry missing'):
+                subject.validate_owned_batch(stage, [invalid], None)
 
     def test_required_root_allows_client_scoped_request_id_reset(self):
         runner, _ = self.mock_runner(resident_root=True, stale_request=True)
