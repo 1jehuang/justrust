@@ -143,6 +143,36 @@ is 2.95% slower and After B is 23.63% faster. Control medians also varied. Machi
 load observations remain in the receipts, and this is not a quiet-machine,
 statistical, production-performance or representative-project speed claim.
 
+On November 17, the same old/new/new/old experiment was repeated with a frozen
+`d1baf2081` harness and `taskset -c 3`. New captures record the actual Linux boot
+ID and effective affinity, and comparison refuses mismatched host dictionaries.
+All four runs used the same boot and affinity `[3]`, with the same 128-item,
+eight-edit, six-repetition workload and strict native hit/artifact oracles:
+
+| Run | Fresh median | Process-only control | Live leaf | Leaf/control |
+| --- | ---: | ---: | ---: | ---: |
+| Before A | 28.642 ms | 14.457 ms | 81.650 ms | 5.648x |
+| After A | 29.740 ms | 15.472 ms | 16.213 ms | 1.048x |
+| After B | 28.526 ms | 17.352 ms | 17.024 ms | 0.981x |
+| Before B | 30.113 ms | 15.420 ms | 91.352 ms | 5.924x |
+
+Both strict `bench/suite.py compare --allow-compiler-change` pairs passed.
+The exact originals are stored and authenticated readback verified as
+`bench/stable-resident-memo-suite-20261117-0033-pinned-{before-a,after-a,after-b,before-b}`.
+This repeat confirms removal of the large identity-validation regression, but
+does not establish a useful extra retention win over the process-only control:
+enabled medians are 4.79% slower and 1.89% faster, both below the 10% diagnostic
+floor. A fixed core is not a guarantee of an otherwise idle machine.
+
+A separate authenticated guest baseline passed with fresh/control/leaf medians
+22.816/10.674/80.402 ms, archived with exact readback as
+`bench/stable-resident-leaf-suite-20261116-1602-guest-before-a`.
+The optimized guest upload then failed before hash verification or execution.
+Subsequent normal SSH attempts encountered a stale hosted slot assignment,
+a daemon-held provisioning lock and a DNS failure. The existing hosted recovery
+coordinator owns that repair. No optimized guest timing, production activation,
+or successful final guest dogfood is claimed for the memoized candidate.
+
 ## Why a second cache is insufficient
 
 A `Ty<'tcx>`, `TypeckResults<'tcx>` or MIR `Body<'tcx>` can refer to an interner,
