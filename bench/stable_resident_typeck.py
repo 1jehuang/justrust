@@ -33,11 +33,51 @@ def fixture(value=7, width=8, caller_width=None):
 
 
 def cases():
-    return [(name, fixture(value, width, caller), expected, reusable)
+    baseline = [(name, fixture(value, width, caller), expected, reusable)
             for (name, _, expected, reusable), (value, width, caller) in zip(
                 typed.cases(), [(7, 8, 8), (7, 8, 8), (7, 8, 8),
                 (9, 8, 8), (9, 8, 8), (11, 16, 16), (11, 16, 16),
                 (13, 16, 8), (13, 16, 8), (15, 8, 8), (15, 8, 8)])]
+    # Ordinary late-lint consumers need expression types when executed, but
+    # lint_mod itself can be green-skipped. Keep the original eleven cases
+    # unchanged, including their missing-hit evidence and error recovery.
+    # These are source programs, not explicit compiler-query requests.
+    demands = {
+        'path-statement': 'pub fn demand() { let value = 7u8; value; }\n',
+        'unused-result': '#[warn(unused_results)]\n'
+                         'pub fn demand() { checked(); }\n',
+        'must-use-call': '#[must_use]\n'
+                         'pub fn demanded_value() -> u8 { 17u8 }\n'
+                         'pub fn demand() { demanded_value(); }\n',
+        # These consumers demand inference/const evaluation/monomorphization
+        # initially, but their enclosing green queries may skip materialization
+        # on repeats. Only actual Typeck hit deltas can establish acceptance.
+        # Export a separate consumer so the original constant-return oracle is
+        # neither weakened nor silently expanded into a general codegen oracle.
+        'generic-const': 'pub fn identity<T>(value: T) -> T { value }\n'
+                         'pub const fn constant_value() -> u8 { 17u8 }\n'
+                         'pub struct ConstConsumer<const N: u8>;\n'
+                         'pub fn consume_const(_: ConstConsumer<{ constant_value() }>) -> u8 {\n'
+                         '    identity(constant_value())\n'
+                         '}\n'
+                         '#[unsafe(no_mangle)]\n'
+                         'pub fn demanded_value() -> u8 {\n'
+                         '    consume_const(ConstConsumer::<{ constant_value() }>)\n'
+                         '}\n',
+        'opaque-codegen': 'pub trait Value { fn value(self) -> u8; }\n'
+                          'pub struct Concrete;\n'
+                          'impl Value for Concrete { fn value(self) -> u8 { 17u8 } }\n'
+                          'pub fn hidden_value() -> impl Value { Concrete }\n'
+                          'pub fn consume<T: Value>(value: T) -> u8 { value.value() }\n'
+                          '#[unsafe(no_mangle)]\n'
+                          'pub fn demanded_value() -> u8 { consume(hidden_value()) }\n',
+    }
+    for name, demand in demands.items():
+        source = fixture(17) + demand
+        baseline.extend([(name + '-initial', source, (8, 17), False),
+                         (name + '-unchanged', source, (8, 17), True),
+                         (name + '-unchanged-again', source, (8, 17), True)])
+    return baseline
 
 
 def validate_live(response, previous, mode, reusable):
@@ -131,11 +171,15 @@ def capture_mode(compiler, root, mode, timeout):
                      'load_from_disk_or_invoke_provider_green, not ensure_ok green skips.',
                 interpretation='The analysis typeck demand uses ensure_ok; green query dependencies '
                                'and retained optimized MIR can satisfy repeat compilation without '
-                               'materializing typeck_root. This is a query-demand inference, not '
+                               'materializing typeck_root. Lint, opaque-type and const/codegen '
+                               'consumers can themselves be green queries. Fixture syntax alone '
+                               'does not prove repeated Typeck materialization. '
+                               'This is a query-demand inference, not '
                                'proof of a failed retained Typeck lookup.',
                 source_locations=['toolchain/rustc/compiler/rustc_hir_analysis/src/lib.rs:check_crate',
                     'toolchain/rustc/compiler/rustc_query_impl/src/execution.rs:'
                     'load_from_disk_or_invoke_provider_green',
+                    'toolchain/rustc/compiler/rustc_lint/src/late.rs:check_crate',
                     'toolchain/rustc/compiler/rustc_query_impl/src/execution.rs:ensure_can_skip_execution'])
     except BaseException as error:
         result.update(verdict='failed', error=f'{type(error).__name__}: {error}')

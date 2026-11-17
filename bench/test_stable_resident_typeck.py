@@ -83,6 +83,30 @@ class TypeckOracleTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 typed.artifact_oracle(data, (8, 7))
 
+    def test_ordinary_candidates_preserve_baseline_and_strict_repeats(self):
+        rows = harness.cases()
+        self.assertEqual([row[0] for row in rows[:11]],
+                         [row[0] for row in typed.cases()])
+        for row, original in zip(rows[:11], typed.cases()):
+            self.assertEqual(row[1], harness.fixture(
+                original[2][1] if original[2] else 13,
+                original[2][0] if original[2] else 16,
+                8 if original[2] is None else original[2][0]))
+            self.assertEqual(row[2:], original[2:])
+        for index in range(11, len(rows), 3):
+            initial, repeat, again = rows[index:index + 3]
+            self.assertEqual(initial[1:3], repeat[1:3])
+            self.assertEqual(initial[1:3], again[1:3])
+            self.assertEqual([initial[3], repeat[3], again[3]], [False, True, True])
+            self.assertIn('#![no_core]', initial[1])
+            self.assertNotIn('extern crate', initial[1])
+        generic = next(row[1] for row in rows if row[0] == 'generic-const-initial')
+        self.assertIn('identity(constant_value())', generic)
+        self.assertIn('ConstConsumer::<{ constant_value() }>', generic)
+        opaque = next(row[1] for row in rows if row[0] == 'opaque-codegen-initial')
+        self.assertIn('-> impl Value', opaque)
+        self.assertIn('consume(hidden_value())', opaque)
+
 
 class CaptureTests(unittest.TestCase):
     def run_capture(self, root, hit_key='typeck_hits', identities=None, shutdown=False):
@@ -133,7 +157,7 @@ class CaptureTests(unittest.TestCase):
             self.assertEqual(json.loads((root / 'evidence/receipt.json').read_text()), report)
             for mode in ('control', 'typeck'):
                 receipt = json.loads((root / 'evidence' / mode / 'receipt.json').read_text())
-                self.assertEqual(len(receipt['observations']), 11)
+                self.assertEqual(len(receipt['observations']), len(harness.cases()))
                 self.assertTrue((root / 'evidence' / mode / '10-source.rs').exists())
                 self.assertTrue((root / 'evidence' / mode / '10-resident.ll').exists())
 
@@ -143,11 +167,13 @@ class CaptureTests(unittest.TestCase):
             report = self.run_capture(root, 'mir_hits')
             self.assertEqual(report['verdict'], 'failed')
             mode = report['modes'][1]
-            self.assertEqual(len(mode['failures']), 5)
-            self.assertEqual(mode['observations'][-1]['name'], 'recovery-unchanged')
+            expected_hits = sum(row[3] for row in harness.cases())
+            self.assertEqual(len(mode['failures']), expected_hits)
+            self.assertEqual(mode['observations'][10]['name'], 'recovery-unchanged')
+            self.assertEqual(mode['observations'][-1]['name'], 'opaque-codegen-unchanged-again')
             self.assertEqual(mode['observations'][7]['resident']['status'], 1)
             self.assertEqual(mode['live']['typeck_hits'], 0)
-            self.assertEqual(mode['live']['mir_hits'], 5)
+            self.assertEqual(mode['live']['mir_hits'], expected_hits)
             self.assertIn('ensure_ok', mode['typeck_failure_analysis']['gate'])
             self.assertEqual(mode['observations'][1]['hit_deltas'],
                              {'typeck_hits': 0, 'mir_hits': 1})
