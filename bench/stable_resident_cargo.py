@@ -243,11 +243,30 @@ def capture_mode(compiler, cargo, fixture, root, mode, original, nonce, timeout,
     return report
 
 
-def capture(compiler, cargo, output, repetitions=1, timeout=180):
+def justrust_runner(client, cargo, runner=native.run):
+    """Use the real client on an already-authenticated hosted guest.
+
+    Explicit component paths are not an installed/published toolchain. Keep
+    the off/on environment identical except the harness's resident switch.
+    """
+    def invoke(command, timeout, cwd, env):
+        if Path(command[0]) != Path(cargo):
+            raise ValueError('Expected the frozen Cargo candidate')
+        environment = dict(env, JUSTRUST_TOOLCHAIN='system',
+                           JUSTRUST_REAL_CARGO=str(cargo),
+                           JUSTRUST_SLOTS='0', JUSTRUST_TEST_PARALLEL='0')
+        return runner([client, '--local=resident acceptance already on authenticated hosted guest',
+                       'cargo', *command[1:]], timeout, cwd=cwd, env=environment)
+    return invoke
+
+
+def capture(compiler, cargo, output, repetitions=1, timeout=180, justrust=None):
     if repetitions < 1 or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError('Positive repetitions and finite positive timeout required')
     check_socket_path(output, repetitions)
     compiler, cargo = Path(compiler).resolve(strict=True), Path(cargo).resolve(strict=True)
+    client = Path(justrust).resolve(strict=True) if justrust is not None else None
+    runner = justrust_runner(client, cargo) if client else native.run
     root = private_directory(output)
     original = SOURCE.read_bytes()
     (root / 'original-remote_sync_queue.rs').write_bytes(original)
@@ -262,6 +281,13 @@ def capture(compiler, cargo, output, repetitions=1, timeout=180):
                                        preserved='original-remote_sync_queue.rs'),
                   repetitions=[], failures=[])
     try:
+        if client:
+            report['scope'] = 'justrust-client-native-cargo-std-only-edited-build-acceptance'
+            report['client_before'] = dict(path=str(client), sha256=native.digest(client),
+                                           version=native.run([client, '--version']))
+            if report['client_before']['version']['status']:
+                raise AssertionError('justrust candidate identity query failed')
+            report['limitations'].append('Explicit component candidates, not a published/default toolchain; shim phase telemetry unavailable')
         report['compiler_before'] = native.identity(compiler)
         report['cargo_before'] = dict(path=str(cargo), sha256=native.digest(cargo), version=native.run([cargo, '-V']))
         if report['cargo_before']['version']['status'] or report['cargo_before']['version'].get('timed_out'):
@@ -272,7 +298,7 @@ def capture(compiler, cargo, output, repetitions=1, timeout=180):
             report['repetitions'].append(pair)
             for mode in ('off', 'on'):
                 pair[mode] = capture_mode(compiler, cargo, fixture, root / f'{repetition:03d}-{mode}',
-                                          mode, original, nonce, timeout)
+                                          mode, original, nonce, timeout, runner=runner)
             if any(pair[m]['verdict'] != 'passed' for m in pair):
                 report['failures'].append(f'Repetition {repetition} failed acceptance')
             if pair['off'].get('wrapper_fallback', {}).get('semantics') != pair['on'].get('wrapper_fallback', {}).get('semantics'):
@@ -286,6 +312,10 @@ def capture(compiler, cargo, output, repetitions=1, timeout=180):
         raise
     finally:
         try:
+            if client:
+                report['client_after_sha256'] = native.digest(client)
+                if report['client_after_sha256'] != report['client_before']['sha256']:
+                    raise AssertionError('justrust candidate identity changed')
             report['compiler_after'] = native.identity(compiler)
             report['cargo_after_sha256'] = native.digest(cargo)
             if report.get('compiler_before') != report['compiler_after'] or report.get('cargo_before', {}).get('sha256') != report['cargo_after_sha256']:
@@ -302,6 +332,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler', type=Path, required=True)
     parser.add_argument('--cargo', type=Path, required=True)
+    parser.add_argument('--justrust', type=Path, help='Explicit immutable client candidate, already running on an authenticated hosted guest')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('-n', type=int, default=1)
     parser.add_argument('--timeout', type=float, default=180)
@@ -317,7 +348,7 @@ def main():
         parser.error(str(error))
     os.umask(0o077)
     try:
-        report = capture(args.compiler, args.cargo, args.output, args.n, args.timeout)
+        report = capture(args.compiler, args.cargo, args.output, args.n, args.timeout, justrust=args.justrust)
     finally:
         if not args.no_upload:
             dogfood.upload(args.output.absolute())

@@ -913,6 +913,11 @@ fn record(
     let recording_rustc = resident_recording_compiler(
         std::env::var_os("JUSTRUST_CARGO_RESIDENT_DIR").as_deref(),
         pinned.as_ref().map(|tc| tc.id.as_str()),
+        explicit_resident_candidates(
+            std::env::var_os("JUSTRUST_TOOLCHAIN").as_deref(),
+            std::env::var_os("RUSTC").as_deref(),
+            std::env::var_os("JUSTRUST_REAL_CARGO").as_deref(),
+        ),
         &real_rustc,
         &shim,
     )?;
@@ -1834,9 +1839,24 @@ fn apply_recording_run_env(cmd: &mut Command, native: bool, run_dir: &Path, id: 
 /// Cargo path owns transport and lifetime accounting, so the one-process shim
 /// must not add per-invocation phase files or wrap the resident worker. This is
 /// deliberately opt-in and does not change stock-toolchain recording.
+/// Explicit component candidates need not masquerade as a fully installed
+/// toolchain. Cargo still probes the compiler's native capability before RPC.
+/// Requiring the system selection and both absolute overrides keeps this path
+/// separate from published pins and from accidental PATH compiler selection.
+fn explicit_resident_candidates(
+    selection: Option<&std::ffi::OsStr>,
+    compiler: Option<&std::ffi::OsStr>,
+    cargo: Option<&std::ffi::OsStr>,
+) -> bool {
+    selection == Some(std::ffi::OsStr::new("system"))
+        && compiler.is_some_and(|p| !p.is_empty() && Path::new(p).is_absolute())
+        && cargo.is_some_and(|p| !p.is_empty() && Path::new(p).is_absolute())
+}
+
 fn resident_recording_compiler<'a>(
     directory: Option<&std::ffi::OsStr>,
     toolchain: Option<&str>,
+    explicit_candidates: bool,
     compiler: &'a Path,
     shim: &'a Path,
 ) -> Result<&'a Path> {
@@ -1848,8 +1868,9 @@ fn resident_recording_compiler<'a>(
         "JUSTRUST_CARGO_RESIDENT_DIR requires an absolute private guest-side directory"
     );
     anyhow::ensure!(
-        toolchain.is_some_and(|id| id.starts_with("jr-")),
-        "the native Cargo resident experiment requires an explicitly selected owned jr toolchain"
+        toolchain.is_some_and(|id| id.starts_with("jr-"))
+            || (toolchain.is_none() && explicit_candidates),
+        "the native Cargo resident experiment requires an owned jr toolchain or JUSTRUST_TOOLCHAIN=system with absolute RUSTC and JUSTRUST_REAL_CARGO candidates"
     );
     Ok(compiler)
 }
@@ -1888,7 +1909,7 @@ mod tests {
         let compiler = Path::new("/candidate/bin/rustc");
         let shim = Path::new("/production/rustc-shim");
         let select = |directory, toolchain| {
-            super::resident_recording_compiler(directory, toolchain, compiler, shim)
+            super::resident_recording_compiler(directory, toolchain, false, compiler, shim)
         };
         assert_eq!(select(None, None).unwrap(), shim);
         assert_eq!(select(None, Some("jr-release")).unwrap(), shim);
@@ -1901,6 +1922,73 @@ mod tests {
             compiler
         );
     }
+    #[test]
+    fn explicit_resident_components_do_not_impersonate_an_installed_pin() {
+        use std::ffi::OsStr;
+        use std::path::Path;
+        let pair = |selection: Option<&str>, compiler: Option<&str>, cargo: Option<&str>| {
+            super::explicit_resident_candidates(
+                selection.map(OsStr::new),
+                compiler.map(OsStr::new),
+                cargo.map(OsStr::new),
+            )
+        };
+        assert!(pair(
+            Some("system"),
+            Some("/candidate/rustc"),
+            Some("/candidate/cargo")
+        ));
+        assert!(!pair(
+            None,
+            Some("/candidate/rustc"),
+            Some("/candidate/cargo")
+        ));
+        assert!(!pair(
+            Some("jr-release"),
+            Some("/candidate/rustc"),
+            Some("/candidate/cargo")
+        ));
+        assert!(!pair(Some("system"), None, Some("/candidate/cargo")));
+        assert!(!pair(Some("system"), Some("/candidate/rustc"), None));
+        assert!(!pair(
+            Some("system"),
+            Some("rustc"),
+            Some("/candidate/cargo")
+        ));
+        assert!(!pair(
+            Some("system"),
+            Some("/candidate/rustc"),
+            Some("cargo")
+        ));
+        let compiler = Path::new("/candidate/rustc");
+        let shim = Path::new("/installed/shim");
+        assert_eq!(
+            super::resident_recording_compiler(
+                Some(OsStr::new("/private")),
+                None,
+                true,
+                compiler,
+                shim,
+            )
+            .unwrap(),
+            compiler
+        );
+        assert!(
+            super::resident_recording_compiler(
+                Some(OsStr::new("/private")),
+                Some("nightly"),
+                true,
+                compiler,
+                shim,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            super::resident_recording_compiler(None, None, true, compiler, shim,).unwrap(),
+            shim
+        );
+    }
+
     #[test]
     fn workspace_feature_unification_requires_explicit_opt_in() {
         // A no-default-features path dependency must not acquire its parent

@@ -88,6 +88,27 @@ class CargoAcceptanceTests(unittest.TestCase):
         self.assertEqual(off['JUSTRUST_CARGO_RESIDENT'], 'off')
         self.assertEqual(on['JUSTRUST_CARGO_RESIDENT'], 'serial')
 
+    def test_real_client_adapter_preserves_inputs_and_uses_explicit_components(self):
+        calls = []
+        def run(command, timeout, cwd, env):
+            calls.append((command, timeout, cwd, env))
+            return {'status': 0}
+        adapter = harness.justrust_runner(Path('/candidate/justrust'), Path('/candidate/cargo'), runner=run)
+        source = {'RUSTC': '/candidate/rustc', 'OBSERVABLE_INPUT': 'keep',
+                  'JUSTRUST_CARGO_RESIDENT': 'serial', 'JUSTRUST_CARGO_RESIDENT_DIR': '/private'}
+        adapter([Path('/candidate/cargo'), 'test', '--lib'], 20, Path('/fixture'), source)
+        command, timeout, cwd, env = calls[0]
+        self.assertEqual(command[0], Path('/candidate/justrust'))
+        self.assertEqual(command[2:], ['cargo', 'test', '--lib'])
+        self.assertTrue(command[1].startswith('--local='))
+        self.assertEqual(env['JUSTRUST_TOOLCHAIN'], 'system')
+        self.assertEqual(env['JUSTRUST_REAL_CARGO'], '/candidate/cargo')
+        for key, value in source.items():
+            self.assertEqual(env[key], value)
+        self.assertNotIn('JUSTRUST_TOOLCHAIN', source)
+        with self.assertRaisesRegex(ValueError, 'frozen Cargo'):
+            adapter(['/different/cargo'], 20, Path('/fixture'), source)
+
     def test_socket_length_is_checked_before_any_compilation(self):
         harness.check_socket_path(Path('/short'), 1)
         with self.assertRaisesRegex(ValueError, 'too long'):
