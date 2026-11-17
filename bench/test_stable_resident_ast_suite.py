@@ -16,6 +16,102 @@ import stable_resident_ast_suite as suite
 
 
 class AstSuiteTests(unittest.TestCase):
+    def test_worker_launch_uses_attested_composition_environment(self):
+        for mode in (False, True):
+            for arm in ('control', 'ast'):
+                with self.subTest(mode=mode, arm=arm), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    with patch.object(suite.subprocess, 'Popen', return_value=SimpleNamespace(pid=123)) as launch:
+                        worker = suite.AstResident('/compiler', root, arm, 1, mode)
+                    try:
+                        kwargs = launch.call_args.kwargs
+                        env = dict(kwargs['env'])
+                        descriptor = int(env.pop('JUSTRUST_RUSTC_RESIDENT_FD'))
+                        self.assertEqual(kwargs['pass_fds'], (descriptor,))
+                        self.assertEqual(env, suite.environment(arm, mode))
+                        self.assertEqual(worker.environment_sha256, suite.sha(suite.canonical(env)))
+                        self.assertEqual(kwargs['cwd'], root)
+                        self.assertEqual(launch.call_args.args[0], ['/compiler', '--jr-resident-owned'])
+                    finally:
+                        worker.selector.close()
+                        suite.os.close(worker.response_fd)
+                        for stream in (worker.stdout, worker.stderr, worker.transcript):
+                            stream.close()
+
+    def test_composed_cli_environment_and_provenance(self):
+        parser = argparse.ArgumentParser()
+        suite.add_parser(parser.add_subparsers(required=True))
+        argv = ['stable-native-ast', '--compiler', '/c', '--output', '/o',
+                '--expected-driver-sha256', '2' * 64, '--expected-compiler-sha256', '1' * 64]
+        self.assertFalse(parser.parse_args(argv).with_lexer)
+        self.assertTrue(parser.parse_args(argv + ['--with-lexer']).with_lexer)
+        with patch.dict('os.environ', {'JUSTRUST_RUSTC_RESIDENT_AST': '1',
+                'JUSTRUST_RUSTC_RESIDENT_LEXER': '1', 'JUSTRUST_RUSTC_RESIDENT_TYPED': 'leaf'}):
+            for arm in suite.ARMS:
+                env = suite.environment(arm, True)
+                self.assertEqual(env['JUSTRUST_RUSTC_RESIDENT_LEXER'], '1' if arm == 'ast' else '0')
+                self.assertEqual(env['JUSTRUST_RUSTC_RESIDENT_AST'], '1' if arm == 'ast' else '0')
+                self.assertEqual(env['JUSTRUST_RUSTC_RESIDENT_TYPED'], '0')
+        for mode in (None, 1, '1'):
+            with self.assertRaises(ValueError):
+                suite.workload(2, 2, 1, mode)
+        self.assertNotEqual(suite.execution_identity(), suite.execution_identity(True))
+        self.assertNotIn('with_lexer', suite.workload(2, 2, 1))
+
+    def test_composed_offline_receipt_and_mixed_comparison_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ('ast', 'combined'):
+                (root / name).mkdir()
+            original = self.synthetic(root / 'ast')
+            composed = self.synthetic(root / 'combined', True)
+            self.assertEqual(suite.validate(composed), composed['aggregates'])
+            with self.assertRaisesRegex(ValueError, 'different workload'):
+                suite.compare(original, composed)
+            with contextlib.redirect_stdout(io.StringIO()):
+                suite.compare(composed, copy.deepcopy(composed))
+            changed = copy.deepcopy(composed)
+            changed['workload'].pop('with_lexer')
+            changed['workload_sha256'] = suite.sha(suite.canonical(changed['workload']))
+            with self.assertRaisesRegex(ValueError, 'unsafe retention gates'):
+                suite.validate(changed)
+
+    def test_composed_strict_cache_accounting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = self.synthetic(Path(directory), True)
+            rows = [r for r in report['rows'] if r['arm'] == 'ast']
+            previous = None
+            for row in rows:
+                previous = suite.validate_live(row['record'], previous, 'ast', row['kind'], True)
+            mutations = [
+                ('lexer', 'hits', 0), ('lexer', 'hits', True),
+                ('lexer', 'misses', 0), ('lexer', 'rejected', 1),
+                ('lexer', 'retained_entries', 0), ('lexer', 'retained_entries', 129),
+                ('lexer', 'retained_estimated_bytes', 8 * 1024 * 1024 + 1),
+                ('lexer', 'unknown', 0), ('ast', 'hits', 0),
+                ('ast', 'misses', 2), ('ast', 'unknown', 0),
+                ('live', 'typeck_hits', 1), ('live', 'mir_leaf_hits', 1)]
+            previous = suite.validate_live(rows[0]['record'], None, 'ast', 'cold', True)
+            for field, key, value in mutations:
+                with self.subTest(field=field, key=key, value=value):
+                    record = copy.deepcopy(rows[1]['record'])
+                    record[field][key] = value
+                    with self.assertRaises((ValueError, AssertionError)):
+                        suite.validate_live(record, previous, 'ast', 'unchanged', True)
+            record = copy.deepcopy(rows[0]['record'])
+            record['lexer']['hits'] = 1
+            with self.assertRaisesRegex(ValueError, 'exact composed lexer delta'):
+                suite.validate_live(record, None, 'ast', 'cold', True)
+            control = next(r['record'] for r in report['rows'] if r['arm'] == 'control')
+            for field in ('ast', 'lexer', 'live'):
+                record = copy.deepcopy(control)
+                record[field]['hits' if field != 'live' else 'typeck_hits'] = 1
+                with self.assertRaises((ValueError, AssertionError)):
+                    suite.validate_live(record, None, 'control', 'cold', True)
+            # Enabling composition must not relax the AST-only lexer zero gate.
+            with self.assertRaisesRegex(AssertionError, 'Disabled lexer'):
+                suite.validate_live(rows[0]['record'], None, 'ast', 'cold')
+
     def test_root_stable_helper_only_edits_and_oracle(self):
         for items in (1, 7, 128):
             original, _ = suite.fixture(items, 0)
@@ -100,14 +196,14 @@ class AstSuiteTests(unittest.TestCase):
                                       expected_driver_sha256=driver)
             self.assertFalse((root / 'out').exists())
 
-    def synthetic(self, root):
-        spec = suite.workload(2, 2, 1)
+    def synthetic(self, root, with_lexer=False):
+        spec = suite.workload(2, 2, 1, with_lexer)
         identity = dict(path='/attested/bin/rustc', sha256='1' * 64, drivers=[dict(sha256='2' * 64)])
         report = dict(schema=suite.SCHEMA, verdict='passed', expected_identity=suite.attestation('2' * 64, '1' * 64),
                       identity_before=identity, identity_after=copy.deepcopy(identity), workspace=str(root),
                       host=dict(boot_id='00000000-0000-0000-0000-000000000001', affinity=[0], execution='local-native-owned'),
                       workload=spec, workload_sha256=suite.sha(suite.canonical(spec)), source_blobs={}, rows=[], sessions=[],
-                      execution=suite.execution_identity())
+                      execution=suite.execution_identity(with_lexer))
         report['actual_execution'] = dict(argv=report['execution']['argv'], cwd=str(root))
         def artifact(name, data):
             path = root / name
@@ -137,6 +233,10 @@ class AstSuiteTests(unittest.TestCase):
                     producer.update(pid=session['pid'], executed=True, request=dict(id=step + 1, args=report['execution']['argv']),
                                     id=step + 1, owned=dict(revisions=step + 1, retirement_reason=None), live=live, lexer=dict.fromkeys(suite.ast.COUNTERS, 0), ast=counters,
                                     worker_elapsed_seconds=0.005)
+                    if with_lexer and arm == 'ast':
+                        producer['lexer'].update(hits=0 if step == 0 else step + 1,
+                            misses=2 + max(0, step - 1), retained_entries=2 + max(0, step - 1),
+                            retained_estimated_bytes=200 + 100 * max(0, step - 1))
                     wire = {k: v for k, v in producer.items() if k not in ('request', 'command', 'worker_elapsed_seconds', 'stdout_b64', 'stderr_b64')}
                     wire['elapsed_seconds'] = 0.005
                     frames.extend([dict(request=producer['request']), dict(response_b64=suite.shared.encoded(json.dumps(wire).encode()))])
@@ -240,11 +340,16 @@ class AstSuiteTests(unittest.TestCase):
                     suite.compare(report, report, floor)
 
     def test_mock_full_capture_no_incremental_fixed_workspace(self):
+        for with_lexer in (False, True):
+            with self.subTest(with_lexer=with_lexer):
+                self.mock_full_capture(with_lexer)
+
+    def mock_full_capture(self, with_lexer):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             template_dir = root / 'template'
             template_dir.mkdir()
-            template = self.synthetic(template_dir)
+            template = self.synthetic(template_dir, with_lexer)
             compiler = root / 'bin/rustc'
             compiler.parent.mkdir()
             compiler.write_bytes(b'compiler')
@@ -278,10 +383,10 @@ class AstSuiteTests(unittest.TestCase):
                     record['stdout_b64'] = suite.shared.encoded(('\n'.join(values) + '\n').encode())
                 return record
             class Worker:
-                def __init__(self, compiler, cwd, arm, timeout):
+                def __init__(self, compiler, cwd, arm, timeout, with_lexer=False):
                     self.cwd, self.arm, self.step = cwd, arm, 0
                     self.command = [str(compiler), '--jr-resident-owned']
-                    self.environment_sha256 = suite.sha(suite.canonical(suite.environment(arm)))
+                    self.environment_sha256 = suite.sha(suite.canonical(suite.environment(arm, with_lexer)))
                     self.process = SimpleNamespace(pid=10 if arm == 'control' else 11)
                 def compile(self, argv):
                     producer(self.cwd)
@@ -297,7 +402,7 @@ class AstSuiteTests(unittest.TestCase):
                     patch.object(suite.shared, 'run', side_effect=run), \
                     patch.object(suite, 'AstResident', Worker):
                 report = suite.capture(compiler, root / 'out', 2, 2, 1,
-                    expected_compiler_sha256=identity['sha256'], expected_driver_sha256=identity['drivers'][0]['sha256'])
+                    expected_compiler_sha256=identity['sha256'], expected_driver_sha256=identity['drivers'][0]['sha256'], with_lexer=with_lexer)
             self.assertEqual(suite.validate(report), report['aggregates'])
             self.assertEqual(len(report['rows']), 12)
             self.assertEqual({cwd for cwd, env in calls}, {str(root / 'out/workspace')})
