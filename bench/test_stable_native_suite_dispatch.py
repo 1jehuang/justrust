@@ -29,6 +29,23 @@ class StableNativeDispatchTests(unittest.TestCase):
                 suite.cmd_compare(args)
         return module.compare
 
+    def test_decoder_dispatch_preserves_explicit_candidate_opt_in(self):
+        a = {'schema': 'stable_native_decoder/v1'}
+        b = {'schema': 'stable_native_decoder/v1'}
+        compare = self.invoke(a, b, module_name='stable_resident_decoder_suite')
+        compare.assert_called_once_with(a, b, 10)
+        compare = self.invoke(a, b, allow_compiler_change=True,
+                              module_name='stable_resident_decoder_suite')
+        compare.assert_called_once_with(a, b, 10, allow_compiler_change=True)
+        with self.assertRaisesRegex(SystemExit, 'only synthetic'):
+            self.invoke(a, b, require_valid=True,
+                        module_name='stable_resident_decoder_suite')
+        for other in ('leaf', 'arithmetic', 'lexer', 'ast', 'cargo'):
+            for first, second in (('decoder', other), (other, 'decoder')):
+                with self.assertRaisesRegex(SystemExit, 'different stable native workloads'):
+                    self.invoke({'schema': f'stable_native_{first}/v1'},
+                                {'schema': f'stable_native_{second}/v1'})
+
     def test_cargo_dispatch_requires_identical_components(self):
         a = {'schema': 'stable_native_cargo/v1'}
         b = {'schema': 'stable_native_cargo/v1'}

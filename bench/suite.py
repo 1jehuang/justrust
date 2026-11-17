@@ -1778,12 +1778,15 @@ def cmd_compare(args) -> None:
     lexer_receipt = any(str(result.get("schema", "")).startswith("stable_native_lexer/") for result in (a, b))
     ast_receipt = any(str(result.get("schema", "")).startswith("stable_native_ast/") for result in (a, b))
     cargo_receipt = any(str(result.get("schema", "")).startswith("stable_native_cargo/") for result in (a, b))
-    if leaf_receipt or arithmetic_receipt or lexer_receipt or ast_receipt or cargo_receipt:
+    decoder_receipt = any(str(result.get("schema", "")).startswith("stable_native_decoder/") for result in (a, b))
+    if leaf_receipt or arithmetic_receipt or lexer_receipt or ast_receipt or cargo_receipt or decoder_receipt:
         if getattr(args, "require_valid", False):
             sys.exit("bench: --require-valid supports only synthetic comparisons")
-        if sum((leaf_receipt, arithmetic_receipt, lexer_receipt, ast_receipt, cargo_receipt)) > 1:
+        if sum((leaf_receipt, arithmetic_receipt, lexer_receipt, ast_receipt, cargo_receipt, decoder_receipt)) > 1:
             sys.exit("bench: comparison refuses different stable native workloads")
-        if cargo_receipt:
+        if decoder_receipt:
+            from stable_resident_decoder_suite import compare
+        elif cargo_receipt:
             if getattr(args, "allow_compiler_change", False):
                 sys.exit("bench: Cargo comparison requires identical component candidates")
             from stable_resident_cargo_suite import compare
@@ -1803,7 +1806,7 @@ def cmd_compare(args) -> None:
             compare(a, b, args.floor)
         return
     if getattr(args, "allow_compiler_change", False):
-        sys.exit("bench: --allow-compiler-change supports only stable native leaf, arithmetic and lexer comparisons")
+        sys.exit("bench: --allow-compiler-change supports only stable native leaf, arithmetic, lexer and decoder comparisons")
     if any(result.get("schema") == "contention_suite_v1" for result in (a, b)):
         from contention import comparison_issues
         issues = comparison_issues(a, b)
@@ -1941,6 +1944,8 @@ def main() -> None:
     add_stable_lexer_parser(sub)
     from stable_resident_ast_suite import add_parser as add_stable_ast_parser
     add_stable_ast_parser(sub)
+    from stable_resident_decoder_suite import add_parser as add_stable_decoder_parser
+    add_stable_decoder_parser(sub)
     from stable_resident_cargo_suite import add_parser as add_stable_cargo_parser
     add_stable_cargo_parser(sub)
     sub.add_parser("list").set_defaults(fn=cmd_list)
