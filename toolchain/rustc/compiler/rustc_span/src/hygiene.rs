@@ -402,6 +402,9 @@ impl HygieneData {
     /// next store assigns the same number to the same dependency.
     ///
     /// This is not valid while retaining a crate store or its decoded contexts.
+    // JUSTIFICATION: retain only filters lookup membership using the key's
+    // crate number. Iteration order cannot affect any retained value or ID.
+    #[allow(rustc::potential_query_instability)]
     pub(crate) fn reset_resident_metadata_identity(&mut self) {
         self.foreign_expn_data.clear();
         self.foreign_expn_hashes.clear();

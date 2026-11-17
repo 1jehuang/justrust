@@ -149,6 +149,21 @@ impl<'domain> ResidentCompilerBatch<'domain> {
         config: Config,
         f: impl FnOnce(&'domain Compiler, &ResidentTypeDomain<'domain>) -> R,
     ) -> R {
+        self.run_with_metadata_identity(config, false, f)
+    }
+
+    /// Fresh type contexts must also discard crate-store-local foreign hygiene
+    /// identities. This does not authorize reusing old decoded metadata or types.
+    #[allow(rustc::bad_opt_access)]
+    pub fn run_with_metadata_identity<R>(
+        &self,
+        config: Config,
+        fresh_metadata: bool,
+        f: impl FnOnce(&'domain Compiler, &ResidentTypeDomain<'domain>) -> R,
+    ) -> R {
+        if fresh_metadata {
+            self.owners.globals.borrow_mut().reset_resident_metadata_identity();
+        }
         let early_dcx = EarlyDiagCtxt::new(config.opts.error_format);
         reject_unsupported(&early_dcx, &config, self.options);
         if self.external_decoders && self.decoder_stats().retired {

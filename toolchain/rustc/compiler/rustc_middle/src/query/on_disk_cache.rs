@@ -876,7 +876,10 @@ impl<'tcx> CacheEncoder<'tcx> {
                 .get(&(&raw const *source_file))
                 .copied()
                 .unwrap_or_else(|| {
-                    self.tcx.dcx().fatal("resident cache encoding refused an inactive source file")
+                    self.tcx.dcx().fatal(format!(
+                        "resident cache encoding refused an inactive source file: {:?} at {:?}",
+                        source_file.name, source_file.start_pos,
+                    ))
                 });
         }
         self.file_to_file_index[&(&raw const *source_file)]

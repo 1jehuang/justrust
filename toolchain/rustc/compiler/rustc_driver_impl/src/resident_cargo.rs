@@ -689,17 +689,26 @@ fn serve_requests(
                         let (prepared, initial_callbacks) =
                             prepared.take().expect("owned preflight");
                         callbacks = initial_callbacks;
-                        batch.run(prepared.config, |compiler, domain| {
-                            crate::run_compiler_pipeline_with_live_identity(
-                                compiler,
-                                Some(domain),
-                                &mut callbacks,
-                                prepared.has_input,
-                                prepared.help_only,
-                                prepared.registered_lints,
-                                None,
-                            );
-                        });
+                        batch.run_with_metadata_identity(
+                            prepared.config,
+                            macro_helpers,
+                            |compiler, domain| {
+                                crate::run_compiler_pipeline_with_live_identity(
+                                    compiler,
+                                    // Fresh macro expansions do not establish a stable
+                                    // cross-revision type/source identity. In particular,
+                                    // interned ADTs can retain old source-bearing data.
+                                    // Keep the process/source owner resident, but use a
+                                    // fresh type context until that identity is proven.
+                                    if macro_helpers { None } else { Some(domain) },
+                                    &mut callbacks,
+                                    prepared.has_input,
+                                    prepared.help_only,
+                                    prepared.registered_lints,
+                                    None,
+                                );
+                            },
+                        );
                     } else {
                         crate::compiler_entrypoint(&argv, &mut callbacks);
                     }
@@ -755,7 +764,8 @@ fn serve_requests(
             let (revisions, contexts) = batch.counts();
             let live = batch.live_stats();
             json!({"enabled":true,"revisions":revisions,"contexts":contexts,
-                "live_queries":false,"external_decoders":decoder_enabled,"incremental_control":true,
+                "live_queries":false,"shared_type_interners":!macro_helpers,
+                "external_decoders":decoder_enabled,"incremental_control":true,
                 "retained_entries":live.retained_entries,
                 "retained_estimated_bytes":live.retained_estimated_bytes})
         });
