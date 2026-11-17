@@ -1,0 +1,74 @@
+--- a/crates/jcode-tui/src/tui/app/helpers.rs
++++ b/crates/jcode-tui/src/tui/app/helpers.rs
+@@ -354,28 +354,37 @@
+ /// sink lets those tests assert the wiring *and* the copied text without
+ /// depending on a desktop session (refs #596).
+ #[cfg(test)]
+-static TEST_CLIPBOARD: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
++thread_local! {
++    // Each test owns its capture, including writes without a render-state lock.
++    static TEST_CLIPBOARD: std::sync::Mutex<Option<String>> = const {
++        std::sync::Mutex::new(None)
++    };
++}
+ 
+ /// Test-only: route clipboard writes into an in-process sink instead of the OS.
+ #[cfg(test)]
+ pub(crate) fn capture_clipboard_for_tests() {
+-    if let Ok(mut sink) = TEST_CLIPBOARD.lock() {
+-        *sink = Some(String::new());
+-    }
++    TEST_CLIPBOARD.with(|clipboard| {
++        if let Ok(mut sink) = clipboard.lock() {
++            *sink = Some(String::new());
++        }
++    });
+ }
+ 
+ /// Test-only: the last text written while capture was enabled.
+ #[cfg(test)]
+ pub(crate) fn captured_clipboard_for_tests() -> Option<String> {
+-    TEST_CLIPBOARD.lock().ok().and_then(|sink| sink.clone())
++    TEST_CLIPBOARD.with(|clipboard| clipboard.lock().ok().and_then(|sink| sink.clone()))
+ }
+ 
+ /// Test-only: stop capturing and drop any captured text.
+ #[cfg(test)]
+ pub(crate) fn stop_capturing_clipboard_for_tests() {
+-    if let Ok(mut sink) = TEST_CLIPBOARD.lock() {
+-        *sink = None;
+-    }
++    TEST_CLIPBOARD.with(|clipboard| {
++        if let Ok(mut sink) = clipboard.lock() {
++            *sink = None;
++        }
++    });
+ }
+ 
+ /// Copy text to clipboard. On Windows and macOS, the native clipboard API
+@@ -395,15 +404,17 @@
+     // not carry an unreachable tail after this block's `return`.
+     #[cfg(test)]
+     {
+-        if let Ok(mut sink) = TEST_CLIPBOARD.lock() {
+-            match sink.as_mut() {
+-                Some(captured) => {
+-                    captured.clear();
+-                    captured.push_str(text);
++        TEST_CLIPBOARD.with(|clipboard| {
++            if let Ok(mut sink) = clipboard.lock() {
++                match sink.as_mut() {
++                    Some(captured) => {
++                        captured.clear();
++                        captured.push_str(text);
++                    }
++                    None => *sink = Some(text.to_string()),
+                 }
+-                None => *sink = Some(text.to_string()),
+-            }
+-        }
++            }
++        });
+         true
+     }
+ 

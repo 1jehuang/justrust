@@ -366,6 +366,56 @@ and the second failed (`20261117-030156663-3771915`). Neither is evidence of a
 clean repeated full-TUI acceptance. That unrelated blocker remains visible and
 must be corrected separately before the comprehensive comparison can pass.
 
+### Pinned clipboard capture ownership followthrough
+
+The repeated full-TUI failure above exposed a second independent test-owned
+state leak. `helpers.rs` stored `TEST_CLIPBOARD` process-wide, and every
+`copy_to_clipboard` call overwrote it, even from tests that did not acquire the
+render-state lock. The Unicode-math badge test correctly held that lock and
+checked exact copied LaTeX, but unrelated clipboard writers did not belong to
+its capture. Merely locking `CapturedClipboard` readers would not protect them
+from those writers.
+
+`jcode-clipboard-capture-fixture-v1.patch` makes only the `cfg(test)` sink
+thread-owned. It retains the existing mutex, capture/reset behavior, every
+copy mutation branch, and the entire production clipboard implementation
+byte-for-byte. It edits no test functions or assertions. Strict helper input
+SHA256 and versioned patch SHA256 checks feed the same shared snapshot identity
+as the login fixture correction. There are no live-source edits, repins,
+provider filters, skipped tests, or reduced thread counts.
+
+The original exact LaTeX assertion deterministically fails when the real copy
+helper writes unrelated text from a second thread after the badge key handler
+(`20261117-031238960-4010042`). Under the overlay the identical contamination
+passes every original check (`20261117-031333213-4022917`), while an incorrect
+write from the owning test thread still fails that same original text assertion
+(`20261117-031341874-4024101`). The overlay was registered only after those
+negative/positive/owned-failure controls completed.
+
+```sh
+PYTHONPATH=bench python3 -m unittest test_clipboard_capture_fixture test_login_event_fixture
+python3 bench/test_clipboard_capture_fixture.py --accept "$JCODE_SCRATCH_DIR/clipboard-capture-controls" --full
+```
+
+Both diagnostic harnesses retain exact pinned shallow Git objects and refs when
+copying snapshots, excluding only build outputs. Omitting `.git` would invalidate
+repository-discovery/version workspace acceptance. A regression verifies these
+bytes survive for both sibling repositories. Full acceptance requires two clean
+normal-parallel TUI runs and two full runs of each pinned workspace, with additive
+controls removed. An automatic single-test retry does not count as a clean
+normal-parallel acceptance.
+
+The exact tracked-source-matched, Git-preserved combined snapshot was exercised
+on stock Rust 1.99.0 without thread overrides. Both desktop workspace runs passed
+all 1,755 tests (`20261117-032906889-468356`,
+`20261117-032959257-495668`). Both full-TUI runs failed the pre-existing
+subscription scaffold `/login jcode` assertion (`20261117-032446346-308667`,
+`20261117-032513101-351938`). Both full jcode workspace runs failed the Anthropic
+live-catalog fixture (`20261117-032545127-395025`,
+`20261117-032855293-463490`), and the first also failed OpenAI Codex model
+availability. These are remaining blockers, not clean broad acceptance or a
+performance comparison. No speedup is claimed.
+
 ### Pinned terminal Responses fixture protocol correction
 
 `jcode-terminal-websocket-catalog-v1.patch` corrects the loopback server in

@@ -58,7 +58,32 @@ def corrected(root):
     return {source: (root / source).read_text() for source in (BUS, TEST)}
 
 
+def copy_acceptance_snapshot(snapshot, diagnostics):
+    """Preserve pinned shallow Git objects/refs, excluding only build outputs."""
+    shutil.copytree(snapshot, diagnostics, ignore=shutil.ignore_patterns('target'))
+
+
 class LoginEventFixture(unittest.TestCase):
+    def test_diagnostic_snapshot_preserves_exact_git_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'source'
+            target = Path(directory) / 'diagnostics'
+            for name in ('jcode', 'jcode-desktop'):
+                for rel, content in (('.git/HEAD', 'ref: refs/heads/bench-pinned\n'),
+                                     ('.git/refs/heads/bench-pinned', 'pinned-object-id\n'),
+                                     ('.git/objects/pinned', 'exact commit bytes'),
+                                     ('src/lib.rs', '// exact source\n'),
+                                     ('target/build-output', 'excluded')):
+                    path = source / name / rel
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(content)
+            copy_acceptance_snapshot(source, target)
+            for path in source.rglob('*'):
+                if path.is_file() and 'target' not in path.relative_to(source).parts:
+                    self.assertEqual(path.read_bytes(), (target / path.relative_to(source)).read_bytes())
+            self.assertFalse((target / 'jcode/target').exists())
+            self.assertFalse((target / 'jcode-desktop/target').exists())
+
     def test_preserves_every_assertion_and_entire_lifecycle(self):
         with tempfile.TemporaryDirectory() as directory:
             after = corrected(Path(directory))
@@ -136,7 +161,9 @@ def acceptance(directory, full=False):
     diagnostics = directory / 'diagnostics'
     if diagnostics.exists():
         raise ValueError(f'diagnostic destination already exists: {diagnostics}')
-    shutil.copytree(snapshot, diagnostics, ignore=shutil.ignore_patterns('target', '.git'))
+    # Exact pinned Git metadata is part of the workload contract. Repository
+    # discovery/version fixtures must not see an empty synthetic repository.
+    copy_acceptance_snapshot(snapshot, diagnostics)
     repo = diagnostics / 'jcode'
     env = os.environ.copy()
     env['JUSTRUST_TOOLCHAIN'] = 'system'
@@ -157,6 +184,8 @@ def acceptance(directory, full=False):
         if result.returncode != expected:
             raise RuntimeError(f'expected exit {expected}, got {result.returncode}')
         output = result.stdout + result.stderr
+        if expected == 0 and 'passed when rerun alone by name' in output:
+            raise RuntimeError('acceptance requires clean normal-parallel tests, not single-test retries')
         if failure and failure not in output:
             raise RuntimeError(f'original assertion not reached: {failure}')
         if arguments[-1] == NAME and expected == 0 and '1 passed' not in output:

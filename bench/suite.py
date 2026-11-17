@@ -150,6 +150,8 @@ SNAPSHOTS = {
         },
         "fixture_overlays": [pty_fixture.identity()],
         "fixture_patch_sha256": {
+            "bench/patches/jcode-clipboard-capture-fixture-v1.patch":
+                "612a3976157bc95ea4dada68c1a5baa354debf1f95dd6329e815705816540849",
             "bench/patches/jcode-login-event-fixture-v1.patch":
                 "2ffae183df7ced327ad3135a9c54f105f0be8b9aa37891d94fe99c178653dd26",
             "bench/patches/jcode-base-global-fixtures-v1.patch":
@@ -166,6 +168,8 @@ SNAPSHOTS = {
                 "3f6b2c411a28cd26cd929e2787ded1d1cedee972e7df683d8eaab7f9ca75b788",
         },
         "fixture_input_sha256": {
+            "jcode/crates/jcode-tui/src/tui/app/helpers.rs":
+                "51a69f2713ef780424eccf42e03178bdce32f621372dc62fd3da4ee67c991250",
             "jcode/crates/jcode-base/src/bus.rs":
                 "d24da766f8270ae942cfcf9bb0ade536d61a46df816d49883674610d2221fa65",
             "jcode/crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs":
@@ -216,6 +220,7 @@ SNAPSHOTS = {
             ("jcode", "bench/patches/jcode-clipboard-path-lock-v1.patch"),
             ("jcode", "bench/patches/jcode-base-global-fixtures-v1.patch"),
             ("jcode", "bench/patches/jcode-login-event-fixture-v1.patch"),
+            ("jcode", "bench/patches/jcode-clipboard-capture-fixture-v1.patch"),
         ],
     },
     "justrust": {
