@@ -5,6 +5,8 @@
 //! In particular this API must not be used to bypass resident reuse rejection.
 
 use crate::creader::CStore;
+use rustc_data_structures::sync::Lock;
+use rustc_span::hygiene::HygieneDecodeContext;
 use rustc_span::{ExternalSource, Pos, SourceFile};
 use std::sync::Arc;
 
@@ -15,6 +17,16 @@ pub(crate) struct ImportedSourceFile {
     pub(crate) original_start_pos: rustc_span::BytePos,
     pub(crate) original_end_pos: rustc_span::BytePos,
     pub(crate) translated_source_file: Arc<SourceFile>,
+}
+
+/// Native identity-bearing decoder storage, allocated afresh for each crate metadata.
+/// Keeping these together does not authorize reuse across compiler contexts.
+#[derive(Default)]
+pub(crate) struct ExternalDecoderIdentityState {
+    pub(crate) source_map_import_info: Lock<Vec<Option<ImportedSourceFile>>>,
+    /// SyntaxContext IDs are crate-local, so their decoding cache must remain
+    /// paired with the actual source translations for that crate metadata.
+    pub(crate) hygiene_context: HygieneDecodeContext,
 }
 
 /// Limits apply across all loaded crates. Source bytes are declared lengths,
@@ -353,6 +365,49 @@ mod tests {
             declared_bytes: import.translated_source_file.unnormalized_source_len,
             source: Arc::clone(&import.translated_source_file),
         }
+    }
+
+    #[test]
+    fn fresh_decoder_bundles_have_independent_native_storage() {
+        let first = Arc::new(ExternalDecoderIdentityState::default());
+        let second = Arc::new(ExternalDecoderIdentityState::default());
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(!std::ptr::eq(&first.hygiene_context, &second.hygiene_context));
+        assert!(!std::ptr::eq(&first.source_map_import_info, &second.source_map_import_info));
+        first.source_map_import_info.lock().push(Some(imported(0)));
+        second.source_map_import_info.lock().push(Some(imported(0)));
+        let first_imports = first.source_map_import_info.lock();
+        let second_imports = second.source_map_import_info.lock();
+        assert_ne!(first_imports.as_ptr(), second_imports.as_ptr());
+        assert_ne!(
+            mapping(first_imports[0].as_ref().unwrap()),
+            mapping(second_imports[0].as_ref().unwrap())
+        );
+    }
+
+    #[test]
+    fn cloned_decoder_bundle_preserves_actual_imports_and_hygiene_identity() {
+        let original = Arc::new(ExternalDecoderIdentityState::default());
+        original.source_map_import_info.lock().push(Some(imported(0)));
+        let cloned = Arc::clone(&original);
+        assert!(Arc::ptr_eq(&original, &cloned));
+        assert!(std::ptr::eq(&original.hygiene_context, &cloned.hygiene_context));
+        assert!(std::ptr::eq(&original.source_map_import_info, &cloned.source_map_import_info));
+        let (entry_ptr, source) = {
+            let imports = original.source_map_import_info.lock();
+            (imports.as_ptr(), imports[0].as_ref().unwrap().clone())
+        };
+        {
+            let imports = cloned.source_map_import_info.lock();
+            assert_eq!(entry_ptr, imports.as_ptr());
+            assert_eq!(mapping(&source), mapping(imports[0].as_ref().unwrap()));
+            assert!(Arc::ptr_eq(
+                &source.translated_source_file,
+                &imports[0].as_ref().unwrap().translated_source_file
+            ));
+        }
+        cloned.source_map_import_info.lock().push(None);
+        assert_eq!(original.source_map_import_info.lock().len(), 2);
     }
 
     #[test]

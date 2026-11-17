@@ -32,7 +32,6 @@ use rustc_serialize::{Decodable, Decoder};
 use rustc_session::config::TargetModifier;
 use rustc_session::config::mitigation_coverage::DeniedPartialMitigation;
 use rustc_span::def_id::ModId;
-use rustc_span::hygiene::HygieneDecodeContext;
 use rustc_span::{
     BlobDecoder, BytePos, ByteSymbol, DUMMY_SP, Pos, RemapPathScopeComponents, SpanData,
     SpanDecoder, Symbol, SyntaxContext, bug, kw,
@@ -41,7 +40,7 @@ use tracing::debug;
 
 use crate::creader::CStore;
 use crate::eii::EiiMapEncodedKeyValue;
-use crate::resident_metadata::ImportedSourceFile;
+use crate::resident_metadata::{ExternalDecoderIdentityState, ImportedSourceFile};
 use crate::rmeta::table::IsDefault;
 use crate::rmeta::*;
 
@@ -109,8 +108,8 @@ pub(crate) struct CrateMetadata {
     incoherent_impls: FxIndexMap<SimplifiedType, LazyArray<DefIndex>>,
     /// Proc macro function pointers for this crate, if it's a proc macro crate.
     raw_proc_macros: Option<&'static [ProcMacroClient]>,
-    /// Source maps for code from the crate.
-    source_map_import_info: Lock<Vec<Option<ImportedSourceFile>>>,
+    /// Actual source translations and hygiene decoder, fresh for this metadata.
+    decoder_identity: Arc<ExternalDecoderIdentityState>,
     /// For every definition in this crate, maps its `DefPathHash` to its `DefIndex`.
     def_path_hash_map: DefPathHashMapRef<'static>,
     /// Likewise for ExpnHash.
@@ -145,13 +144,6 @@ pub(crate) struct CrateMetadata {
     /// the dependency of every query about this crate, covers the dependencies' actual
     /// crate hashes too. The blob's own crate hash (`hash()`) is unchanged.
     incr_hash: Option<Svh>,
-
-    /// Additional data used for decoding `HygieneData` (e.g. `SyntaxContext`
-    /// and `ExpnId`).
-    /// Note that we store a `HygieneDecodeContext` for each `CrateMetadata`. This is
-    /// because `SyntaxContext` ids are not globally unique, so we need
-    /// to track which ids we've decoded on a per-crate basis.
-    hygiene_context: HygieneDecodeContext,
 
     // --- Data used only for improving diagnostics ---
     /// Information about the `extern crate` item or path that caused this crate to be loaded.
@@ -456,15 +448,19 @@ impl<'a, 'tcx> SpanDecoder for MetadataDecodeContext<'a, 'tcx> {
         let tcx = self.tcx;
 
         let cname = cdata.root.name();
-        rustc_span::hygiene::decode_syntax_context(self, &cdata.hygiene_context, |_, id| {
-            debug!("SpecializedDecoder<SyntaxContext>: decoding {}", id);
-            cdata
-                .root
-                .syntax_contexts
-                .get(cdata, id)
-                .unwrap_or_else(|| panic!("Missing SyntaxContext {id:?} for crate {cname:?}"))
-                .decode((cdata, tcx))
-        })
+        rustc_span::hygiene::decode_syntax_context(
+            self,
+            &cdata.decoder_identity.hygiene_context,
+            |_, id| {
+                debug!("SpecializedDecoder<SyntaxContext>: decoding {}", id);
+                cdata
+                    .root
+                    .syntax_contexts
+                    .get(cdata, id)
+                    .unwrap_or_else(|| panic!("Missing SyntaxContext {id:?} for crate {cname:?}"))
+                    .decode((cdata, tcx))
+            },
+        )
     }
 
     fn decode_expn_id(&mut self) -> ExpnId {
@@ -1044,7 +1040,7 @@ impl CrateMetadata {
         &self,
         inspect: impl FnOnce(usize, &[Option<ImportedSourceFile>]) -> R,
     ) -> R {
-        let imports = self.source_map_import_info.lock();
+        let imports = self.decoder_identity.source_map_import_info.lock();
         inspect(self.root.source_map.size(), &imports)
     }
 
@@ -1851,7 +1847,7 @@ impl CrateMetadata {
                 }
             };
 
-        let mut import_info = self.source_map_import_info.lock();
+        let mut import_info = self.decoder_identity.source_map_import_info.lock();
         for _ in import_info.len()..=(source_file_index as usize) {
             import_info.push(None);
         }
@@ -2025,7 +2021,7 @@ impl CrateMetadata {
             trait_impls,
             incoherent_impls: Default::default(),
             raw_proc_macros,
-            source_map_import_info: Lock::new(Vec::new()),
+            decoder_identity: Arc::new(ExternalDecoderIdentityState::default()),
             def_path_hash_map,
             expn_hash_map: Default::default(),
             alloc_decoding_state,
@@ -2038,7 +2034,6 @@ impl CrateMetadata {
             used: false,
             incr_hash: None,
             extern_crate: None,
-            hygiene_context: Default::default(),
             def_key_cache: Default::default(),
         };
 
