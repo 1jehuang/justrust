@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import shutil
+import subprocess
 import unittest
 from unittest import mock
 
@@ -33,10 +34,34 @@ class TestUtilitiesTests(unittest.TestCase):
 
     def test_utility_provenance_contains_actual_binary_hashes(self):
         result = utilities.check()
-        self.assertEqual(set(result), {"sleep", "head"})
+        self.assertEqual(set(result), {"sleep", "head", "pdfinfo", "pdftoppm"})
         for binary in result.values():
             self.assertTrue(Path(binary["path"]).is_absolute())
             self.assertEqual(len(binary["sha256"]), 64)
+
+    def test_real_poppler_pdf_tools_are_runnable(self):
+        self.assertEqual(set(utilities.check_poppler()), {"pdfinfo", "pdftoppm"})
+
+    def test_missing_pdf_tool_fails_before_expensive_builds(self):
+        with mock.patch.object(utilities.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "pdfinfo.*install poppler-utils"):
+                utilities.check_poppler()
+
+    def test_failing_or_wrong_pdf_program_is_not_accepted(self):
+        for code, output in ((1, "pdfinfo version fake"), (0, "not a PDF tool")):
+            with self.subTest(code=code, output=output), \
+                    mock.patch.object(utilities.shutil, "which", return_value="/probe"), \
+                    mock.patch.object(utilities.subprocess, "run", return_value=
+                                      subprocess.CompletedProcess([], code, "", output)):
+                with self.assertRaisesRegex(RuntimeError, "failed its version probe"):
+                    utilities.check_poppler()
+
+    def test_pdf_tool_timeout_is_an_explicit_prerequisite_failure(self):
+        with mock.patch.object(utilities.shutil, "which", return_value="/probe"), \
+                mock.patch.object(utilities.subprocess, "run", side_effect=
+                                  subprocess.TimeoutExpired(["/probe", "-v"], 10)):
+            with self.assertRaisesRegex(RuntimeError, "pdfinfo is unusable"):
+                utilities.check_poppler()
 
     def test_read_zero_is_detectable_without_wchan_fallback(self):
         with mock.patch.object(Path, "read_text", return_value="0 0x0 0x1234"):
@@ -57,6 +82,7 @@ class TestUtilitiesTests(unittest.TestCase):
                         helper.index('build_binary before "$BASELINE_REF"'))
         workflow = (ROOT / ".github/workflows/source-sync-release-gate.yml").read_text()
         self.assertIn("coreutils-from-gnu coreutils-from-uutils-", workflow)
+        self.assertIn("sqlite3 poppler-utils", workflow)
 
 
 if __name__ == "__main__":

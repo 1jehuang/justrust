@@ -74,12 +74,31 @@ def check_head(executable=None):
         child.communicate()
 
 
+def check_poppler():
+    """Reject absent or unusable PDF tools before compiling either workspace."""
+    paths = {}
+    for program in ("pdfinfo", "pdftoppm"):
+        path = shutil.which(program)
+        if not path:
+            raise RuntimeError(f"pinned Desktop PDF tests require {program}; install poppler-utils")
+        try:
+            result = subprocess.run([path, "-v"], capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError(f"pinned Desktop PDF tool {program} is unusable: {error}") from error
+        if result.returncode or not (result.stdout + result.stderr).startswith(f"{program} version "):
+            raise RuntimeError(f"pinned Desktop PDF tool {program} failed its version probe: "
+                               f"{result.stdout}{result.stderr}")
+        paths[program] = path
+    return paths
+
+
 def check():
     check_sleep()
     check_head()
+    paths = {"sleep": "/bin/sleep", "head": shutil.which("head"), **check_poppler()}
     return {name: {"path": str(Path(path).resolve()),
                    "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
-            for name, path in (("sleep", "/bin/sleep"), ("head", shutil.which("head")))}
+            for name, path in paths.items()}
 
 
 if __name__ == "__main__":

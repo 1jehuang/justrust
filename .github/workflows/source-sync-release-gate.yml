@@ -56,7 +56,7 @@ jobs:
           # Match desktop Linux CI development libraries, plus pinned test tools.
           sudo apt-get install -y --no-install-recommends \
             rsync zstd binutils qemu-user build-essential pkg-config clang cmake \
-            sqlite3 libssl-dev libasound2-dev libfontconfig-dev \
+            sqlite3 poppler-utils libssl-dev libasound2-dev libfontconfig-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
             libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libgl1-mesa-dri mesa-vulkan-drivers openbox wayland-utils weston x11-utils xvfb
