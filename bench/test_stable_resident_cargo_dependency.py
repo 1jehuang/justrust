@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""Pure mocks only. Never starts Cargo, rustc, a worker, or the real client."""
+import base64
+import json
+import os
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import stable_resident_cargo_dependency as subject
+
+
+def encoded(text):
+    return base64.b64encode(text.encode()).decode()
+
+
+def record(stage, diagnostics=None):
+    stdout = ''
+    stderr = ''
+    if stage['expectation'] == 'error':
+        message = diagnostics or dict(level='error', message=subject.ERROR, spans=[])
+        stdout = json.dumps(dict(reason='compiler-message', message=message)) + '\n'
+        status = 101
+    else:
+        stdout = ('test dependency_nonce_probe ... ok\n'
+                  'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n')
+        stderr = 'JR_CARGO_NONCE=' + stage['nonce'] + '\n'
+        status = 0
+    return dict(status=status, timed_out=False, stdout_b64=encoded(stdout), stderr_b64=encoded(stderr))
+
+
+class DependencyAcceptanceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='jd-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / 'bin').mkdir()
+        (self.root / 'lib').mkdir()
+        self.compiler = self.root / 'bin/rustc'
+        self.cargo = self.root / 'bin/cargo'
+        self.client = self.root / 'bin/justrust'
+        self.driver = self.root / 'lib/librustc_driver.so'
+        for path in (self.compiler, self.cargo, self.client, self.driver):
+            path.write_text(path.name + ' mock bytes, never executable')
+        self.options = dict(root_native_frozen=True, idle_authorized=True,
+                            expected_compiler_sha256=subject.shared.native.digest(self.compiler),
+                            expected_driver_sha256=subject.shared.native.digest(self.driver),
+                            expected_cargo_sha256=subject.shared.native.digest(self.cargo))
+        self.native = patch.object(subject.shared.native, 'run', side_effect=AssertionError('NO NATIVE INVOCATIONS'))
+        self.native.start()
+        self.addCleanup(self.native.stop)
+
+    def capture(self, runner, **options):
+        return subject.capture(self.compiler, self.cargo, self.root / 'o', runner=runner,
+                               **dict(self.options, **options))
+
+    def mock_runner(self, *, wrong_nonce=False, forbidden_trace=False, mismatch=False, client=False):
+        calls = []
+        workload = None
+        def invoke(command, timeout, cwd, env):
+            nonlocal workload
+            index = len(calls) % 10
+            source = (cwd / 'src/lib.rs').read_text()
+            nonce = source.split('JR_CARGO_NONCE=', 1)[1].split('-initial:', 1)[0] if workload is None else None
+            if workload is None:
+                workload = subject.stages(nonce)
+            stage = workload[index]
+            self.assertEqual((cwd / 'src/lib.rs').read_bytes(), stage['root'])
+            self.assertEqual((cwd / 'dep/src/lib.rs').read_bytes(), stage['dependency'])
+            self.assertEqual(command[1:3], ['cargo', 'test'] if client else ['test', '--offline'])
+            self.assertIn('--offline', command)
+            self.assertNotIn('MY_API_KEY', env)
+            before = (cwd / 'dep/src/lib.rs').stat().st_mtime_ns
+            mode = 'off' if env['JUSTRUST_CARGO_RESIDENT'] == 'off' else 'on'
+            if forbidden_trace or (mode == 'on' and not stage['root_only']):
+                event = dict(event='complete', key='dependency-worker', elapsed_ns=1,
+                             result=dict(pid=123, id=len(calls), status=1 if stage['expectation'] == 'error' else 0))
+                with Path(env['JUSTRUST_CARGO_RESIDENT_TRACE']).open('a') as trace:
+                    trace.write(json.dumps(event) + '\n')
+            result = record(stage)
+            if wrong_nonce and index == 1:
+                result['stderr_b64'] = encoded('JR_CARGO_NONCE=stale\n')
+            if mismatch and mode == 'on' and stage['expectation'] == 'error':
+                result = record(stage, dict(level='error', message=subject.ERROR, spans=[{'line_start': 999}]))
+            artifact = dict(reason='compiler-artifact', package_id='fixture_dep',
+                            target=dict(name='fixture_dep'), fresh=stage['root_only'], filenames=[])
+            result['stdout_b64'] = encoded(json.dumps(artifact) + '\n' + base64.b64decode(result['stdout_b64']).decode())
+            calls.append(dict(command=command, env=env, cwd=cwd, mode=mode, stage=stage, mtime=before))
+            return result
+        return invoke, calls
+
+    def test_workload_signature_const_body_and_error_recovery(self):
+        rows = subject.stages('nonce')
+        self.assertEqual(len(rows), 10)
+        self.assertIn(b'value(n: u32) -> u64', rows[4]['dependency'])
+        self.assertIn(b'VALUE: u64 = 11', rows[5]['dependency'])
+        self.assertIn(b'19 + n', rows[6]['dependency'])
+        self.assertIn(subject.ERROR.encode(), rows[7]['dependency'])
+        self.assertEqual(rows[6]['dependency'], rows[8]['dependency'])
+        for i in (1, 2, 3, 9):
+            self.assertEqual(rows[i - 1]['dependency'], rows[i]['dependency'])
+            self.assertTrue(rows[i]['root_only'])
+
+    def test_capture_is_offline_separate_targets_stable_dependency_path(self):
+        runner, calls = self.mock_runner()
+        with patch.dict(os.environ, {'MY_API_KEY': 'never-record-me', 'RUSTC_WRAPPER': '/bad'}):
+            report = self.capture(runner)
+        self.assertEqual(report['verdict'], 'passed')
+        self.assertEqual(len(calls), 20)
+        self.assertEqual(len({str(call['cwd'] / 'dep/src/lib.rs') for call in calls}), 1)
+        self.assertEqual(len({call['env']['CARGO_TARGET_DIR'] for call in calls}), 2)
+        for start in (0, 10):
+            self.assertEqual(len({c['mtime'] for c in calls[start:start + 4]}), 1)
+        for arm in report['arms'].values():
+            for row in arm['observations']:
+                if row['root_only']:
+                    self.assertEqual(row['trace'], [])
+        text = (self.root / 'o/receipt.json').read_text()
+        self.assertNotIn('never-record-me', text)
+        self.assertNotIn('RUSTC_WRAPPER', text)
+        self.assertTrue((self.root / 'o/000-on/07-dependency.rs').exists())
+        self.assertIn('stable_resident_cargo.py', report['provenance']['helpers'])
+
+    def test_optional_actual_client_uses_shared_strict_runner(self):
+        runner, calls = self.mock_runner(client=True)
+        report = self.capture(runner, justrust=self.client,
+                              expected_client_sha256=subject.shared.native.digest(self.client))
+        self.assertEqual(report['verdict'], 'passed')
+        for call in calls:
+            self.assertEqual(call['command'][0], self.client)
+            self.assertEqual(call['env']['JUSTRUST_REAL_CARGO'], str(self.cargo))
+            self.assertEqual(call['env']['JUSTRUST_TOOLCHAIN'], 'system')
+
+    def test_authorization_required_before_any_execution_or_output(self):
+        for name in ('root_native_frozen', 'idle_authorized'):
+            with self.assertRaisesRegex(ValueError, 'freeze and idle'):
+                self.capture(lambda *a, **k: self.fail('executed'), **{name: False})
+            self.assertFalse((self.root / 'o').exists())
+
+    def test_attestation_precedes_execution_and_output(self):
+        for name in ('compiler', 'driver', 'cargo'):
+            for digest in (None, '0' * 64):
+                with self.assertRaises(ValueError):
+                    self.capture(lambda *a, **k: self.fail('executed'), **{'expected_' + name + '_sha256': digest})
+                self.assertFalse((self.root / 'o').exists())
+
+    def test_client_requires_attestation(self):
+        with self.assertRaisesRegex(ValueError, 'client SHA256'):
+            self.capture(lambda *a, **k: self.fail('executed'), justrust=self.client)
+
+    def test_changed_candidate_fails_post_execution(self):
+        runner, calls = self.mock_runner()
+        def changing(*args, **kwargs):
+            result = runner(*args, **kwargs)
+            if len(calls) == 20:
+                self.cargo.write_text('changed')
+            return result
+        with self.assertRaisesRegex(ValueError, 'Unattested cargo'):
+            self.capture(changing)
+        self.assertEqual(json.loads((self.root / 'o/receipt.json').read_text())['verdict'], 'failed')
+
+    def test_root_only_complete_rejected_and_dependency_event_allowed(self):
+        rows = subject.stages('nonce')
+        event = [dict(event='complete')]
+        for mode in ('off', 'on'):
+            with self.assertRaisesRegex(AssertionError, 'fallback'):
+                subject.validate_trace(rows[1], event, mode)
+        with self.assertRaises(AssertionError):
+            subject.validate_trace(rows[4], event, 'off')
+        result = subject.validate_trace(rows[4], event, 'on')
+        self.assertIn('not external reuse', result['interpretation'])
+
+    def test_stale_nonce_preserves_full_failed_evidence(self):
+        runner, _ = self.mock_runner(wrong_nonce=True)
+        with self.assertRaisesRegex(AssertionError, 'nonce'):
+            self.capture(runner)
+        arm = json.loads((self.root / 'o/000-off/receipt.json').read_text())
+        self.assertEqual(arm['verdict'], 'failed')
+        self.assertIn('stdout_b64', arm['observations'][-1]['cargo'])
+        self.assertIn('trace', arm['observations'][-1])
+        self.assertEqual(json.loads((self.root / 'o/receipt.json').read_text())['verdict'], 'failed')
+
+    def test_exact_diagnostics_not_just_error_presence(self):
+        runner, _ = self.mock_runner(mismatch=True)
+        with self.assertRaisesRegex(AssertionError, 'Exact off/on diagnostics'):
+            self.capture(runner)
+
+    def test_exception_retains_arm_receipt_and_trace(self):
+        def broken(*args, **kwargs):
+            raise RuntimeError('mock runner failed')
+        with self.assertRaisesRegex(RuntimeError, 'mock runner failed'):
+            self.capture(broken)
+        arm = json.loads((self.root / 'o/000-off/receipt.json').read_text())
+        self.assertEqual(arm['verdict'], 'failed')
+        self.assertEqual(arm['observations'][0]['trace'], [])
+
+    def test_error_never_executes_stale_test(self):
+        stage = subject.stages('nonce')[2]
+        result = record(stage)
+        result['stderr_b64'] = encoded('JR_CARGO_NONCE=stale\n')
+        with self.assertRaises(AssertionError):
+            subject.semantics(result, stage)
+        result = record(stage)
+        result['stdout_b64'] = encoded(base64.b64decode(result['stdout_b64']).decode() + 'test dependency_nonce_probe ... ok\n')
+        with self.assertRaisesRegex(AssertionError, 'stale root'):
+            subject.semantics(result, stage)
+
+    def test_metadata_observed_without_artifact_equality_contract(self):
+        artifact = self.root / 'libfixture_dep.rlib'
+        artifact.write_bytes(b'first')
+        result = dict(stdout_b64=encoded(json.dumps(dict(reason='compiler-artifact', package_id='dep',
+                      fresh=False, target={'name': 'fixture_dep'}, filenames=[str(artifact)]))), stderr_b64=encoded(''))
+        first = subject.metadata(result)
+        artifact.write_bytes(b'second')
+        self.assertNotEqual(first[0]['artifacts'][0]['sha256'], subject.metadata(result)[0]['artifacts'][0]['sha256'])
+
+    def test_root_only_requires_positive_fresh_dependency_metadata(self):
+        stage = subject.stages('nonce')[1]
+        for evidence in ([], [dict(target={'name': 'fixture_dep'}, fresh=False)]):
+            with self.assertRaisesRegex(AssertionError, 'Cargo-fresh'):
+                subject.validate_artifacts(stage, evidence)
+        subject.validate_artifacts(stage, [dict(target={'name': 'fixture_dep'}, fresh=True)])
+
+    def test_normal_off_complete_fails_with_trace_preserved(self):
+        runner, _ = self.mock_runner(forbidden_trace=True)
+        with self.assertRaisesRegex(AssertionError, 'normal-off'):
+            self.capture(runner)
+        report = json.loads((self.root / 'o/receipt.json').read_text())
+        self.assertEqual(report['arms']['off']['observations'][0]['trace'][0]['event'], 'complete')
+        self.assertEqual(report['verdict'], 'failed')
+
+    def test_timeout_and_long_socket_paths_rejected(self):
+        for timeout in (0, float('inf'), float('nan')):
+            with self.assertRaises(ValueError):
+                self.capture(lambda *a, **k: self.fail('executed'), timeout=timeout)
+        with self.assertRaisesRegex(ValueError, 'too long'):
+            subject.capture(self.compiler, self.cargo, self.root / ('x' * 100), **self.options)
+
+
+if __name__ == '__main__':
+    unittest.main()
