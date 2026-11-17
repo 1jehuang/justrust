@@ -56,7 +56,7 @@ mod tests {
             assert!(cacheable_tokens(&TokenStream::default()));
             assert!(cacheable_tokens(&TokenStream::token_alone(TokenKind::Plus, DUMMY_SP)));
             let interpolated = TokenStream::token_alone(
-                TokenKind::NtIdent(Ident::empty(), IdentKind::Normal),
+                TokenKind::NtIdent(Ident::dummy(), IdentKind::Normal),
                 DUMMY_SP,
             );
             assert!(!cacheable_tokens(&interpolated));
