@@ -218,7 +218,7 @@ class CargoAcceptanceTests(unittest.TestCase):
             cargo.write_bytes(b'mock cargo, never executed')
             real_capture_mode = harness.capture_mode
 
-            def capture_mode(*args):
+            def capture_mode(*args, **kwargs):
                 return real_capture_mode(*args, runner=FakeCargo())
 
             with mock.patch.object(harness.native, 'identity', return_value={'identity': 'frozen'}), \
