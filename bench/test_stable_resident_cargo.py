@@ -99,9 +99,8 @@ class CargoAcceptanceTests(unittest.TestCase):
         adapter([Path('/candidate/cargo'), 'test', '--lib'], 20, Path('/fixture'), source)
         command, timeout, cwd, env = calls[0]
         self.assertEqual(command[0], Path('/candidate/justrust'))
-        self.assertEqual(command[1], 'cargo')
-        self.assertEqual(command[3:], ['test', '--lib'])
-        self.assertTrue(command[2].startswith('--local='))
+        self.assertEqual(command[1:], ['cargo', 'test', '--lib'])
+        self.assertIn('authenticated hosted guest', env['JUSTRUST_LOCAL_REASON'])
         self.assertEqual(env['JUSTRUST_TOOLCHAIN'], 'system')
         self.assertEqual(env['JUSTRUST_REAL_CARGO'], '/candidate/cargo')
         for key, value in source.items():

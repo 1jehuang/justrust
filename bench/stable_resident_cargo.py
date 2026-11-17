@@ -254,10 +254,10 @@ def justrust_runner(client, cargo, runner=native.run):
             raise ValueError('Expected the frozen Cargo candidate')
         environment = dict(env, JUSTRUST_TOOLCHAIN='system',
                            JUSTRUST_REAL_CARGO=str(cargo),
-                           JUSTRUST_SLOTS='0', JUSTRUST_TEST_PARALLEL='0')
-        return runner([client, 'cargo',
-                       '--local=resident acceptance already on authenticated hosted guest',
-                       *command[1:]], timeout, cwd=cwd, env=environment)
+                           JUSTRUST_SLOTS='0', JUSTRUST_TEST_PARALLEL='0',
+                           JUSTRUST_LOCAL_REASON='resident acceptance already on authenticated hosted guest')
+        # `justrust cargo` records in place, unlike the routed agent commands.
+        return runner([client, 'cargo', *command[1:]], timeout, cwd=cwd, env=environment)
     return invoke
 
 
