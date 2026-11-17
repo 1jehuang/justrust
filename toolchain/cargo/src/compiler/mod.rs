@@ -40,6 +40,7 @@ pub(crate) mod fingerprint;
 pub mod future_incompat;
 pub(crate) mod job_queue;
 mod jr_frontend;
+mod jr_resident;
 pub(crate) mod layout;
 mod links;
 mod locking;
@@ -167,6 +168,9 @@ impl Executor for DefaultExecutor {
         on_stdout_line: &mut dyn FnMut(&str) -> CargoResult<()>,
         on_stderr_line: &mut dyn FnMut(&str) -> CargoResult<()>,
     ) -> CargoResult<()> {
+        if let Some(result) = jr_resident::execute(cmd, on_stdout_line, on_stderr_line) {
+            return result;
+        }
         cmd.exec_with_streaming(on_stdout_line, on_stderr_line, false)
             .map(drop)
     }
@@ -514,6 +518,7 @@ fn rustc(
 
         #[cfg(target_os = "linux")]
         if let Some(launch) = compiler_unit
+            .filter(|_| !jr_resident::eligible(&rustc))
             .and_then(|id| compiler_registry.launch(&id, direct_native, receipt_schema))
         {
             rustc.jr_query_launch(launch);

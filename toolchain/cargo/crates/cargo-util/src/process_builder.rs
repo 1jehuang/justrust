@@ -85,6 +85,13 @@ impl ProcessBuilder {
         self.jr_query_launch = Some(launch);
     }
 
+    /// Whether this command already carries per-process native observation.
+    /// Resident RPC must not silently discard or materialize such a ticket.
+    #[cfg(target_os = "linux")]
+    pub fn has_jr_query_launch(&self) -> bool {
+        self.jr_query_launch.is_some()
+    }
+
     /// Whether the original executable is invoked without wrappers.
     pub fn is_unwrapped(&self) -> bool {
         self.wrappers.is_empty()
@@ -250,6 +257,25 @@ impl ProcessBuilder {
     /// vars).
     pub fn get_envs(&self) -> &BTreeMap<String, Option<OsString>> {
         &self.env
+    }
+
+    /// Snapshot the environment a fresh command will inherit, with explicit
+    /// overrides and removals applied. This does not configure the jobserver or
+    /// materialize native launch observation, both of which are transport state.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "must match Command's live inherited environment, not Cargo's configuration snapshot"
+    )]
+    pub fn get_effective_env(&self) -> BTreeMap<OsString, OsString> {
+        let mut effective: BTreeMap<_, _> = env::vars_os().collect();
+        for (key, value) in &self.env {
+            if let Some(value) = value {
+                effective.insert(key.into(), value.clone());
+            } else {
+                effective.remove(OsStr::new(key));
+            }
+        }
+        effective
     }
 
     /// Sets the `make` jobserver. See the [jobserver crate][jobserver_docs] for
