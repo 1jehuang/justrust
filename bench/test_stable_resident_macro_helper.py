@@ -6,6 +6,7 @@ from pathlib import Path
 import socket
 import tempfile
 import unittest
+from unittest import mock
 
 import stable_resident_macro_helper as helper
 
@@ -98,6 +99,26 @@ class HarnessTests(unittest.TestCase):
             finally:
                 left.close()
                 right.close()
+
+    def test_native_driver_identity_change_fails_acceptance(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            compiler = root / 'fake-rustc'
+            compiler.write_text(FAKE)
+            compiler.chmod(0o700)
+            library = root / 'macro.so'
+            library.write_bytes(b'synthetic fixture')
+            output = root / 'out'
+            output.mkdir()
+            with mock.patch.object(helper.shared, 'identity', side_effect=[
+                    {'drivers': [{'sha256': 'before'}]},
+                    {'drivers': [{'sha256': 'changed'}]}]):
+                with self.assertRaisesRegex(AssertionError, 'driver identity changed'):
+                    helper.capture(compiler, library, 'symbol', output, timeout=3,
+                                   native_identity=True)
+            report = json.loads((output / 'receipt.json').read_text())
+            self.assertEqual(report['verdict'], 'failed')
+            self.assertNotEqual(report['compiler_before'], report['compiler_after'])
 
     def test_invalid_parameters(self):
         for timeout in (0, -1, float('nan'), float('inf')):
