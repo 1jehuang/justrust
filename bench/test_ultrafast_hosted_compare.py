@@ -1,0 +1,245 @@
+"""Synthetic Python-only orchestration and oracle tests. Never launches Rust tools."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import ultrafast_hosted_compare as compare
+
+
+def output(marker, failing=False, full=False):
+    tests = [(name, 'FAILED' if failing and name == compare.shared.EDIT_TEST else 'ok')
+             for name in compare.shared.NAMES]
+    if full:
+        tests += [(f'other::test_{n:03d}', 'ok') for n in range(143)] + [('other::ignored', 'ignored')]
+    lines = [f'test {name} ... {status}' for name, status in tests]
+    lines += [marker]
+    if failing:
+        lines += ['JR_RUNTIME_FAILURE']
+    lines += [f'test result: {"FAILED" if failing else "ok"}. '
+              f'{147 if full else 3 if failing else 4} passed; {int(failing)} failed; '
+              f'{int(full)} ignored; 0 measured; {0 if full else 144} filtered out']
+    return '\n'.join(lines) + '\n'
+
+
+class HostedTests(unittest.TestCase):
+    def setUp(self):
+        # Short private output roots also exercise the socket-path guard.
+        self.tmp = tempfile.TemporaryDirectory(prefix='uhc-')
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        source = self.root / 's'
+        (source / 'src').mkdir(parents=True)
+        self.original = b'fn shares_overlapping_time() {\n}\n'
+        (source / 'src/summary.rs').write_bytes(self.original)
+        engine = self.root / 'jr-engine'
+        engine.write_bytes(b'\x7fELFmock')
+        engine.chmod(0o700)
+        self.args = argparse.Namespace(source=source, engine=engine,
+            toolchain=self.root / compare.shared.TOOLCHAIN_NAME,
+            output=self.root / 'o', samples=5, timeout=1,
+            host_label='mock-dedicated-host', execute_host_workloads=True,
+            skip_full_library=False)
+        self.calls = []
+        self.fault = None
+        self.identity_side_effect = None
+
+    def fake_run(self, cmd, cwd, env, prefix, timeout):
+        rep, stack, phase = prefix.name.split('-', 2)
+        self.calls.append(dict(rep=int(rep), stack=stack, phase=phase, cmd=cmd,
+                               cwd=cwd, env=dict(env), contents=(cwd / 'src/summary.rs').read_bytes()))
+        status = 0
+        if phase == 'version':
+            text = ('jr-engine experimental 0.1 (Blaze-derived origin abc; build resident-v1-' +
+                    'a' * 64 + ')\n') if stack == 'engine' else 'cargo 1.93.0-nightly\n'
+        elif phase == 'rustc-version':
+            text = 'rustc 1.93.0-nightly (mock 2026-10-26)\nrelease: 1.93.0-nightly\n'
+        elif phase.startswith('status-'):
+            text = 'daemon: pid 123, running\n  worker: pid 124, project, log /mock\n'
+        elif phase in ('stop', 'cleanup'):
+            text = 'stopped\n'
+        elif phase == 'type-error':
+            text, status = 'error[E0308]: JR_RUNTIME_TYPE_ERROR\n', 101
+        else:
+            marker = re.search(rb'JR_RUNTIME_EXECUTED_\d+', self.calls[-1]['contents']).group().decode()
+            text = output(marker, failing=phase == 'assert-failure', full=phase == 'full-library')
+            status = 101 if phase == 'assert-failure' else 0
+        if self.fault:
+            altered = self.fault(stack, phase, int(rep), text, status)
+            if isinstance(altered, BaseException):
+                raise altered
+            if altered is not None:
+                text, status = altered
+        prefix.with_suffix('.stdout').write_text(text)
+        prefix.with_suffix('.stderr').write_text('mock raw stderr\n')
+        return dict(status=status, error=None, timed_out=False,
+                    elapsed_seconds=0.01 if stack == 'engine' else 0.1, command=cmd)
+
+    def run_harness(self):
+        with patch.object(compare.shared, 'pinned_source'), \
+                patch.object(compare, 'identities', return_value={'mock': 'stable'},
+                             side_effect=self.identity_side_effect), \
+                patch.object(compare.runtime, 'run_process', side_effect=self.fake_run), \
+                patch.object(compare.tier, 'memory_snapshot', return_value=[{'pid': 123, 'pss_kib': 99}]), \
+                patch('subprocess.Popen', side_effect=AssertionError('no native invocation allowed')):
+            return compare.execute(self.args)
+
+    def records(self):
+        return json.loads((self.args.output / 'records.json').read_text())
+
+    def metadata(self):
+        return json.loads((self.args.output / 'metadata.json').read_text())
+
+    def test_complete_counterbalanced_contract_and_restoration(self):
+        self.assertEqual(self.run_harness(), 0)
+        metadata = self.metadata()
+        self.assertEqual(metadata['status'], 'passed')
+        self.assertTrue(metadata['full_library_parity'])
+        self.assertTrue(metadata['unchanged'])
+        self.assertEqual(len(metadata['restored_copies']), 10)
+        self.assertEqual((self.args.source / 'src/summary.rs').read_bytes(), self.original)
+        for rep in range(5):
+            for phase in compare.PHASES:
+                calls = [c for c in self.calls if c['rep'] == rep and c['phase'] == phase]
+                self.assertEqual([c['stack'] for c in calls], compare.runtime.order(compare.STACKS, rep))
+                self.assertEqual(calls[0]['contents'], calls[1]['contents'])
+            warm = [c for c in self.calls if c['rep'] == rep and c['phase'] in ('cold', 'warm-unchanged')]
+            self.assertTrue(all(c['contents'] == warm[0]['contents'] for c in warm))
+        for call in self.calls:
+            env = call['env']
+            self.assertEqual(env['RA_JIT_REMOTE_PUSH_EVERY'], 'off')
+            self.assertEqual(env['BLAZE_REMOTE'], 'off')
+            self.assertEqual(env['RA_JIT_REMOTE'], 'off')
+            self.assertEqual(env['RUSTC'], str(self.args.toolchain / 'bin/rustc'))
+            if call['stack'] == 'stock' and call['phase'] in compare.PHASES:
+                self.assertEqual(call['cmd'][0], str(self.args.toolchain / 'bin/cargo'))
+                self.assertEqual(call['cmd'][1], 'test')
+        rows = self.records()
+        self.assertEqual(sum(r['phase'] in compare.PHASES for r in rows), 70)
+        self.assertTrue(all(r['accepted'] for r in rows if not r['phase'].startswith('status-')))
+        self.assertTrue(all('memory' in r for r in rows if r['phase'].startswith('status-')))
+        summary = json.loads((self.args.output / 'summary.json').read_text())
+        self.assertEqual(summary['medians_seconds']['stock']['edit'], 0.1)
+        for row in rows:
+            for raw in row['raw'].values():
+                self.assertTrue((self.args.output / raw['file']).is_file())
+
+    def test_stale_runtime_nonce_is_excluded(self):
+        self.fault = lambda s, p, r, t, x: (re.sub(r'JR_RUNTIME_EXECUTED_\d+',
+            'JR_RUNTIME_EXECUTED_0', t), x) if s == 'engine' and p == 'edit' else None
+        self.assertEqual(self.run_harness(), 1)
+        self.assertEqual(json.loads((self.args.output / 'summary.json').read_text())['medians_seconds'], {})
+        self.assertTrue(self.metadata()['unchanged'])
+
+    def test_exit_success_without_tests_is_not_accepted(self):
+        self.fault = lambda s, p, r, t, x: ('all good\n', 0) if p == 'cold' else None
+        self.assertEqual(self.run_harness(), 1)
+
+    def test_error_status_without_diagnostic_is_not_accepted(self):
+        self.fault = lambda s, p, r, t, x: ('failure\n', 101) if p == 'type-error' else None
+        self.assertEqual(self.run_harness(), 1)
+
+    def test_full_gate_mismatch_rejected(self):
+        self.fault = lambda s, p, r, t, x: (t.replace('other::test_000', 'other::wrong'), x) \
+            if p == 'full-library' and s == 'engine' else None
+        self.assertEqual(self.run_harness(), 1)
+        self.assertFalse(self.metadata()['full_library_parity'])
+
+    def test_interruption_restores_bytes_and_stops_private_engine(self):
+        self.fault = lambda s, p, r, t, x: KeyboardInterrupt() if p == 'edit' else None
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_harness()
+        metadata = self.metadata()
+        self.assertTrue(metadata['unchanged'])
+        self.assertEqual(metadata['status'], 'failed/incomplete')
+        self.assertTrue(any(c['phase'] == 'cleanup' for c in self.calls))
+
+    def test_full_gate_skipped_is_explicitly_incomplete(self):
+        self.args.skip_full_library = True
+        self.assertEqual(self.run_harness(), 1)
+        self.assertFalse(any(c['phase'] == 'full-library' for c in self.calls))
+        self.assertIn('explicitly skipped', self.metadata()['full_library_policy'])
+
+    def test_acknowledgement_and_sample_count_guards(self):
+        self.args.execute_host_workloads = False
+        with self.assertRaisesRegex(ValueError, 'acknowledgement'):
+            self.run_harness()
+        self.assertFalse(self.calls)
+        self.args.execute_host_workloads = True
+        self.args.samples = 4
+        with self.assertRaisesRegex(ValueError, 'at least five'):
+            self.run_harness()
+        self.assertFalse(self.calls)
+
+    def test_duplicate_marker_and_wrong_test_names_rejected(self):
+        row = dict(status=0, error=None, timed_out=False)
+        marker = 'JR_RUNTIME_EXECUTED_7'
+        text = output(marker)
+        self.assertTrue(compare.accepted('edit', row, text, marker))
+        self.assertFalse(compare.accepted('edit', row, text + marker, marker))
+        self.assertFalse(compare.accepted('edit', row, text.replace('summary::tests::', 'unrelated::'), marker))
+        self.assertFalse(compare.accepted('edit', row, text.replace('144 filtered', '143 filtered'), marker))
+
+    def test_markers_are_valid_u64_and_recovery_fresh(self):
+        nonce = (1 << 63)
+        variants = compare.inputs(self.original, nonce)
+        seen = []
+        for phase in compare.PHASES + ('full-library',):
+            if phase != 'type-error':
+                marker = re.search(rb'JR_RUNTIME_EXECUTED_(\d+)', variants[phase]).group(1)
+                self.assertLess(int(marker), 1 << 64)
+                self.assertEqual(int(marker), compare.phase_nonce(nonce, phase))
+                if phase != 'warm-unchanged':
+                    seen.append(marker)
+        self.assertEqual(len(seen), len(set(seen)))
+        failing = variants['assert-failure']
+        self.assertLess(failing.index(b'println!'), failing.index(b'JR_RUNTIME_FAILURE'))
+
+    def test_unidentified_engine_version_is_not_certified(self):
+        self.fault = lambda s, p, r, t, x: ('jr-engine experimental unidentified\n', x) \
+            if p == 'version' and s == 'engine' else None
+        self.assertEqual(self.run_harness(), 1)
+
+    def test_both_missing_full_outputs_do_not_establish_parity(self):
+        self.fault = lambda s, p, r, t, x: ('no tests\n', 0) if p == 'full-library' else None
+        self.assertEqual(self.run_harness(), 1)
+        self.assertFalse(self.metadata()['full_library_parity'])
+
+    def test_identity_change_excludes_all_medians(self):
+        self.identity_side_effect = [{'mock': 'before'}, {'mock': 'after'}]
+        self.assertEqual(self.run_harness(), 1)
+        self.assertFalse(self.metadata()['unchanged'])
+        self.assertEqual(json.loads((self.args.output / 'summary.json').read_text())['medians_seconds'], {})
+
+    def test_missing_identity_after_run_still_saves_failure_receipts(self):
+        self.identity_side_effect = [{'mock': 'before'}, OSError('tool disappeared')]
+        self.assertEqual(self.run_harness(), 1)
+        self.assertIn('tool disappeared', self.metadata()['identity_error'])
+        self.assertGreater(len(self.records()), 70)
+
+    def test_nonzero_status_and_timeout_never_accepted_as_success(self):
+        marker = 'JR_RUNTIME_EXECUTED_7'
+        text = output(marker)
+        for row in (dict(status=0, error=None, timed_out=True),
+                    dict(status=-9, error=None, timed_out=False),
+                    dict(status=0, error='failed spawn', timed_out=False)):
+            self.assertFalse(compare.accepted('edit', row, text, marker))
+
+    def test_environment_removes_remote_credentials_and_wrappers(self):
+        with patch.dict(os.environ, {'RA_JIT_REMOTE_TOKEN': 'secret', 'BLAZE_REMOTE': 'https://invalid',
+                                     'RUSTC_WRAPPER': '/bad-wrapper', 'CARGO_ENCODED_RUSTFLAGS': 'bad'}):
+            env = compare.environment(self.root / 'env', 'engine', self.args)
+        self.assertNotIn('RA_JIT_REMOTE_TOKEN', env)
+        self.assertNotIn('RUSTC_WRAPPER', env)
+        self.assertNotIn('CARGO_ENCODED_RUSTFLAGS', env)
+        self.assertEqual(env['BLAZE_REMOTE'], 'off')
+        self.assertNotEqual(env['JR_ENGINE_HOME'], env['HOME'])
+        self.assertEqual(Path(env['JR_ENGINE_HOME']).stat().st_mode & 0o777, 0o700)
+
+
+if __name__ == '__main__':
+    unittest.main()
