@@ -47,13 +47,17 @@ class HostedTests(unittest.TestCase):
         self.calls = []
         self.fault = None
         self.identity_side_effect = None
+        self.log_outputs = {}
+        self.stable_meta_fault = None
 
     def fake_run(self, cmd, cwd, env, prefix, timeout):
         rep, stack, phase = prefix.name.split('-', 2)
         self.calls.append(dict(rep=int(rep), stack=stack, phase=phase, cmd=cmd,
                                cwd=cwd, env=dict(env), contents=(cwd / 'src/summary.rs').read_bytes()))
         status = 0
-        if phase in ('version', 'version-after'):
+        if phase.endswith('-recorded-log'):
+            text = self.log_outputs[(int(rep), stack)]
+        elif phase in ('version', 'version-after'):
             text = {'upstream': compare.UPSTREAM_VERSION + '\n',
                     'stable': 'justrust 0.1.0-alpha.37\n',
                     'engine': 'jr-engine experimental 0.1 (Blaze-derived origin abc; build resident-v1-' +
@@ -63,7 +67,7 @@ class HostedTests(unittest.TestCase):
             text = 'rustc 1.93.0-nightly (mock 2026-10-26)\nrelease: 1.93.0-nightly\n'
         elif phase.startswith('status-'):
             text = 'daemon: pid 123, running\n  worker: pid 124, project, log /mock\n'
-        elif phase in ('stop', 'cleanup'):
+        elif phase in ('stop', 'cleanup', 'daemon-stop', 'daemon-cleanup'):
             text = 'stopped\n'
         elif phase == 'type-error':
             text, status = 'error[E0308]: JR_RUNTIME_TYPE_ERROR\n', 101
@@ -77,6 +81,18 @@ class HostedTests(unittest.TestCase):
                 raise altered
             if altered is not None:
                 text, status = altered
+        if stack == 'stable' and phase in compare.PHASES + ('full-library',):
+            run_id = f'20261118-123456789-{len(self.calls)}'
+            meta = {'id': run_id, 'cwd': str(cwd), 'args': ['test', *cmd[3:]],
+                    'real_rustc': str(self.args.toolchain / 'bin/rustc'),
+                    'real_cargo': str(self.args.toolchain / 'bin/cargo')}
+            if self.stable_meta_fault:
+                self.stable_meta_fault(meta)
+            meta_path = Path(env['JUSTRUST_HOME']) / 'runs' / run_id / 'meta.json'
+            meta_path.parent.mkdir(parents=True)
+            meta_path.write_text(json.dumps(meta))
+            self.log_outputs[(int(rep), stack)] = text
+            text = 'justrust: presentation summary only. justrust log ' + run_id + '\n'
         prefix.with_suffix('.stdout').write_text(text)
         prefix.with_suffix('.stderr').write_text('mock raw stderr\n')
         return dict(status=status, error=None, timed_out=False,
@@ -144,6 +160,36 @@ class HostedTests(unittest.TestCase):
             if call['phase'] in compare.PHASES + ('full-library',):
                 self.assertEqual(call['cmd'][:3], [str(self.args.stable_client), 'test',
                     '--local=controlled same-machine hosted comparison'])
+
+    def test_stable_reads_exact_foreground_logs_outside_timing(self):
+        self.enable_stable()
+        self.assertEqual(self.run_harness(), 0)
+        measured = [r for r in self.records() if r['stack'] == 'stable' and
+                    r['phase'] in compare.PHASES + ('full-library',)]
+        self.assertEqual(len(measured), 36)
+        for row in measured:
+            oracle = row['recorded_output']
+            self.assertTrue(oracle['outside_timed_interval'])
+            self.assertTrue(oracle['identity_verified'])
+            self.assertEqual(oracle['retrieval']['command'][1:], ['log', oracle['run_ids'][0]])
+            self.assertEqual(row['elapsed_seconds'], 0.1)
+            self.assertTrue((self.args.output / oracle['metadata_file']).is_file())
+        daemon_stops = [c for c in self.calls if c['stack'] == 'stable' and
+                        c['phase'] in ('daemon-stop', 'daemon-cleanup')]
+        self.assertEqual(len(daemon_stops), 10)
+        self.assertTrue(all(c['cmd'][1:] == ['daemon', 'stop'] for c in daemon_stops))
+
+    def test_stable_rejects_wrong_foreground_compiler_identity(self):
+        self.enable_stable()
+        self.stable_meta_fault = lambda meta: meta.update(real_rustc='/wrong/rustc')
+        self.assertEqual(self.run_harness(), 1)
+        self.assertEqual(json.loads((self.args.output / 'summary.json').read_text())['medians_seconds'], {})
+
+    def test_stable_rejects_unavailable_exact_log(self):
+        self.enable_stable()
+        self.fault = lambda stack, phase, rep, text, status: (
+            ('log unavailable', 1) if stack == 'stable' and phase.endswith('-recorded-log') else None)
+        self.assertEqual(self.run_harness(), 1)
 
     def test_stable_identity_hash_and_version(self):
         self.enable_stable()

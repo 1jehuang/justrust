@@ -183,7 +183,8 @@ def execute(args):
                         'Shipping client local mode: same-machine shipping client comparison, '
                         'NOT network-inclusive hosted default or experimental native mode. '
                         'Private HOME/config/state; no inherited credentials; pinned toolchain; '
-                        'JUSTRUST_REMOTE=off. No client daemon stop command.'),
+                        'JUSTRUST_REMOTE=off. Private daemon stopped after each replicate. '
+                        'Exact foreground recorded log supplies the oracle outside timed intervals.'),
                     upstream_environment_policy=(
                         'Direct CLI uses native backend/optimization defaults: BLAZE_BACKEND, '
                         'BLAZE_OPT, RA_JIT_BACKEND, RA_JIT_OPT omitted; same Cargo profiles; '
@@ -206,6 +207,45 @@ def execute(args):
         row = runtime.run_process(cmd, source, env, prefix, args.timeout)
         text = '\n'.join(prefix.with_suffix('.' + s).read_text(errors='replace')
                          for s in ('stdout', 'stderr'))
+        if stack == 'stable' and phase in PHASES + ('full-library',):
+            # Agent presentation deliberately omits passing tests. Bind the raw
+            # oracle to this foreground run, never a background prebuild/latest.
+            run_ids = set(re.findall(r'justrust (?:log|show) (\d{8}-\d{9}-\d+)\b', text))
+            row['recorded_output'] = {'run_ids': sorted(run_ids), 'outside_timed_interval': True}
+            if len(run_ids) == 1:
+                run_id = next(iter(run_ids))
+                log_prefix = args.output / f'{rep}-{stack}-{phase}-recorded-log'
+                log_row = runtime.run_process([str(args.stable_client), 'log', run_id],
+                                              source, env, log_prefix, args.timeout)
+                meta_path = Path(env['JUSTRUST_HOME']) / 'runs' / run_id / 'meta.json'
+                try:
+                    if meta_path.stat().st_size > 1024 * 1024:
+                        raise ValueError('oversized stable run metadata')
+                    run_meta = json.loads(meta_path.read_text())
+                    identity_ok = (run_meta.get('id') == run_id and
+                                   run_meta.get('cwd') == str(source) and
+                                   run_meta.get('args') == ['test', *cmd[3:]] and
+                                   run_meta.get('real_rustc') == str(args.toolchain / 'bin/rustc') and
+                                   run_meta.get('real_cargo') == str(args.toolchain / 'bin/cargo'))
+                    row['recorded_output']['run_metadata'] = {
+                        k: run_meta.get(k) for k in ('id', 'cwd', 'args', 'real_rustc', 'real_cargo')}
+                    row['recorded_output']['metadata_sha256'] = runtime.base.digest(meta_path)
+                    preserved_meta = args.output / f'{rep}-{stack}-{phase}-run-meta.json'
+                    shutil.copyfile(meta_path, preserved_meta)
+                    row['recorded_output']['metadata_file'] = preserved_meta.name
+                except (OSError, ValueError, TypeError) as exc:
+                    identity_ok = False
+                    row['recorded_output']['identity_error'] = str(exc)
+                row['recorded_output']['identity_verified'] = identity_ok
+                row['recorded_output'].update(retrieval=log_row, raw={s: {
+                    'file': log_prefix.with_suffix('.' + s).name,
+                    'sha256': runtime.base.digest(log_prefix.with_suffix('.' + s))}
+                    for s in ('stdout', 'stderr')})
+                text = ('\n'.join(log_prefix.with_suffix('.' + s).read_text(errors='replace')
+                                  for s in ('stdout', 'stderr'))
+                        if identity_ok and runtime.base.succeeded(log_row) else '')
+            else:
+                text = ''
         row.update(stack=stack, replicate=rep, phase=phase,
                    source_sha256=runtime.base.digest(source / 'src/summary.rs'),
                    parsed=runtime.test_results(text), raw={s: {
@@ -289,6 +329,10 @@ def execute(args):
                 row['version_text'] = text
                 row['accepted'] = runtime.base.succeeded(row) and text == initial['version_text']
                 if stack == 'stable':
+                    stopped, _ = invoke(stack, rep, 'daemon-stop',
+                                        [str(args.stable_client), 'daemon', 'stop'],
+                                        envs[(rep, stack)], copies[(rep, stack)])
+                    stopped['accepted'] = runtime.base.succeeded(stopped)
                     save()
                     continue
                 row, _ = invoke(stack, rep, 'stop', [str(tool_for(stack, args)), 'stop'],
@@ -301,10 +345,12 @@ def execute(args):
     finally:
         cleanup_errors = []
         for (rep, stack), source in copies.items():
-            if stack not in ('stock', 'stable') and (rep, stack) in envs:
+            if stack != 'stock' and (rep, stack) in envs:
                 try:
-                    stop, _ = invoke(stack, rep, 'cleanup', [str(tool_for(stack, args)), 'stop'],
-                                     envs[(rep, stack)], source)
+                    phase, command = (('daemon-cleanup', [str(args.stable_client), 'daemon', 'stop'])
+                                      if stack == 'stable' else
+                                      ('cleanup', [str(tool_for(stack, args)), 'stop']))
+                    stop, _ = invoke(stack, rep, phase, command, envs[(rep, stack)], source)
                     stop['accepted'] = runtime.base.succeeded(stop)
                     if not stop['accepted']:
                         cleanup_errors.append(f'{rep}: {stack} stop failed')
