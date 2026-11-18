@@ -51,6 +51,7 @@ def run(root, args, daemon):
     s = re.sub(r"[0-9a-f]{16}", "<H>", p.stderr.replace(str(root), "<R>"))
     units = sorted(f"{m.group(1)} {m.group(2)}" for l in s.splitlines() if (m := UNIT.match(l)))
     out = re.sub(r"finished in [0-9.]+s", "finished in Xs", p.stdout.replace(str(root), "<R>"))
+    out = re.sub(r"(thread '[^']*') \(\d+\)", r"\1 (<TID>)", out)
     out = "\n".join(sorted(re.sub(r"[0-9a-f]{16}", "<H>", out).splitlines()))
     served = "served by a parked server" in s
     s = s.replace("jr-cargo daemon: served by a parked server\n", "")
