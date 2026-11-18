@@ -55,6 +55,7 @@ class HostedTests(unittest.TestCase):
         status = 0
         if phase in ('version', 'version-after'):
             text = {'upstream': compare.UPSTREAM_VERSION + '\n',
+                    'stable': 'justrust 0.1.0-alpha.37\n',
                     'engine': 'jr-engine experimental 0.1 (Blaze-derived origin abc; build resident-v1-' +
                               'a' * 64 + ')\n',
                     'stock': 'cargo 1.93.0-nightly\n'}[stack]
@@ -97,6 +98,117 @@ class HostedTests(unittest.TestCase):
         self.args.upstream = self.root / 'official'
         self.args.upstream.write_bytes(b'\x7fELFofficial')
         self.args.upstream.chmod(0o700)
+
+    def enable_stable(self):
+        self.args.stable_client = self.root / 'published'
+        self.args.stable_client.write_bytes(b'\x7fELFpublished')
+        self.args.stable_client.chmod(0o700)
+        self.args.stable_version = 'justrust 0.1.0-alpha.37'
+
+    def test_stable_four_arms_private_normal_client(self):
+        self.enable_stable()
+        self.enable_upstream()
+        with patch.dict(os.environ, {'JUSTRUST_API_KEY': 'mock-secret',
+                                    'AWS_SECRET_ACCESS_KEY': 'mock-secret',
+                                    'SSH_AUTH_SOCK': '/mock-agent'}):
+            self.assertEqual(self.run_harness(), 0)
+        self.assertEqual(self.metadata()['stacks'], ['stock', 'engine', 'upstream', 'stable'])
+        self.assertTrue(self.metadata()['full_library_parity'])
+        self.assertEqual(len(self.metadata()['restored_copies']), 20)
+        self.assertIn('NOT network-inclusive', self.metadata()['stable_environment_policy'])
+        for rep in range(5):
+            calls = [c for c in self.calls if c['rep'] == rep and c['phase'] == 'cold']
+            self.assertEqual(len({c['cwd'] for c in calls}), 4)
+            self.assertEqual(len({c['contents'] for c in calls}), 1)
+            for key in ('CARGO_HOME', 'CARGO_TARGET_DIR', 'RUSTUP_HOME',
+                        'XDG_CONFIG_HOME', 'XDG_CACHE_HOME'):
+                self.assertEqual(len({c['env'][key] for c in calls}), 4)
+        stable = [c for c in self.calls if c['stack'] == 'stable']
+        self.assertEqual(sum(c['phase'] == 'version-after' for c in stable), 5)
+        for call in stable:
+            env = call['env']
+            self.assertEqual(env['JUSTRUST_REMOTE'], 'off')
+            self.assertEqual(env['JUSTRUST_LOCAL_REASON'], compare.STABLE_LOCAL_REASON)
+            self.assertTrue(Path(env['HOME']).is_relative_to(call['cwd'].parent))
+            self.assertEqual(env['RUSTC'], str(self.args.toolchain / 'bin/rustc'))
+            self.assertEqual(env['RUSTUP_TOOLCHAIN'], str(self.args.toolchain))
+            self.assertEqual(env['XDG_STATE_HOME'], str(Path(env['HOME']) / '.local/state'))
+            for key in ('JUSTRUST_API_KEY', 'AWS_SECRET_ACCESS_KEY', 'SSH_AUTH_SOCK'):
+                self.assertNotIn(key, env)
+            self.assertNotIn(call['phase'], ('stop', 'cleanup'))
+            self.assertNotIn('native', call['cmd'])
+            if call['phase'] in compare.PHASES + ('full-library',):
+                self.assertEqual(call['cmd'][:3], [str(self.args.stable_client), 'test',
+                    '--local=controlled same-machine hosted comparison'])
+
+    def test_stable_identity_hash_and_version(self):
+        self.enable_stable()
+        with patch.object(compare.shared, 'toolchain_identity', return_value={}):
+            identity = compare.identities(self.args)['stable']
+        self.assertEqual(identity['sha256'], compare.runtime.base.digest(self.args.stable_client))
+        self.assertEqual(identity['required_version'], self.args.stable_version)
+        self.identity_side_effect = [{'stable': identity}, {'stable': dict(identity, sha256='changed')}]
+        self.assertEqual(self.run_harness(), 1)
+        self.assertFalse(self.metadata()['unchanged'])
+
+    def test_stable_version_requires_explicit_exact_pin(self):
+        self.enable_stable()
+        for version in (None, '', 'justrust\nother', 'justrust\rother', ' justrust'):
+            self.args.stable_version = version
+            with self.assertRaisesRegex(ValueError, 'stable version'):
+                self.run_harness()
+        self.assertFalse(self.calls)
+
+    def test_stable_non_elf_rejected(self):
+        self.enable_stable()
+        self.args.stable_client.write_bytes(b'#!/bin/sh\n')
+        with self.assertRaisesRegex(ValueError, 'stable_client.*ELF'):
+            self.run_harness()
+        self.assertFalse(self.calls)
+
+    def test_stable_cli_parses_explicit_pin(self):
+        self.enable_stable()
+        argv = ['compare', '--engine', str(self.args.engine), '--source', str(self.args.source),
+                '--output', str(self.args.output), '--toolchain', str(self.args.toolchain),
+                '--host-label', 'mock', '--stable-client', str(self.args.stable_client),
+                '--stable-version', self.args.stable_version]
+        with patch('sys.argv', argv), patch.object(compare, 'execute', return_value=0) as execute:
+            with self.assertRaises(SystemExit) as exit_result:
+                compare.main()
+        self.assertEqual(exit_result.exception.code, 0)
+        parsed = execute.call_args.args[0]
+        self.assertEqual(parsed.stable_client, self.args.stable_client)
+        self.assertEqual(parsed.stable_version, self.args.stable_version)
+
+    def test_stable_exception_restores_without_daemon_cleanup(self):
+        self.enable_stable()
+        self.fault = lambda s, p, r, t, x: RuntimeError('mock interrupted stable') \
+            if s == 'stable' and p == 'edit' else None
+        with self.assertRaisesRegex(RuntimeError, 'mock interrupted stable'):
+            self.run_harness()
+        self.assertTrue(all(self.metadata()['restored_copies'].values()))
+        self.assertFalse(any(c['stack'] == 'stable' and c['phase'] in ('stop', 'cleanup')
+                             for c in self.calls))
+
+    def test_stable_failures_never_summarized_and_restore_without_stop(self):
+        self.enable_stable()
+        faults = [('version', lambda t: 'unexpected banner\n' + t),
+                  ('version', lambda t: t.replace('alpha.37', 'alpha.38')),
+                  ('version', lambda t: t.replace('alpha.37', 'alpha.37 extra')),
+                  ('version-after', lambda t: t.replace('alpha.37', 'alpha.38')),
+                  ('full-library', lambda t: t.replace('other::test_000', 'other::wrong')),
+                  ('edit', lambda t: t.replace('4 passed', '0 passed'))]
+        for index, (phase, alter) in enumerate(faults):
+            with self.subTest(phase=phase, index=index):
+                self.args.output = self.root / f'o{index}'
+                self.calls = []
+                self.fault = lambda s, p, r, t, x: (alter(t), x) if s == 'stable' and p == phase else None
+                self.assertEqual(self.run_harness(), 1)
+                self.assertTrue(all(self.metadata()['restored_copies'].values()))
+                self.assertFalse(any(c['stack'] == 'stable' and c['phase'] in ('stop', 'cleanup')
+                                     for c in self.calls))
+                summary = json.loads((self.args.output / 'summary.json').read_text())
+                self.assertEqual(summary['medians_seconds'], {})
 
     def test_optional_upstream_three_matched_isolated_arms(self):
         self.enable_upstream()

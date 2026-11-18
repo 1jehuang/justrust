@@ -3,6 +3,8 @@
 
 No Rust commands run on import. Requires an explicit execution acknowledgement.
 Optional --upstream adds the official stable Blaze ELF as a third matched arm.
+Optional --stable-client with --stable-version adds the shipping client in isolated
+same-machine local mode, not the network-inclusive hosted default or native mode.
 Cold means fresh private compiler/target stores, NOT a flushed OS page cache.
 Results are descriptive for this fixture, not a general speed or compatibility claim.
 """
@@ -22,6 +24,8 @@ import resident_tier_compare as tier
 runtime = shared.runtime
 STACKS = ['stock', 'engine']
 UPSTREAM_VERSION = 'blaze 0.20261027.0 (49ca152)'
+STABLE_LOCAL_REASON = 'controlled same-machine compiler comparison on dedicated hosted machine'
+STACK_DIRECTORY = {'stock': 's', 'engine': 'e', 'upstream': 'u', 'stable': 'p'}
 PHASES = ('cold', 'warm-unchanged', 'edit', 'type-error', 'type-recovery',
           'assert-failure', 'assert-recovery')
 
@@ -84,15 +88,23 @@ def identities(args):
                               'sha256': runtime.base.digest(args.upstream),
                               'required_version': getattr(args, 'upstream_version', UPSTREAM_VERSION),
                               'cli': getattr(args, 'upstream_cli', 'cargo')}
+    if getattr(args, 'stable_client', None):
+        result['stable'] = {'path': str(args.stable_client),
+                            'sha256': runtime.base.digest(args.stable_client),
+                            'required_version': args.stable_version}
     return result
 
 
 def tool_for(stack, args):
-    return (args.engine if stack == 'engine' else args.upstream if stack == 'upstream'
+    return (args.stable_client if stack == 'stable' else
+            args.engine if stack == 'engine' else args.upstream if stack == 'upstream'
             else args.toolchain / 'bin/cargo')
 
 
 def test_command(stack, args, arguments):
+    if stack == 'stable':
+        return [str(args.stable_client), 'test',
+                '--local=controlled same-machine hosted comparison'] + arguments
     return shared.command(tool_for(stack, args),
                           'reference' if stack == 'upstream' and
                           getattr(args, 'upstream_cli', 'cargo') == 'cargo' else stack,
@@ -101,6 +113,15 @@ def test_command(stack, args, arguments):
 
 def environment(root, stack, args):
     env = shared.environment(root, stack, args.toolchain, None)
+    if stack == 'stable':
+        # Whitelist process basics instead of trying to enumerate credential names.
+        env = {k: v for k, v in env.items() if k in ('PATH', 'LANG', 'LC_ALL', 'TZ')
+               or k.startswith(('CARGO_', 'RUST', 'XDG_'))}
+        home = root / 'home'
+        home.mkdir(mode=0o700)
+        env.update(HOME=str(home), JUSTRUST_REMOTE='off',
+                   JUSTRUST_LOCAL_REASON=STABLE_LOCAL_REASON,
+                   XDG_STATE_HOME=str(home / '.local/state'))
     if stack == 'upstream' and getattr(args, 'upstream_cli', 'cargo') == 'direct':
         env['BLAZE_TOOLCHAINS'] = str(args.toolchain.parent)
         for name in ('BLAZE_BACKEND', 'BLAZE_OPT', 'RA_JIT_BACKEND', 'RA_JIT_OPT'):
@@ -126,12 +147,20 @@ def execute(args):
         raise ValueError('upstream version must be one exact nonempty line')
     if getattr(args, 'upstream_cli', 'cargo') not in ('cargo', 'direct'):
         raise ValueError('upstream CLI must be cargo or direct')
+    stable_version = getattr(args, 'stable_version', None)
+    if getattr(args, 'stable_client', None):
+        if (not stable_version or '\n' in stable_version or '\r' in stable_version
+                or stable_version != stable_version.strip()):
+            raise ValueError('stable version must be one exact nonempty line')
+    elif stable_version is not None:
+        raise ValueError('stable version requires --stable-client')
     if (args.output.exists() or args.output.is_relative_to(args.source)
             or args.source.is_relative_to(args.output) or len(os.fsencode(args.output)) > 50):
         raise ValueError('output must be fresh, disjoint from source, and <=50 path bytes')
     shared.pinned_source(args.source)
     stacks = STACKS + (['upstream'] if getattr(args, 'upstream', None) else [])
-    for name in ('engine', 'upstream'):
+    stacks += ['stable'] if getattr(args, 'stable_client', None) else []
+    for name in ('engine', 'upstream', 'stable_client'):
         tool = getattr(args, name, None)
         if tool is None:
             continue
@@ -148,6 +177,11 @@ def execute(args):
                     cpuinfo=Path('/proc/cpuinfo').read_text(),
                     meminfo=Path('/proc/meminfo').read_text(), source_before=before,
                     identities_before=identity_before, environments={}, stacks=stacks,
+                    stable_environment_policy=(
+                        'Shipping client local mode: same-machine shipping client comparison, '
+                        'NOT network-inclusive hosted default or experimental native mode. '
+                        'Private HOME/config/state; no inherited credentials; pinned toolchain; '
+                        'JUSTRUST_REMOTE=off. No client daemon stop command.'),
                     upstream_environment_policy=(
                         'Direct CLI uses native backend/optimization defaults: BLAZE_BACKEND, '
                         'BLAZE_OPT, RA_JIT_BACKEND, RA_JIT_OPT omitted; same Cargo profiles; '
@@ -196,7 +230,7 @@ def execute(args):
             nonce = (uuid.uuid4().int & ((1 << 63) - 1)) + 1
             contents = inputs(original, nonce)
             for stack in runtime.order(stacks, rep):
-                root = args.output / str(rep) / stack[0]
+                root = args.output / str(rep) / STACK_DIRECTORY[stack]
                 root.mkdir(mode=0o700, parents=True)
                 source = root / 'src'
                 shutil.copytree(args.source, source, ignore=shutil.ignore_patterns('.git'), symlinks=True)
@@ -212,13 +246,14 @@ def execute(args):
                 envs[(rep, stack)] = env
                 metadata['environments'][f'{rep}-{stack}'] = {
                     k: v for k, v in env.items() if k.startswith(
-                        ('BLAZE_', 'RA_JIT_', 'JR_ENGINE_', 'CARGO_', 'RUST', 'XDG_')) or k == 'PATH'}
+                        ('BLAZE_', 'RA_JIT_', 'JR_ENGINE_', 'JUSTRUST_', 'CARGO_', 'RUST', 'XDG_')) or k in ('PATH', 'HOME')}
                 tool = tool_for(stack, args)
                 row, text = invoke(stack, rep, 'version', [str(tool), '--version'], env, source)
                 row['version_text'] = text
                 row['accepted'] = runtime.base.succeeded(row) and bool(re.search(
                     r'^jr-engine experimental .*build resident-v1-[0-9a-f]{64}\)' if stack == 'engine'
                     else r'\A' + re.escape(upstream_version) + r'$' if stack == 'upstream'
+                    else r'\A' + re.escape(stable_version) + r'$' if stack == 'stable'
                     else r'^cargo ', text, re.M))
                 if stack == 'stock':
                     rust, version = invoke(stack, rep, 'rustc-version',
@@ -251,6 +286,9 @@ def execute(args):
                                r['replicate'] == rep and r['phase'] == 'version')
                 row['version_text'] = text
                 row['accepted'] = runtime.base.succeeded(row) and text == initial['version_text']
+                if stack == 'stable':
+                    save()
+                    continue
                 row, _ = invoke(stack, rep, 'stop', [str(tool_for(stack, args)), 'stop'],
                                  envs[(rep, stack)], copies[(rep, stack)])
                 row['accepted'] = runtime.base.succeeded(row)
@@ -261,7 +299,7 @@ def execute(args):
     finally:
         cleanup_errors = []
         for (rep, stack), source in copies.items():
-            if stack != 'stock' and (rep, stack) in envs:
+            if stack not in ('stock', 'stable') and (rep, stack) in envs:
                 try:
                     stop, _ = invoke(stack, rep, 'cleanup', [str(tool_for(stack, args)), 'stop'],
                                      envs[(rep, stack)], source)
@@ -314,6 +352,10 @@ def main():
         parser.add_argument('--' + name, required=True, type=shared.absolute)
     parser.add_argument('--upstream', type=shared.absolute,
                         help='Optional official stable Blaze 0.20261027.0 absolute ELF path')
+    parser.add_argument('--stable-client', type=shared.absolute,
+                        help='Optional published shipping justrust absolute executable ELF')
+    parser.add_argument('--stable-version',
+                        help='Required exact version when --stable-client is supplied, e.g. justrust 0.1.0-alpha.37')
     parser.add_argument('--upstream-version', default=UPSTREAM_VERSION,
                         help='Exact required first version-output line, default official stable')
     parser.add_argument('--upstream-cli', choices=('cargo', 'direct'), default='cargo',
