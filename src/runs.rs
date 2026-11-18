@@ -459,6 +459,7 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
             String::new()
         }
     );
+    let reuse = crate::reuse::render_run(&crate::summary::load_units(dir));
     if u.compiled > 0 {
         let _ = writeln!(
             o,
@@ -618,6 +619,8 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
             }
         }
     }
+
+    o.push_str(&reuse);
 
     if s.link.link_pass_secs > 0.0 {
         let _ = writeln!(

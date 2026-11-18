@@ -45,12 +45,6 @@ mod findings;
 mod hints;
 mod history;
 mod hybrid;
-mod msvc_tools;
-mod native;
-mod nolocal;
-mod platform_config;
-mod stock_verify;
-mod test_reuse;
 mod install;
 mod ios_tools;
 mod linker;
@@ -58,8 +52,12 @@ mod live;
 mod localcache;
 mod log_journal;
 mod mcp;
+mod msvc_tools;
+mod native;
+mod nolocal;
 mod paths;
 mod peercache;
+mod platform_config;
 mod procfs;
 mod profile;
 mod record;
@@ -69,6 +67,9 @@ mod remote;
 #[cfg(unix)]
 mod remote_agent;
 mod remote_windows;
+mod reuse;
+mod stock_verify;
+mod test_reuse;
 // Build-host eviction runs on Unix hosts only.
 #[cfg_attr(not(unix), allow(dead_code))]
 mod remote_evict;
@@ -418,6 +419,21 @@ enum Command {
         days: f64,
         #[arg(long, default_value_t = 15)]
         top: usize,
+    },
+    /// Compile work that incremental compilation did not reuse, from the
+    /// compiler's reuse ledger: what a finer-grained design would skip.
+    Reuse {
+        /// Only runs from the last N days.
+        #[arg(long, default_value_t = 7.0)]
+        days: f64,
+        /// Only runs under the current directory.
+        #[arg(long)]
+        here: bool,
+        /// Rows per table.
+        #[arg(long, default_value_t = 12)]
+        top: usize,
+        #[arg(long)]
+        json: bool,
     },
     /// Which code to move into its own crate to stop rebuild cascades,
     /// from recorded runs in this workspace and its module graph.
@@ -1077,6 +1093,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
         Command::Log { .. } => "log",
         Command::Interactive { .. } => "interactive",
         Command::Runs { .. } => "runs",
+        Command::Reuse { .. } => "reuse",
         Command::Savings { .. } => "savings",
         Command::Status { watch: Some(_), .. } => return None,
         Command::Status { .. } => "status",
@@ -1196,6 +1213,12 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             watch,
         } => status::command(json, waybar, watch)?,
         Command::Shadow { days, top } => shadow::candidates_command(days, top)?,
+        Command::Reuse {
+            days,
+            here,
+            top,
+            json,
+        } => reuse::command(days, here, top, json)?,
         Command::Split {
             days,
             top,

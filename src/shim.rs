@@ -76,6 +76,11 @@ pub struct Unit {
     /// `dependency: serde`, `evicted`, `first-seen: package`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub depcache_why: String,
+    /// The compiler's reuse ledger: what incremental compilation did with
+    /// each query and codegen unit (`reuse.rs`). Empty without a capable
+    /// compiler.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reuse: Vec<crate::reuse::Row>,
 }
 
 #[derive(Debug, Serialize, serde::Deserialize, Clone)]
@@ -683,6 +688,12 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             }
             .into();
             let _ = std::fs::remove_file(path);
+        }
+        let mut reuse_path = path.clone().into_os_string();
+        reuse_path.push(".reuse");
+        if let Ok(text) = std::fs::read_to_string(&reuse_path) {
+            unit.reuse = crate::reuse::parse(&text);
+            let _ = std::fs::remove_file(&reuse_path);
         }
     }
     if let Ok(line) = serde_json::to_string(&unit) {
