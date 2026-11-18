@@ -860,10 +860,24 @@ pub(crate) fn key_args_with(
     h: &mut H128,
     ext: &dyn Fn(&Path) -> Option<String>,
 ) -> Option<()> {
+    // The linker only runs for linked crate types. An rlib's bytes do not
+    // depend on it, and per-checkout linker paths (bench copies, config-relative
+    // wrappers) split otherwise identical keys: ~43 min of repeat dependency
+    // misses in 2 days named only `-C linker` (2026-11-18).
+    let rlib_only = rlib_only(args);
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
         let next = args.get(i + 1).map(String::as_str);
+        let codegen = if a == "-C" {
+            next
+        } else {
+            a.strip_prefix("-C")
+        };
+        if rlib_only && codegen.is_some_and(|v| v.starts_with("linker=")) {
+            i += if a == "-C" { 2 } else { 1 };
+            continue;
+        }
         if a.starts_with("--diagnostic-width") {
             // Terminal width: only changes how diagnostics wrap.
         } else if a == "--extern" {
@@ -1151,6 +1165,22 @@ fn elf_section(path: &Path, want: &str) -> Option<Vec<u8>> {
         }
     }
     None
+}
+
+/// True when every `--crate-type` is `lib`/`rlib` (nothing is linked).
+fn rlib_only(args: &[String]) -> bool {
+    let mut types = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--crate-type" {
+            types.extend(args.get(i + 1).into_iter().flat_map(|v| v.split(',')));
+            i += 1;
+        } else if let Some(v) = args[i].strip_prefix("--crate-type=") {
+            types.extend(v.split(','));
+        }
+        i += 1;
+    }
+    !types.is_empty() && types.iter().all(|t| matches!(*t, "lib" | "rlib"))
 }
 
 fn key_codegen(v: &str, norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
@@ -2102,6 +2132,54 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn rlib_keys_ignore_linker_but_linked_types_do_not() {
+        let n = Norm::new(Path::new("/a/t1/debug")).unwrap();
+        let key = |v: &[&str]| {
+            let mut h = H128::new();
+            key_args(&s(v), &n, Path::new("/nonexistent-cwd"), &mut h).unwrap();
+            h.hex()
+        };
+        let lib = ["--crate-type", "lib", "-C", "opt-level=0"];
+        assert_eq!(
+            key(&lib),
+            key(&[
+                "--crate-type",
+                "lib",
+                "-C",
+                "linker=/x/ld",
+                "-C",
+                "opt-level=0"
+            ])
+        );
+        assert_eq!(
+            key(&["--crate-type=rlib", "-Clinker=/x/ld"]),
+            key(&["--crate-type=rlib", "-Clinker=/y/ld"])
+        );
+        assert_ne!(
+            key(&["--crate-type", "proc-macro", "-C", "linker=/x/ld"]),
+            key(&["--crate-type", "proc-macro", "-C", "linker=/y/ld"])
+        );
+        assert_ne!(
+            key(&[
+                "--crate-type",
+                "lib",
+                "--crate-type",
+                "cdylib",
+                "-C",
+                "linker=/x"
+            ]),
+            key(&[
+                "--crate-type",
+                "lib",
+                "--crate-type",
+                "cdylib",
+                "-C",
+                "linker=/y"
+            ])
+        );
     }
 
     #[test]
