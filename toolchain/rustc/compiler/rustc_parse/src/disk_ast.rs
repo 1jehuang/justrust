@@ -87,10 +87,10 @@ fn telemetry(event: &str) {
 
 /// Independent of STATS: disabled timing does not read the clock, and telemetry
 /// failures never affect cache acceptance or the compiler result.
-struct Phases(Option<PathBuf>);
+pub(crate) struct Phases(Option<PathBuf>);
 
 impl Phases {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(
             env::var_os("JUSTRUST_RUSTC_DISK_AST_PHASES")
                 .filter(|v| !v.is_empty())
@@ -98,7 +98,7 @@ impl Phases {
         )
     }
 
-    fn measure<T>(&self, phase: &str, bytes: usize, operation: impl FnOnce() -> T) -> T {
+    pub(crate) fn measure<T>(&self, phase: &str, bytes: usize, operation: impl FnOnce() -> T) -> T {
         let Some(path) = &self.0 else { return operation() };
         let start = std::time::Instant::now();
         let result = operation();

@@ -141,7 +141,11 @@ fn parse_source_file<'a>(
     strip: StripTokens,
 ) -> PResult<'a, ast::Crate> {
     let strip_mode = strip_key(&strip);
-    let mut parser = match crate::new_parser_from_source_file(psess, source.clone(), strip) {
+    let phases = crate::disk_ast::Phases::new();
+    let source_bytes = source.src.as_ref().map_or(0, |s| s.len());
+    let mut parser = match phases.measure("lex_parser", source_bytes, || {
+        crate::new_parser_from_source_file(psess, source.clone(), strip)
+    }) {
         Ok(parser) => parser,
         Err(errors) => {
             miss();
@@ -154,7 +158,8 @@ fn parse_source_file<'a>(
     if !memory_enabled && !disk_enabled {
         return parser.parse_crate_mod();
     }
-    let admissible = source_eligible(&source) && clean(psess);
+    let admissible = phases
+        .measure("source_admission", source_bytes, || source_eligible(&source) && clean(psess));
     if admissible && disk_enabled {
         if let Some(krate) = crate::disk_ast::load(psess, &source, strip_mode) {
             return Ok(krate);
@@ -191,7 +196,7 @@ fn parse_source_file<'a>(
     // Parsing this subset must add no effects beyond the lexing already done.
     // A clone is temporary and bounded by the source/token/gallery admission.
     let gallery = psess.symbol_gallery.symbols.lock().clone();
-    let result = parser.parse_crate_mod();
+    let result = phases.measure("fresh_parse", source_bytes, || parser.parse_crate_mod());
     let Ok(krate) = &result else {
         reject();
         return result;
