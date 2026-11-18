@@ -144,6 +144,8 @@ class HostedTests(unittest.TestCase):
         for call in self.calls:
             if call['stack'] == 'upstream':
                 self.assertEqual(call['env']['BLAZE_TOOLCHAINS'], str(self.args.toolchain.parent))
+                for name in ('BLAZE_BACKEND', 'BLAZE_OPT', 'RA_JIT_BACKEND', 'RA_JIT_OPT'):
+                    self.assertNotIn(name, call['env'])
                 if call['phase'] in compare.PHASES + ('full-library',):
                     self.assertEqual(call['cmd'][:2], [str(self.args.upstream), 'test'])
                     self.assertNotIn('cargo', call['cmd'])
@@ -153,6 +155,8 @@ class HostedTests(unittest.TestCase):
             identity = compare.identities(self.args)['upstream']
         self.assertEqual(identity['required_version'], self.args.upstream_version)
         self.assertEqual(identity['cli'], 'direct')
+        self.assertIn('native backend/optimization defaults',
+                      self.metadata()['upstream_environment_policy'])
 
     def test_canary_not_accepted_by_stable_default(self):
         self.enable_upstream()

@@ -103,6 +103,8 @@ def environment(root, stack, args):
     env = shared.environment(root, stack, args.toolchain, None)
     if stack == 'upstream' and getattr(args, 'upstream_cli', 'cargo') == 'direct':
         env['BLAZE_TOOLCHAINS'] = str(args.toolchain.parent)
+        for name in ('BLAZE_BACKEND', 'BLAZE_OPT', 'RA_JIT_BACKEND', 'RA_JIT_OPT'):
+            env.pop(name, None)
     # No rustup selection, compiler wrappers, remote downloads of compiler artifacts,
     # automatic publishing, or inherited user Cargo configuration.
     env.update(RUSTC=str(args.toolchain / 'bin/rustc'),
@@ -146,6 +148,12 @@ def execute(args):
                     cpuinfo=Path('/proc/cpuinfo').read_text(),
                     meminfo=Path('/proc/meminfo').read_text(), source_before=before,
                     identities_before=identity_before, environments={}, stacks=stacks,
+                    upstream_environment_policy=(
+                        'Direct CLI uses native backend/optimization defaults: BLAZE_BACKEND, '
+                        'BLAZE_OPT, RA_JIT_BACKEND, RA_JIT_OPT omitted; same Cargo profiles; '
+                        'BLAZE_TOOLCHAINS points to pinned toolchain parent.'
+                        if 'upstream' in stacks and getattr(args, 'upstream_cli', 'cargo') == 'direct'
+                        else 'Legacy cargo CLI environment; same Cargo profiles.'),
                     scope='Host-only pinned filtered tests. No universal speed claim.',
                     cold_policy='Fresh private target and engine stores per replicate; OS page cache not flushed.',
                     full_library_policy='required' if not args.skip_full_library else 'explicitly skipped; not correctness-certified',
