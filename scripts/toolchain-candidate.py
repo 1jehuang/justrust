@@ -24,8 +24,14 @@ def validate_source(root, revision):
         raise ValueError("--source-commit must be a full lowercase 40-character repository commit")
     if git(root, "symbolic-ref", "--short", "HEAD") != "stable":
         raise ValueError("candidate builds require the stable branch")
-    if git(root, "rev-parse", "HEAD") != revision:
-        raise ValueError("--source-commit must equal the checked-out repository HEAD")
+    head = git(root, "rev-parse", "HEAD")
+    if head != revision:
+        # HEAD may advance during a long build through unrelated commits
+        # (other agents share stable). Only relevant source drift fails.
+        if subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", revision, head]).returncode != 0:
+            raise ValueError("--source-commit must be the checked-out HEAD or an ancestor of it")
+        if git(root, "diff", "--name-only", revision, head, "--", *RELEVANT):
+            raise ValueError("relevant toolchain source changed between --source-commit and HEAD")
     dirty = git(root, "status", "--porcelain", "--untracked-files=no", "--", *RELEVANT)
     if dirty:
         raise ValueError("refusing dirty relevant tracked source:\n" + dirty)
