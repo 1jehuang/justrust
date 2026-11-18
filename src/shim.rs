@@ -111,6 +111,7 @@ fn real_rustc() -> PathBuf {
 pub fn main() -> ! {
     let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let real = real_rustc();
+    share_slot_incremental(&mut args);
     args.extend(cache_proc_macro_args(&real, &args));
     args.extend(release_frontend_threads_args(&real, &args));
     jr_iface_hash_env(&real);
@@ -132,6 +133,58 @@ pub fn main() -> ! {
         Some(code) => std::process::exit(code),
         None => exec(&real, &args),
     }
+}
+
+/// Point a build slot's `-C incremental=<root>/justrust-slots/<n>/<profile>/incremental`
+/// at the shared `<root>/<profile>/incremental`. Slots share one source tree,
+/// so another slot's newest session is the best previous state; with private
+/// dirs every slot change was a cold start (214s of 1246s cold local compile
+/// on 2026-11-18). rustc locks and finalizes session dirs, so concurrent
+/// sessions are safe, and the path is neither a cargo fingerprint input nor an
+/// output. `JUSTRUST_SHARED_INCREMENTAL=0` keeps private dirs.
+fn share_slot_incremental(args: &mut [OsString]) {
+    if std::env::var_os("JUSTRUST_SHARED_INCREMENTAL").is_some_and(|v| v == "0") {
+        return;
+    }
+    for i in 0..args.len() {
+        let a = args[i].to_string_lossy().into_owned();
+        let (prefix, path) = if let Some(p) = a.strip_prefix("-Cincremental=") {
+            ("-Cincremental=", p.to_owned())
+        } else if a == "-C"
+            && let Some(next) = args.get(i + 1).map(|n| n.to_string_lossy().into_owned())
+            && let Some(p) = next.strip_prefix("incremental=")
+        {
+            let Some(shared) = shared_incremental_dir(std::path::Path::new(p)) else {
+                return;
+            };
+            args[i + 1] = format!("incremental={}", shared.display()).into();
+            return;
+        } else {
+            continue;
+        };
+        if let Some(shared) = shared_incremental_dir(std::path::Path::new(&path)) {
+            args[i] = format!("{prefix}{}", shared.display()).into();
+        }
+        return;
+    }
+}
+
+/// `<root>/justrust-slots/<n>/<rest...>/incremental` -> `<root>/<rest...>/incremental`.
+fn shared_incremental_dir(p: &std::path::Path) -> Option<PathBuf> {
+    let comps: Vec<_> = p.components().collect();
+    let at = comps
+        .iter()
+        .position(|c| c.as_os_str() == "justrust-slots")?;
+    let slot = comps.get(at + 1)?.as_os_str().to_str()?;
+    if slot.is_empty() || !slot.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if comps.last()?.as_os_str() != "incremental" || comps.len() < at + 4 {
+        return None;
+    }
+    let mut out: PathBuf = comps[..at].iter().collect();
+    out.extend(&comps[at + 2..]);
+    Some(out)
 }
 
 fn exec(real: &PathBuf, args: &[OsString]) -> ! {
@@ -841,6 +894,40 @@ pub fn invoked_as_shim(argv0: &OsStr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slot_incremental_maps_to_shared_dir() {
+        let m = |p: &str| shared_incremental_dir(std::path::Path::new(p));
+        assert_eq!(
+            m("/w/target/justrust-slots/2/debug/incremental"),
+            Some(PathBuf::from("/w/target/debug/incremental"))
+        );
+        assert_eq!(
+            m("/w/target/justrust-slots/0/x86_64-unknown-linux-gnu/release/incremental"),
+            Some(PathBuf::from(
+                "/w/target/x86_64-unknown-linux-gnu/release/incremental"
+            ))
+        );
+        assert_eq!(m("/w/target/debug/incremental"), None);
+        assert_eq!(m("/w/target/justrust-slots/a/debug/incremental"), None);
+        assert_eq!(m("/w/target/justrust-slots/1/debug/deps"), None);
+        let mut a: Vec<OsString> = [
+            "-C",
+            "incremental=/t/justrust-slots/3/debug/incremental",
+            "-C",
+            "opt-level=0",
+        ]
+        .iter()
+        .map(OsString::from)
+        .collect();
+        share_slot_incremental(&mut a);
+        assert_eq!(a[1], "incremental=/t/debug/incremental");
+        let mut b = vec![OsString::from(
+            "-Cincremental=/t/justrust-slots/1/debug/incremental",
+        )];
+        share_slot_incremental(&mut b);
+        assert_eq!(b[0], "-Cincremental=/t/debug/incremental");
+    }
 
     #[test]
     fn release_frontend_threads_only_for_optimized_local_units() {
