@@ -80,6 +80,23 @@ impl Cache {
         self.stats.misses += 1;
     }
 
+    fn idle(&mut self) -> ResidentGraphStats {
+        let mut released_bytes = 0;
+        let mut evictions = 0;
+        self.entries.retain(|entry| {
+            if Arc::strong_count(&entry.graph) == 1 {
+                released_bytes += entry.cost;
+                evictions += 1;
+                false
+            } else {
+                true
+            }
+        });
+        self.stats.retained_bytes -= released_bytes;
+        self.stats.evictions += evictions;
+        self.stats
+    }
+
     fn lookup(&mut self, namespace: &Namespace, bytes: &[u8]) -> Option<Arc<SerializedDepGraph>> {
         let hit = self
             .entries
@@ -139,6 +156,13 @@ static CACHE: Mutex<Cache> = Mutex::new(Cache::new());
 
 pub fn resident_graph_stats() -> ResidentGraphStats {
     CACHE.lock().unwrap_or_else(|e| e.into_inner()).stats
+}
+
+/// Release cached graphs that are not held by active compilations and return
+/// the resulting cumulative statistics. Call for compressed/cold worker tiers,
+/// not hot workers. Eviction leaves the ordinary durable graph loader authoritative.
+pub fn resident_graph_idle() -> ResidentGraphStats {
+    CACHE.lock().unwrap_or_else(|e| e.into_inner()).idle()
 }
 
 /// Reuse only a native current-output snapshot whose entire produced file equals
@@ -270,5 +294,67 @@ mod tests {
         assert_eq!(cache.stats.snapshots, snapshots);
         assert_eq!(cache.stats.oversized, 1);
         assert!(cache.stats.retained_bytes <= CACHE_LIMIT);
+    }
+
+    #[test]
+    fn idle_clears_unshared_graphs() {
+        let mut cache = Cache::new();
+        for n in 0..3 {
+            cache.publish(namespace("idle", n), vec![n as u8], Arc::default(), 100);
+        }
+        assert!(cache.stats.retained_bytes > 0);
+        let stats = cache.idle();
+        assert!(cache.entries.is_empty());
+        assert_eq!(stats.retained_bytes, 0);
+        assert_eq!(stats.evictions, 3);
+        assert_eq!(stats.snapshots, 3);
+    }
+
+    #[test]
+    fn idle_preserves_active_graphs_until_released() {
+        let mut cache = Cache::new();
+        let ns = namespace("active", 0);
+        cache.publish(ns.clone(), vec![0], Arc::default(), 100);
+        let active = cache.lookup(&ns, &[0]).unwrap();
+        let active_cost = cache.stats.retained_bytes;
+        cache.publish(namespace("inactive", 0), vec![1], Arc::default(), 200);
+
+        let stats = cache.idle();
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(stats.retained_bytes, active_cost);
+        assert_eq!(stats.evictions, 1);
+        assert!(Arc::ptr_eq(&active, &cache.lookup(&ns, &[0]).unwrap()));
+
+        drop(active);
+        let stats = cache.idle();
+        assert!(cache.entries.is_empty());
+        assert_eq!(stats.retained_bytes, 0);
+        assert_eq!(stats.evictions, 2);
+        // Eviction is a cache miss, not an alternate durable graph loader.
+        assert!(cache.lookup(&ns, &[0]).is_none());
+    }
+
+    #[test]
+    fn idle_stats_are_consistent_and_idempotent() {
+        let mut cache = Cache::new();
+        cache.unavailable();
+        cache.publish(namespace("oversized", 0), vec![], Arc::default(), CACHE_LIMIT + 1);
+        for n in 0..5 {
+            cache.publish(namespace("idle", n), vec![n as u8], Arc::default(), 100);
+        }
+        assert_eq!(cache.stats.evictions, 1);
+        assert!(cache.lookup(&namespace("idle", 4), &[4]).is_some());
+        let before = cache.stats;
+        let stats = cache.idle();
+        assert_eq!(stats.evictions, before.evictions + 4);
+        assert_eq!(stats.retained_bytes, 0);
+        for actual in [stats, cache.idle(), cache.idle()] {
+            assert_eq!(actual.evictions, stats.evictions);
+            assert_eq!(actual.retained_bytes, stats.retained_bytes);
+            assert_eq!(actual.hits, before.hits);
+            assert_eq!(actual.misses, before.misses);
+            assert_eq!(actual.snapshots, before.snapshots);
+            assert_eq!(actual.oversized, before.oversized);
+        }
     }
 }
