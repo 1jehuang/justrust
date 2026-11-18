@@ -124,7 +124,7 @@ struct Cache {
 
 /// Idle policy acts only on owned encoded archives, never on live tcx state.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum IdleTier {
+pub enum IdleTier {
     Compressed,
     Cold,
 }
@@ -132,7 +132,7 @@ pub(super) enum IdleTier {
 /// Retained owner-cache charges, including indexes and allocation overhead.
 /// Active entries are hot entries that an idle transition must leave alone.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) struct TierStats {
+pub struct TierStats {
     pub hot_entries: u64,
     pub hot_bytes: u64,
     pub compressed_entries: u64,
@@ -142,7 +142,7 @@ pub(super) struct TierStats {
 
 enum Entry {
     Hot(Arc<Archive>),
-    Compressed { bytes: Vec<u8>, decoded_len: usize, start_pos: usize, indexes: Indexes },
+    Compressed { bytes: Vec<u8>, decoded_len: usize, start_pos: Option<usize>, indexes: Indexes },
 }
 
 impl Entry {
@@ -200,7 +200,7 @@ impl Cache {
             {
                 if archive.start_pos.is_none() {
                     // A writer snapshot has no header offset until its first
-                    // validated read. Bind it before permitting compression.
+                    // validated read. Bind it on the first successful lookup.
                     Arc::new(Archive {
                         bytes: archive.bytes.clone(),
                         indexes: archive.indexes.clone(),
@@ -211,13 +211,15 @@ impl Cache {
                 }
             }
             Entry::Compressed { bytes: encoded, decoded_len, start_pos: header, indexes }
-                if *header == start_pos
+                if header.is_none_or(|p| p == start_pos)
                     && *decoded_len == bytes.len()
                     && *decoded_len <= MAX_BYTES =>
             {
                 // Untrusted/corrupt compressed data may never cause unbounded
                 // allocation. Exact original bytes, not a digest, establish
                 // identity before these native indexes can be used again.
+                // Like hot writer snapshots, None is trusted encoder
+                // provenance, not a bypass of the caller's header validation.
                 let decoded =
                     miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(encoded, *decoded_len);
                 match decoded {
@@ -271,19 +273,15 @@ impl Cache {
                 return false;
             }
             if let Entry::Hot(archive) = entry {
-                // Writer snapshots have no independently validated header yet.
-                // Leave them hot until lookup has established that identity.
-                if let Some(start_pos) = archive.start_pos {
-                    let bytes = miniz_oxide::deflate::compress_to_vec_zlib(&archive.bytes, 1);
-                    let compressed = Entry::Compressed {
-                        bytes,
-                        decoded_len: archive.bytes.len(),
-                        start_pos,
-                        indexes: archive.indexes.clone(),
-                    };
-                    if compressed.charge(key) < entry.charge(key) {
-                        *entry = compressed;
-                    }
+                let bytes = miniz_oxide::deflate::compress_to_vec_zlib(&archive.bytes, 1);
+                let compressed = Entry::Compressed {
+                    bytes,
+                    decoded_len: archive.bytes.len(),
+                    start_pos: archive.start_pos,
+                    indexes: archive.indexes.clone(),
+                };
+                if compressed.charge(key) < entry.charge(key) {
+                    *entry = compressed;
                 }
             }
             true
@@ -320,10 +318,20 @@ fn cache() -> &'static Mutex<Cache> {
 }
 
 pub(super) fn transition_idle(tier: IdleTier) -> TierStats {
+    if !rustc_session::resident::is_process() || !rustc_session::resident::frontend_enabled() {
+        return TierStats::default();
+    }
     cache().lock().map(|mut cache| cache.transition_idle(tier)).unwrap_or_default()
 }
 
+pub(super) fn idle(tier: IdleTier) -> TierStats {
+    transition_idle(tier)
+}
+
 pub(super) fn tier_stats() -> TierStats {
+    if !rustc_session::resident::is_process() || !rustc_session::resident::frontend_enabled() {
+        return TierStats::default();
+    }
     cache().lock().map(|cache| cache.tier_stats()).unwrap_or_default()
 }
 
@@ -534,17 +542,24 @@ mod tests {
     }
 
     #[test]
-    fn writer_snapshot_binds_header_before_compression() {
+    fn writer_snapshot_compresses_before_read_then_binds_validated_header() {
         let bytes = vec![42; 8192];
         let mut snapshot = archive(&bytes);
         Arc::get_mut(&mut snapshot).unwrap().start_pos = None;
         let mut cache = Cache::default();
         cache.insert(key(0), snapshot);
-        assert_eq!(cache.transition_idle(IdleTier::Compressed).hot_entries, 1);
-        drop(cache.lookup(&key(0), &bytes, 8).unwrap());
         let tiers = cache.transition_idle(IdleTier::Compressed);
         assert_eq!(tiers.compressed_entries, 1);
         assert_eq!(cache.transition_idle(IdleTier::Compressed), tiers);
+        let mut changed = bytes.clone();
+        changed[4096] ^= 1;
+        assert!(cache.lookup(&key(0), &changed, 9).is_none());
+        // None has exactly the hot writer snapshot semantics: the caller has
+        // validated its header, and every artifact byte must still match.
+        let hit = cache.lookup(&key(0), &bytes, 8).unwrap();
+        assert_eq!(hit.start_pos, Some(8));
+        drop(hit);
+        assert_eq!(cache.transition_idle(IdleTier::Compressed).compressed_entries, 1);
         assert!(cache.lookup(&key(0), &bytes, 9).is_none());
         assert!(cache.lookup(&key(0), &bytes, 8).is_some());
         assert_charge(&cache);
@@ -622,6 +637,11 @@ mod tests {
 
     #[test]
     fn disabled_stats_are_zero() {
+        if !rustc_session::resident::is_process() || !rustc_session::resident::frontend_enabled() {
+            assert_eq!(tier_stats(), TierStats::default());
+            assert_eq!(idle(IdleTier::Compressed), TierStats::default());
+            assert_eq!(idle(IdleTier::Cold), TierStats::default());
+        }
         if !rustc_session::resident::frontend_enabled() {
             let stats = stats();
             assert_eq!(
