@@ -1164,8 +1164,7 @@ fn serve_build(
     let res = stream(&build, s, attached, replayed, joined_after, lookup_ms);
     let mut l = build.log.lock().unwrap();
     l.clients -= 1;
-    let orphaned =
-        l.clients == 0 && l.exit.is_none() && !l.early_served && !*build.prebuild.lock().unwrap();
+    let orphaned = stop_when_orphaned(&l, *build.prebuild.lock().unwrap());
     drop(l);
     if orphaned {
         // Everyone who asked is gone (killed or timed out): stop the build
@@ -1174,6 +1173,15 @@ fn serve_build(
         crate::sys::terminate_group(build.pid, false);
     }
     res
+}
+
+/// The last client left: stop the build, unless it already answered early
+/// (the point of buildd: rustc finishes so the verdict replays and the cache
+/// fills) or it is a prebuild nobody claimed yet. A stopped build releases
+/// its compiler usage lease when cargo exits; a kept one holds it until
+/// cargo finishes (docs/toolchain-slots.md).
+fn stop_when_orphaned(l: &Log, prebuild: bool) -> bool {
+    l.clients == 0 && l.exit.is_none() && !l.early_served && !prebuild
 }
 
 fn stream(
@@ -2014,6 +2022,22 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn orphaned_build_keeps_running_only_after_an_early_answer() {
+        let l = |clients, exit, early_served| Log {
+            clients,
+            exit,
+            early_served,
+            ..Log::default()
+        };
+        assert!(stop_when_orphaned(&l(0, None, false), false));
+        // After an early answer the build must finish for the replay.
+        assert!(!stop_when_orphaned(&l(0, None, true), false));
+        assert!(!stop_when_orphaned(&l(0, None, false), true));
+        assert!(!stop_when_orphaned(&l(1, None, false), false));
+        assert!(!stop_when_orphaned(&l(0, Some(0), false), false));
     }
 
     #[test]

@@ -71,7 +71,7 @@ impl Fixture {
         let prefix = self.prefix(id);
         std::fs::create_dir_all(prefix.join("bin")).unwrap();
         let rustc = "#!/bin/sh\necho 'rustc 1.101.0-nightly (fixture 2026-10-07)'\n";
-        let cargo = "#!/bin/sh\nfor arg in \"$@\"; do if [ \"$arg\" = check ] && [ -n \"$SLOT_BARRIER\" ]; then echo ready > \"$SLOT_BARRIER\"; read line || true; break; fi; done\nexit 0\n";
+        let cargo = "#!/bin/sh\nfor arg in \"$@\"; do if [ \"$arg\" = check ] && [ -n \"$SLOT_BARRIER\" ]; then echo ready > \"$SLOT_BARRIER\"; if [ -n \"$SLOT_HOLD\" ]; then while [ ! -e \"$SLOT_HOLD\" ]; do sleep 0.01; done; else read line || true; fi; break; fi; done\nexit 0\n";
         for (name, body) in [("rustc", rustc), ("cargo", cargo)] {
             let path = prefix.join("bin").join(name);
             std::fs::write(&path, body).unwrap();
@@ -184,4 +184,66 @@ fn cargo_keeps_usage_lease_after_recording_parent_is_killed() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(!fixture.prefix("jr-aaaaaaa").exists());
+}
+
+/// Through buildd (hosted agents since 9d442a749): when the only client is
+/// killed before any early answer, buildd stops the build like the client's
+/// kill would have (docs/early-exit-hosted.md), and the usage lease is held
+/// exactly as long as cargo lives (docs/toolchain-slots.md). After an early
+/// answer buildd keeps the build running instead (unit test
+/// `orphaned_build_keeps_running_only_after_an_early_answer`).
+#[test]
+fn buildd_holds_usage_lease_until_it_stops_orphaned_cargo() {
+    let fixture = Fixture::new("buildd-orphan");
+    fixture.pair();
+    let barrier = fixture.0.join("cargo-ready");
+    let hold = fixture.0.join("cargo-release");
+    let daemon = |action: &str| {
+        fixture
+            .command()
+            .args(["daemon", action])
+            .env("JUSTRUST_BUILDD", "1")
+            .output()
+            .unwrap()
+    };
+    let child = fixture
+        .command()
+        .arg("check")
+        .env("JUSTRUST_BUILDD", "1")
+        .env("JUSTRUST_BUILDD_PREBUILD", "0")
+        .env("JUSTRUST_EARLY", "0")
+        .env_remove("CI")
+        .env("JUSTRUST_TOOLCHAIN", "jr-aaaaaaa")
+        .env("JUSTRUST_TOOLCHAIN_REQUIRED", "1")
+        .env("SLOT_BARRIER", &barrier)
+        .env("SLOT_HOLD", &hold)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let mut child = Running(child);
+    wait_for(&barrier);
+    let status = String::from_utf8_lossy(&daemon("status").stdout).into_owned();
+    assert!(status.contains("1 running"), "served by buildd: {status}");
+    fixture.slot(&["validate", "jr-bbbbbbb"]);
+    assert_eq!(fixture.slot(&["cleanup"])["status"], "busy");
+    child.0.kill().unwrap();
+    child.0.wait().unwrap();
+    // buildd notices within about a second and stops cargo; the lease goes
+    // with it, without the hold file ever being created.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let result = fixture.slot(&["cleanup"]);
+        if result["status"] == "cleaned" {
+            break;
+        }
+        assert_eq!(result["status"], "busy");
+        assert!(Instant::now() < deadline, "buildd did not stop orphaned cargo");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!fixture.prefix("jr-aaaaaaa").exists());
+    let log = std::fs::read_to_string(fixture.0.join("home/buildd/daemon.log")).unwrap_or_default();
+    assert!(log.contains("no clients left, stopping pid"), "{log}");
+    daemon("stop");
 }

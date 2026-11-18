@@ -71,7 +71,12 @@ atomic rename, and directory fsync. Lifecycle and install locks serialize the
 entire transaction. Compiler selection takes the lifecycle lock before lookup,
 then shared per-ID usage locks for the full recorded/unrecorded Cargo lifetime.
 Cargo inherits its usage lock so a killed recording parent does not alone permit
-deletion while Cargo or its descendants remain alive. Cleanup/discard try an
+deletion while Cargo or its descendants remain alive. Through the build daemon
+(`buildd`, hosted agents) the lease follows the same Cargo lifetime: when the
+last client goes away before an early answer, buildd stops Cargo as the
+client's kill would have and the lease is released; after an early answer
+buildd keeps Cargo (and its lease) running so the verdict can replay
+(`tests/toolchain_slots.rs::buildd_holds_usage_lease_until_it_stops_orphaned_cargo`). Cleanup/discard try an
 exclusive usage lock without waiting and retain a busy compiler.
 
 A validated previous managed compiler stops accepting new managed builds before
