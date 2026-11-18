@@ -211,6 +211,10 @@ fn buildd_holds_usage_lease_until_it_stops_orphaned_cargo() {
         .arg("check")
         .env("JUSTRUST_BUILDD", "1")
         .env("JUSTRUST_BUILDD_PREBUILD", "0")
+        // On a hosted agent this test itself runs inside a buildd child,
+        // whose marker would keep the fixture's client from using buildd.
+        .env_remove("JUSTRUST_BUILDD_CHILD")
+        .env_remove("JUSTRUST_BUILDD_GUESS")
         .env("JUSTRUST_EARLY", "0")
         .env_remove("CI")
         .env("JUSTRUST_TOOLCHAIN", "jr-aaaaaaa")
@@ -219,13 +223,19 @@ fn buildd_holds_usage_lease_until_it_stops_orphaned_cargo() {
         .env("SLOT_HOLD", &hold)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
+        // Not inherited: on a hosted agent stderr is a terminal, and buildd
+        // leaves terminal runs to the client (they want cargo's progress bar).
+        .stderr(std::fs::File::create(fixture.0.join("client.stderr")).unwrap())
         .spawn()
         .unwrap();
     let mut child = Running(child);
     wait_for(&barrier);
     let status = String::from_utf8_lossy(&daemon("status").stdout).into_owned();
-    assert!(status.contains("1 running"), "served by buildd: {status}");
+    assert!(
+        status.contains("1 running"),
+        "served by buildd: {status}\nclient stderr:\n{}",
+        std::fs::read_to_string(fixture.0.join("client.stderr")).unwrap_or_default()
+    );
     fixture.slot(&["validate", "jr-bbbbbbb"]);
     assert_eq!(fixture.slot(&["cleanup"])["status"], "busy");
     child.0.kill().unwrap();
@@ -239,7 +249,10 @@ fn buildd_holds_usage_lease_until_it_stops_orphaned_cargo() {
             break;
         }
         assert_eq!(result["status"], "busy");
-        assert!(Instant::now() < deadline, "buildd did not stop orphaned cargo");
+        assert!(
+            Instant::now() < deadline,
+            "buildd did not stop orphaned cargo"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(!fixture.prefix("jr-aaaaaaa").exists());
