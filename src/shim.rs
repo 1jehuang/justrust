@@ -575,14 +575,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
         .flatten();
     phase_ledger_environment(&mut cmd, ledger.as_deref());
     if plan.is_none() {
-        let hot =
-            crate::hotpatch::rustc_args(described.local, described.test, !link_args.is_empty());
         cmd.args(&link_args);
-        if !hot.is_empty() {
-            cmd.args(hot);
-            let (k, v) = crate::hotpatch::link_env();
-            cmd.env(k, v);
-        }
     }
     if force_bootstrap {
         cmd.env("RUSTC_BOOTSTRAP", "1");

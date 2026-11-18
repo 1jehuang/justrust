@@ -37,8 +37,6 @@
 //!   `justrust __localcache-finish` hashes, checks, commits, and collects.
 //!   Only one finisher per cache publishes at a time. Contending finishers
 //!   discard their optional stages rather than building an I/O backlog.
-//! - **Off with hot patching** (`JUSTRUST_HOTPATCH=1`): the patcher tracks
-//!   the binaries it linked.
 //!
 //! On by default, `JUSTRUST_LOCALCACHE=0` turns it off, cache dir
 //! `JUSTRUST_LOCALCACHE_DIR`, size cap `JUSTRUST_LOCALCACHE_MAX` (default
@@ -60,7 +58,7 @@ const DEFAULT_MAX_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 const GC_INTERVAL_SECS: f64 = 600.0;
 
 pub fn enabled() -> bool {
-    if !depcache::enabled() || crate::hotpatch::enabled() {
+    if !depcache::enabled() {
         return false;
     }
     match std::env::var("JUSTRUST_LOCALCACHE").as_deref() {

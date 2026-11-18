@@ -44,8 +44,6 @@ mod failure;
 mod findings;
 mod hints;
 mod history;
-#[cfg(unix)]
-mod hotpatch;
 mod hybrid;
 mod msvc_tools;
 mod native;
@@ -53,24 +51,6 @@ mod nolocal;
 mod platform_config;
 mod stock_verify;
 mod test_reuse;
-/// Hot patching rewrites ELF binaries: nothing to do on Windows.
-#[cfg(windows)]
-mod hotpatch {
-    use std::ffi::OsString;
-    pub fn enabled() -> bool {
-        false
-    }
-    pub fn rustc_args(_local: bool, _test: bool, _linker_args: bool) -> Vec<OsString> {
-        Vec::new()
-    }
-    pub fn link_env() -> (&'static str, &'static str) {
-        ("JUSTRUST_HOTPATCH_LINK", "1")
-    }
-    pub fn before_link(_raw: &[OsString]) -> Option<i32> {
-        None
-    }
-    pub fn after_link(_raw: &[OsString]) {}
-}
 mod install;
 mod ios_tools;
 mod linker;
