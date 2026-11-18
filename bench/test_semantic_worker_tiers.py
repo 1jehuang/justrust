@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Pure Python protocol/orchestration tests. Never execute a native compiler."""
+import io
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+import semantic_worker_tiers as tiers
+
+
+def counters(value):
+    return dict.fromkeys(tiers.native.FRONTEND_COUNTERS + tiers.native.FRONTEND_OPTIONAL, value)
+
+
+class TierTests(unittest.TestCase):
+    def test_live_memory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '42').mkdir()
+            (root / '42/smaps_rollup').write_text('0000-ffff ---p\nRss: 80 kB\nPss: 61 kB\n'
+                'Private_Clean: 3 kB\nPrivate_Dirty: 20 kB\nPrivate_Hugetlb: 4 kB\n'
+                'Swap: 2 kB\nSwapPss: 1 kB\n')
+            sample = tiers.memory(42, root)
+            self.assertEqual(sample['private_kib'], 27)
+            self.assertEqual(sample['pss_kib'], 61)
+            self.assertEqual(sample['swap_kib'], 2)
+            (root / '42/smaps_rollup').write_text('Rss: 4 kB\n')
+            with self.assertRaises(AssertionError):
+                tiers.memory(42, root)
+
+    def test_counterbalanced_order(self):
+        rows = [tiers.order(rep, 0) for rep in range(10)]
+        for row in rows:
+            self.assertEqual(set(row), set(tiers.MODES))
+        for position in range(5):
+            self.assertEqual(sorted(row[position] for row in rows), sorted(tiers.MODES * 2))
+        self.assertEqual(rows[5], rows[0][::-1])
+
+    def worker(self, response):
+        return SimpleNamespace(sequence=8, timeout=1, buffer=response,
+            process=SimpleNamespace(pid=42, stdin=io.BytesIO()), transcript=io.BytesIO(),
+            selector=SimpleNamespace(select=lambda timeout: [True]), response_fd=99)
+
+    def test_control_shared_sequence_and_transcript(self):
+        response = dict(id=9, pid=42, status=0, tier='compressed', memory={'archive_bytes': 12})
+        worker = self.worker(json.dumps(response).encode() + b'\nnext')
+        with patch.object(tiers, 'memory', return_value={'rss_kib': 80}):
+            record = tiers.control(worker, 'compressed')
+        self.assertEqual(worker.sequence, 9)
+        self.assertEqual(worker.buffer, b'next')
+        self.assertEqual(json.loads(worker.process.stdin.getvalue()), dict(id=9, tier='compressed'))
+        self.assertEqual(record['response'], response)
+        self.assertEqual(len(worker.transcript.getvalue().splitlines()), 2)
+
+    def test_control_rejects_bad_ack(self):
+        for change in ({'id': 8}, {'pid': 43}, {'status': True}, {'status': 1},
+                       {'tier': 'cold'}, {'memory': None}):
+            response = dict(id=9, pid=42, status=0, tier='hot', memory={})
+            response.update(change)
+            with self.subTest(change=change), patch.object(tiers, 'memory', return_value={}):
+                with self.assertRaises(AssertionError):
+                    tiers.control(self.worker(json.dumps(response).encode() + b'\n'), 'hot')
+
+    def test_control_reads_fragmented_response(self):
+        worker = self.worker(b'')
+        chunks = [b'{"id":9,"pid":42,"status":0,', b'"tier":"cold","memory":{}}\n']
+        with patch.object(tiers, 'memory', return_value={}), patch.object(tiers.os, 'read', side_effect=chunks):
+            self.assertEqual(tiers.control(worker, 'cold')['response']['tier'], 'cold')
+
+    def test_control_eof_and_timeout(self):
+        with patch.object(tiers, 'memory', return_value={}), patch.object(tiers.os, 'read', return_value=b''):
+            with self.assertRaises(RuntimeError):
+                tiers.control(self.worker(b''), 'hot')
+        worker = self.worker(b'')
+        worker.timeout = -1
+        with patch.object(tiers, 'memory', return_value={}):
+            with self.assertRaises(TimeoutError):
+                tiers.control(worker, 'cold')
+
+    def test_green_requires_both_real_load_kinds(self):
+        tiers.green_loads(counters(0), counters(1))
+        for key in ('archive_hits', 'value_loads', 'typeck_loads', 'mir_loads'):
+            after = counters(1)
+            after[key] = 0
+            with self.subTest(key=key), self.assertRaises(AssertionError):
+                tiers.green_loads(counters(0), after)
+
+    def test_no_local_native_execution(self):
+        with patch.object(tiers.native, 'identity') as identity:
+            with self.assertRaises(ValueError):
+                tiers.capture('/compiler', '/output')
+            identity.assert_not_called()
+
+    def test_mock_capture_full_edit_error_recovery(self):
+        workers = []
+        current = {'expected': None}
+        real_cases = tiers.native.frontend_cases
+        workload = real_cases(2)
+        sources = {source: expected for _, source, expected in workload}
+        def observable(expected):
+            return dict(status=int(expected is None), stdout_b64='',
+                        stderr_b64='dHlwZSBlcnJvcg==' if expected is None else '', elapsed_seconds=.01)
+        class Worker:
+            def __init__(self, compiler, cache, root, values, timeout, frontend):
+                self.root, self.frontend = root, frontend
+                self.process = SimpleNamespace(pid=42)
+                self.command = ['mock-only']
+                self.counters = {'resident_hits': 0}
+                self.frontend_counters = counters(0)
+                self.closed = False
+                workers.append(self)
+            def compile(self, argv):
+                expected = sources[(self.root / 'fixture.rs').read_text()]
+                current['expected'] = expected
+                if self.frontend:
+                    self.frontend_counters = {key: value + 1 for key, value in self.frontend_counters.items()}
+                (self.root / 'fixture').write_bytes(b'mock')
+                return observable(expected)
+            def close(self):
+                self.closed = True
+        def run(argv, *args, **kwargs):
+            if len(argv) > 1:
+                expected = sources[Path(argv[1]).read_text()]
+                current['expected'] = expected
+                (Path(argv[1]).parent / 'fixture').write_bytes(b'mock')
+                return observable(expected)
+            return dict(status=0, stdout_b64=tiers.native.encoded(current['expected'].encode()), stderr_b64='')
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(tiers.native, 'Resident', Worker), \
+                patch.object(tiers.native, 'identity', return_value={'mock': True}), \
+                patch.object(tiers.native, 'run', side_effect=run), \
+                patch.object(tiers, 'memory', return_value=dict(rss_kib=4, pss_kib=3, private_kib=2, swap_kib=0)), \
+                patch.object(tiers, 'control', return_value=dict(elapsed_seconds=.001)):
+            report = tiers.capture('/mock-only', directory, 1, 2, hosted=True)
+            self.assertEqual(report['verdict'], 'passed')
+            names = [row['name'] for row in report['observations']]
+            self.assertIn('type-error', names)
+            self.assertIn('recovery', names)
+            self.assertIn('significant-signature-edit', names)
+            self.assertTrue(all(worker.closed for worker in workers))
+            self.assertTrue((Path(directory) / 'receipt.json').exists())
+
+    def test_failure_keeps_receipt(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(tiers.native, 'identity', side_effect=RuntimeError('mock failure')):
+            with self.assertRaises(RuntimeError):
+                tiers.capture('/mock', directory, hosted=True)
+            report = json.loads((Path(directory) / 'receipt.json').read_text())
+            self.assertEqual(report['verdict'], 'failed')
+            self.assertIn('mock failure', report['error'])
+
+
+if __name__ == '__main__':
+    unittest.main()
