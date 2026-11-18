@@ -35,11 +35,14 @@ def host_guard(execute_host_workloads):
         if info.st_uid != 0 or info.st_mode & 0o022:
             raise ValueError('host identity marker must be root-owned and not group/world writable')
         marker = dict(marker=str(HOST_MARKER), marker_sha256=shared.digest(HOST_MARKER))
-    elif HOST_SHARE.is_dir() and not HOST_SHARE.is_symlink() and HOST_SHARE.stat().st_uid == 0:
-        # The authenticated hosted guest exposes this root-owned shared mount.
-        # Never create the marker or mount as part of an experiment.
+    elif HOST_SHARE.is_file() and not HOST_SHARE.is_symlink() and HOST_SHARE.stat().st_uid == 0:
+        # The authenticated guest exposes its allocated CPU share as a root-owned file.
         info = HOST_SHARE.stat()
+        share = HOST_SHARE.read_text().strip()
+        if info.st_mode & 0o022 or not share.isdecimal() or int(share) <= 0:
+            raise ValueError('invalid root-owned hosted CPU share marker')
         marker = dict(marker=str(HOST_SHARE), marker_kind='root-owned-hosted-share',
+                      marker_sha256=shared.digest(HOST_SHARE), allocated_cpus=int(share),
                       marker_device=info.st_dev, marker_inode=info.st_ino,
                       marker_mode=info.st_mode)
     else:

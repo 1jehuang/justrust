@@ -218,13 +218,19 @@ class HarnessTests(unittest.TestCase):
         marker = mock.Mock()
         marker.is_file.return_value = False
         share = mock.Mock()
-        share.is_dir.return_value = True
+        share.is_file.return_value = True
+        share.read_text.return_value = '16\n'
         share.is_symlink.return_value = False
-        share.stat.return_value = SimpleNamespace(st_uid=0, st_dev=7, st_ino=8, st_mode=0o40755)
-        with mock.patch.object(subject, 'HOST_MARKER', marker), mock.patch.object(subject, 'HOST_SHARE', share):
+        share.stat.return_value = SimpleNamespace(st_uid=0, st_dev=7, st_ino=8, st_mode=0o100644)
+        with mock.patch.object(subject, 'HOST_MARKER', marker), mock.patch.object(subject, 'HOST_SHARE', share), mock.patch.object(subject.shared, 'digest', return_value='f' * 64):
             result = subject.host_guard(True)
             self.assertEqual(result['marker_kind'], 'root-owned-hosted-share')
             self.assertEqual(result['marker_device'], 7)
+            self.assertEqual(result['allocated_cpus'], 16)
+            share.read_text.return_value = '0'
+            with self.assertRaisesRegex(ValueError, 'invalid root-owned'):
+                subject.host_guard(True)
+            share.read_text.return_value = '16\n'
             share.stat.return_value.st_uid = 1000
             with self.assertRaisesRegex(ValueError, 'hosted-only'):
                 subject.host_guard(True)
