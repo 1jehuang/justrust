@@ -24,7 +24,39 @@ from stable_resident_dogfood import upload
 OWNER_FIELDS = ('graph_bytes', 'archive_bytes', 'hot_entries', 'hot_bytes',
                 'compressed_entries', 'compressed_bytes', 'pinned_entries')
 TIERS = ('hot', 'compressed', 'cold')
-MODES = ('fresh', 'control', 'frontend-hot', 'frontend-compressed', 'frontend-cold')
+MODES = ('fresh', 'control', 'frontend-hot', 'frontend-compressed', 'frontend-cold', 'frontend-disk')
+
+
+def disk_snapshot(cache):
+    """Content identity of durable incremental artifacts, never mtime identity."""
+    files = [dict(path=str(path.relative_to(cache)), bytes=path.stat().st_size,
+                  sha256=native.digest(path))
+             for path in sorted(cache.rglob('*')) if path.is_file()]
+    return dict(file_count=len(files), bytes=sum(row['bytes'] for row in files), files=files,
+                sha256=hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest())
+
+
+def terminate(worker, cache, proc=Path('/proc')):
+    """EOF, reap and prove absence before declaring a zero-worker idle state."""
+    start = time.monotonic()
+    pid = worker.process.pid
+    worker.close()
+    status = worker.process.wait(timeout=worker.timeout)
+    absent = not (proc / str(pid)).exists()
+    if status != 0 or worker.process.poll() is None or not absent:
+        raise AssertionError('Disk worker was not successfully reaped and absent')
+    before = disk_snapshot(cache)
+    if not before['file_count']:
+        raise AssertionError('Disk restart requires durable incremental artifacts')
+    idle_start = time.monotonic()
+    idle = dict(state='terminated', source='no-worker-alive', pid=None,
+                rss_kib=0, pss_kib=0, private_kib=0, swap_kib=0)
+    after = disk_snapshot(cache)
+    if before != after or (proc / str(pid)).exists():
+        raise AssertionError('Durable incremental artifacts changed during terminated idle')
+    return dict(elapsed_seconds=time.monotonic() - start, old_pid=pid,
+                wait_status=status, process_absent=absent, disk_before_idle=before,
+                disk_after_idle=after, idle_seconds=time.monotonic() - idle_start), idle
 
 
 def memory(pid, proc=Path('/proc')):
@@ -116,7 +148,8 @@ def control(worker, tier):
 def order(rep, index):
     """Balanced Latin square including reversed rows, not always fresh first."""
     size = len(MODES)
-    base = [0, 1, size - 1, 2, size - 2]
+    base = [0] + [value for pair in ((i, size - i) for i in range(1, size // 2 + 1))
+                  for value in pair][:size - 1]
     rotation = (rep + index) % size
     row = [MODES[(value + rotation) % size] for value in base]
     return row if ((rep + index) // size) % 2 == 0 else row[::-1]
@@ -184,6 +217,21 @@ def summarize(rows):
                 median_idle_pss_kib=statistics.median(row['idle_memory']['pss_kib'] for row in wakes),
                 median_idle_private_kib=statistics.median(row['idle_memory']['private_kib'] for row in wakes),
                 median_idle_swap_kib=statistics.median(row['idle_memory']['swap_kib'] for row in wakes))
+        spawns = [row['spawn_seconds'] for row in selected if 'spawn_seconds' in row]
+        if spawns:
+            result[mode]['median_spawn_seconds'] = statistics.median(spawns)
+        if mode == 'frontend-disk' and wakes:
+            result[mode].update(idle_state='terminated',
+                median_disk_bytes=statistics.median(row['transition']['disk_after_idle']['bytes'] for row in wakes),
+                median_disk_file_count=statistics.median(row['transition']['disk_after_idle']['file_count'] for row in wakes))
+        result[mode]['tier_control'] = {
+            'fresh': 'new one-shot process, ordinary incremental disk cache',
+            'control': 'live worker, frontend archive disabled',
+            'frontend-hot': 'live worker, hot archive and graph',
+            'frontend-compressed': 'live worker, compressed archive, graph released',
+            'frontend-cold': 'live worker, archive and graph ownership released',
+            'frontend-disk': 'worker terminated and reaped, same incremental disk cache, startup included in wake',
+        }[mode]
     return result
 
 
@@ -213,6 +261,8 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
         raise ValueError('Positive repetitions, items and timeout required')
     host = hosted_identity(hosted_marker)
     compiler, root = Path(compiler).resolve(), Path(root).resolve()
+    if any(root.iterdir()):
+        raise FileExistsError('Refusing to overwrite prior capture evidence')
     source_path = Path(source).resolve() if source is not None else None
     original = source_path.read_bytes() if source_path else None
     workload = (dogfood.variants(original.decode('utf-8'), frontend=True) if source_path else
@@ -222,7 +272,8 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
     report = dict(schema=1, verdict='incomplete', scope='hosted-native-encoded-frontend-archive-tiers',
                   retention_scope='Encoded query archives and dependency graphs, rehydrated each request. '
                   'Not persistent typed heaps or retained GlobalCtxt.',
-                  memory_note='Live Linux smaps_rollup KiB between requests. Not per-request peaks.',
+                  memory_note='Live Linux smaps_rollup KiB between requests. Not per-request peaks. '
+                  'Disk idle zeros mean a verified terminated worker, not /proc samples.',
                   host=dict(**host, platform=sys.platform),
                   inputs=dict(repetitions=repetitions, items=items, timeout=timeout),
                   modes=list(MODES), observations=[], sessions=[],
@@ -246,15 +297,30 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
             repdir.mkdir(mode=0o700)
             caches = {mode: repdir / mode for mode in MODES}
             workers = {}
+            frozen_args = {}
+            generations = {}
             for cache in caches.values():
                 cache.mkdir(mode=0o700)
+            def spawn(mode):
+                generation = generations.get(mode, -1) + 1
+                generations[mode] = generation
+                logs = caches[mode]
+                if mode == 'frontend-disk':
+                    logs = repdir / f'disk-worker-{generation}'
+                    logs.mkdir(mode=0o700)
+                start = time.monotonic()
+                worker = native.Resident(compiler, logs, work, False, timeout,
+                                         frontend=mode != 'control')
+                elapsed = time.monotonic() - start
+                workers[mode] = worker
+                report['sessions'].append(dict(mode=mode, repetition=rep, generation=generation,
+                    pid=worker.process.pid, command=worker.command, log_directory=str(logs),
+                    incremental_directory=str(caches[mode]), spawn_seconds=elapsed,
+                    frontend=mode != 'control', values=False))
+                return worker, elapsed
             try:
                 for mode in MODES[1:]:
-                    workers[mode] = native.Resident(compiler, caches[mode], work, False, timeout,
-                                                    frontend=mode != 'control')
-                    report['sessions'].append(dict(mode=mode, repetition=rep,
-                        pid=workers[mode].process.pid, command=workers[mode].command,
-                        frontend=mode != 'control', values=False))
+                    spawn(mode)
                 for index, (name, source, expected) in enumerate(workload):
                     row = dict(repetition=rep, name=name, source=source,
                                source_sha256=hashlib.sha256(source.encode()).hexdigest(),
@@ -269,6 +335,10 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
                         argv = (dogfood.arguments(work, caches[mode]) if source_path
                                 else native.arguments(work, caches[mode]))
                         result = row['modes'][mode] = {}
+                        argv = list(map(str, argv))
+                        if mode in frozen_args and argv != frozen_args[mode]:
+                            raise AssertionError('Compile arguments changed across requests/restarts')
+                        frozen_args[mode] = argv
                         previous = {}
                         if mode == 'fresh':
                             result['compile'] = native.run([compiler, *argv], timeout, cwd=work,
@@ -277,15 +347,25 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
                             worker = workers[mode]
                             previous = dict(worker.frontend_counters or {})
                             # Warm first, then measure the requested state while still alive.
-                            if index:
+                            if index and mode == 'frontend-disk':
+                                # Remove before close so failure cleanup never closes old streams twice.
+                                del workers[mode]
+                                result['transition'], result['idle_memory'] = terminate(worker, caches[mode])
+                                start = time.monotonic()
+                                worker, result['spawn_seconds'] = spawn(mode)
+                                if worker.process.pid == result['transition']['old_pid']:
+                                    raise AssertionError('Restart did not produce a new PID')
+                                result['new_pid'] = worker.process.pid
+                            elif index:
                                 result['hot_owner'] = control(worker, 'hot')
                                 tier = 'hot' if mode == 'control' else mode.split('-', 1)[1]
                                 result['transition'] = (result['hot_owner'] if tier == 'hot'
                                                         else control(worker, tier))
                                 tier_gate(tier, result['hot_owner']['response']['memory'],
                                           result['transition']['response']['memory'], mode != 'control')
-                            result['idle_memory'] = memory(worker.process.pid)
-                            start = time.monotonic()
+                            if not (index and mode == 'frontend-disk'):
+                                result['idle_memory'] = memory(worker.process.pid)
+                                start = time.monotonic()
                             result['compile'] = worker.compile(argv)
                             result['wake_wall_seconds'] = time.monotonic() - start
                             result['awake_memory'] = memory(worker.process.pid)
@@ -311,6 +391,7 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
                     validate_tier_loads(workers['control'].frontend_counters,
                                         workers[mode].frontend_counters, mode, bool(source_path))
                 native.validate_frontend(workers['frontend-cold'].frontend_counters)
+                native.validate_frontend(workers['frontend-disk'].frontend_counters)
             finally:
                 failing = sys.exc_info()[0] is not None
                 errors = []

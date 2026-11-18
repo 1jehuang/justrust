@@ -41,12 +41,68 @@ class TierTests(unittest.TestCase):
                 tiers.memory(42, root)
 
     def test_counterbalanced_order(self):
-        rows = [tiers.order(rep, 0) for rep in range(10)]
+        rows = [tiers.order(rep, 0) for rep in range(12)]
         for row in rows:
             self.assertEqual(set(row), set(tiers.MODES))
-        for position in range(5):
+        for position in range(6):
             self.assertEqual(sorted(row[position] for row in rows), sorted(tiers.MODES * 2))
-        self.assertEqual(rows[5], rows[0][::-1])
+        self.assertEqual(rows[6], rows[0][::-1])
+
+    def test_disk_content_identity_not_mtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / 'query.bin'
+            artifact.write_bytes(b'abcd')
+            first = tiers.disk_snapshot(root)
+            tiers.os.utime(artifact, (1, 1))
+            self.assertEqual(first, tiers.disk_snapshot(root))
+            artifact.write_bytes(b'abce')
+            tiers.os.utime(artifact, (1, 1))
+            self.assertNotEqual(first, tiers.disk_snapshot(root))
+            self.assertEqual(first['bytes'], 4)
+            self.assertEqual(first['file_count'], 1)
+
+    def test_terminated_idle_requires_reaped_absent_worker_and_unchanged_disk(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / 'cache'
+            cache.mkdir()
+            (cache / 'query.bin').write_bytes(b'archive')
+            proc = root / 'proc'
+            proc.mkdir()
+            closed = []
+            worker = SimpleNamespace(timeout=1, close=lambda: closed.append(True),
+                process=SimpleNamespace(pid=42, wait=lambda **kw: 0, poll=lambda: 0))
+            def snapshot(path):
+                self.assertTrue(closed, 'Must close before measuring idle')
+                return original(path)
+            original = tiers.disk_snapshot
+            with patch.object(tiers, 'disk_snapshot', side_effect=snapshot), \
+                    patch.object(tiers, 'memory', side_effect=AssertionError('No live sample allowed')):
+                transition, idle = tiers.terminate(worker, cache, proc)
+            self.assertEqual(idle['state'], 'terminated')
+            self.assertEqual([idle[key] for key in ('rss_kib', 'pss_kib', 'private_kib', 'swap_kib')], [0]*4)
+            self.assertEqual(transition['disk_before_idle'], transition['disk_after_idle'])
+            (proc / '42').mkdir()
+            with self.assertRaises(AssertionError):
+                tiers.terminate(worker, cache, proc)
+            (proc / '42').rmdir()
+            worker.process.poll = lambda: None
+            with self.assertRaises(AssertionError):
+                tiers.terminate(worker, cache, proc)
+            worker.process.poll = lambda: 0
+            with patch.object(tiers, 'disk_snapshot', side_effect=[{'file_count': 1}, {'file_count': 2}]), \
+                    self.assertRaises(AssertionError):
+                tiers.terminate(worker, cache, proc)
+
+    def test_capture_never_overwrites_prior_evidence(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(tiers, 'hosted_identity', return_value={'mock': True}):
+            receipt = Path(directory) / 'receipt.json'
+            receipt.write_bytes(b'old receipt')
+            with self.assertRaises(FileExistsError):
+                tiers.capture('/mock', directory, hosted=True)
+            self.assertEqual(receipt.read_bytes(), b'old receipt')
 
     def worker(self, response):
         return SimpleNamespace(sequence=8, timeout=1, buffer=response,
@@ -133,13 +189,19 @@ class TierTests(unittest.TestCase):
         class Worker:
             def __init__(self, compiler, cache, root, values, timeout, frontend):
                 self.root, self.frontend = root, frontend
-                self.process = SimpleNamespace(pid=42)
+                self.timeout = timeout
+                self.process = SimpleNamespace(pid=90000000 + len(workers), wait=lambda **kw: 0,
+                                               poll=lambda: 0)
+                for name in ('resident.stdout', 'resident.stderr', 'resident.jsonl'):
+                    (cache / name).write_text(str(self.process.pid))
                 self.command = ['mock-only']
                 self.counters = {'resident_hits': 0}
                 self.frontend_counters = counters(0)
                 self.closed = False
                 workers.append(self)
             def compile(self, argv):
+                cache = Path(next(arg.split('=', 1)[1] for arg in argv if arg.startswith('incremental=')))
+                (cache / 'artifact.bin').write_bytes(b'durable-mock-artifact')
                 expected = sources[(self.root / 'fixture.rs').read_text()]
                 current['expected'] = expected
                 if self.frontend:
@@ -226,13 +288,20 @@ class TierTests(unittest.TestCase):
         class Worker:
             def __init__(self, compiler, cache, root, values, timeout, frontend):
                 self.root, self.frontend = root, frontend
-                self.process = SimpleNamespace(pid=42)
+                self.timeout = timeout
+                self.process = SimpleNamespace(pid=90000000 + len(workers), wait=lambda **kw: 0,
+                                               poll=lambda: 0)
+                for name in ('resident.stdout', 'resident.stderr', 'resident.jsonl'):
+                    (cache / name).write_text(str(self.process.pid))
                 self.command = ['pure-python-mock']
+                clock[0] += .02
                 self.counters = {'resident_hits': 0}
                 self.frontend_counters = counters(0)
                 self.closed = False
                 workers.append(self)
             def compile(self, argv):
+                cache = Path(next(arg.split('=', 1)[1] for arg in argv if arg.startswith('incremental=')))
+                (cache / 'artifact.bin').write_bytes(b'durable-mock-artifact')
                 if self.frontend:
                     self.frontend_counters = {key: value + 1 for key, value in self.frontend_counters.items()}
                 return compile_result(self.root)
@@ -272,10 +341,30 @@ class TierTests(unittest.TestCase):
             self.assertTrue(report['source_unchanged'])
             self.assertTrue(all(worker.closed for worker in workers))
             nonces = []
+            disk_sessions = [session for session in report['sessions'] if session['mode'] == 'frontend-disk']
+            self.assertEqual(len(disk_sessions), len(report['observations']))
+            self.assertEqual(len({session['log_directory'] for session in disk_sessions}), len(disk_sessions))
+            self.assertEqual(len({session['incremental_directory'] for session in disk_sessions}), 1)
+            for session in disk_sessions:
+                for name in ('resident.stdout', 'resident.stderr', 'resident.jsonl'):
+                    path = Path(session['log_directory']) / name
+                    self.assertEqual(path.read_text(), str(session['pid']))
+                    self.assertEqual(report['raw_streams'][str(path.relative_to(root))],
+                                     tiers.native.encoded(str(session['pid']).encode()))
+            for row in report['observations'][1:]:
+                result = row['modes']['frontend-disk']
+                self.assertGreaterEqual(result['wake_wall_seconds'], .029)
+                self.assertAlmostEqual(result['spawn_seconds'], .02)
+                self.assertNotEqual(result['new_pid'], result['transition']['old_pid'])
+                self.assertTrue(result['transition']['process_absent'])
+                self.assertEqual(result['idle_memory']['source'], 'no-worker-alive')
+                self.assertEqual(result['transition']['disk_before_idle'], result['transition']['disk_after_idle'])
+            self.assertEqual(report['summary']['frontend-disk']['median_idle_pss_kib'], 0)
+            self.assertGreater(report['summary']['frontend-disk']['median_disk_bytes'], 0)
             for row in report['observations']:
                 for mode, result in row['modes'].items():
                     if mode != 'fresh':
-                        self.assertLess(result['wake_wall_seconds'], .011)
+                        self.assertLess(result['wake_wall_seconds'], .031 if mode == 'frontend-disk' else .011)
                     if result['compile']['status'] == 0:
                         self.assertEqual(len(result['named_statuses']), len(tiers.dogfood.ORIGINAL_TESTS) + 1)
                         nonces.append(result['nonce'])
