@@ -35,7 +35,7 @@ use crate::ty::{self, Ty, TyCtxt};
 const TAG_FILE_FOOTER: u128 = 0xC0FFEE_C0FFEE_C0FFEE_C0FFEE_C0FFEE;
 
 mod resident;
-pub use resident::ResidentStats;
+pub use resident::{IdleTier as ResidentIdleTier, ResidentStats, TierStats as ResidentTierStats};
 
 enum SerializedData {
     Mapped(Mmap),
@@ -231,6 +231,16 @@ impl OnDiskCache {
     /// All counters report zero outside the explicitly enabled resident process.
     pub fn resident_stats() -> ResidentStats {
         resident::stats()
+    }
+
+    /// Idle tier transitions retain encoded query values only. Compilation
+    /// contexts and their decoded values never cross this interface.
+    pub fn resident_idle(tier: ResidentIdleTier) -> ResidentTierStats {
+        resident::idle(tier)
+    }
+
+    pub fn resident_tier_stats() -> ResidentTierStats {
+        resident::tier_stats()
     }
 
     /// Record a missing or incompatible archive rejected before calling new().

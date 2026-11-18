@@ -10,7 +10,8 @@ pub use self::graph::{
 };
 use self::graph::{MarkFrame, print_markframe_trace};
 pub use self::resident::{
-    ResidentGraphStats, resident_graph_lookup, resident_graph_stats, resident_graph_unavailable,
+    ResidentGraphStats, resident_graph_idle, resident_graph_lookup, resident_graph_stats,
+    resident_graph_unavailable,
 };
 pub use self::retained::RetainedDepGraph;
 pub use self::serialized::{SerializedDepGraph, SerializedDepNodeIndex};

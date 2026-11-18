@@ -4460,6 +4460,7 @@ dependencies = [
  "bitflags",
  "either",
  "gsgdt",
+ "miniz_oxide",
  "parking_lot",
  "polonius-engine",
  "rustc_abi",

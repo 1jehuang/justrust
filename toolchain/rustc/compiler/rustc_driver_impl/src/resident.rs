@@ -85,6 +85,25 @@ pub(super) fn request(line: &[u8]) -> Result<(u64, Vec<String>), String> {
     Ok((id, args))
 }
 
+/// Idle controls never alter compiler arguments or the frozen environment.
+/// They are handled only between completed compiler sessions.
+fn idle_request(line: &[u8]) -> Result<Option<(u64, String)>, String> {
+    let value: Value = serde_json::from_slice(line).map_err(|e| e.to_string())?;
+    let object = value.as_object().ok_or("request must be an object")?;
+    if !object.contains_key("tier") {
+        return Ok(None);
+    }
+    if object.len() != 2 || !object.contains_key("id") {
+        return Err("idle request requires exactly id and tier".into());
+    }
+    let id = value["id"].as_u64().ok_or("id must be an unsigned integer")?;
+    let tier = value["tier"].as_str().ok_or("tier must be a string")?;
+    if !matches!(tier, "hot" | "compressed" | "cold") {
+        return Err("unknown resident memory tier".into());
+    }
+    Ok(Some((id, tier.to_owned())))
+}
+
 /// # Safety
 /// Called only by native process main. The launcher transfers exclusive ownership
 /// of a writable response pipe through JUSTRUST_RUSTC_RESIDENT_FD.
@@ -149,6 +168,36 @@ unsafe fn serve(owned: bool) -> Result<(), String> {
         }
         if count as u64 > MAX_REQUEST_BYTES || !line.ends_with(b"\n") {
             return Err("oversized or unterminated resident request".into());
+        }
+        if let Some((id, tier)) = idle_request(&line)? {
+            if last_id.is_some_and(|last| id <= last) {
+                return Err("request ids must increase strictly".into());
+            }
+            last_id = Some(id);
+            use rustc_middle::query::on_disk_cache::{OnDiskCache, ResidentIdleTier};
+            let start = Instant::now();
+            let archive = match tier.as_str() {
+                "compressed" => OnDiskCache::resident_idle(ResidentIdleTier::Compressed),
+                "cold" => OnDiskCache::resident_idle(ResidentIdleTier::Cold),
+                _ => OnDiskCache::resident_tier_stats(),
+            };
+            let graph = if tier == "hot" {
+                rustc_middle::dep_graph::resident_graph_stats()
+            } else {
+                rustc_middle::dep_graph::resident_graph_idle()
+            };
+            let reply = json!({"id":id,"status":0,"pid":std::process::id(),"tier":tier,
+                "elapsed_seconds":start.elapsed().as_secs_f64(),
+                "memory":{"graph_bytes":graph.retained_bytes,
+                    "archive_bytes":archive.hot_bytes + archive.compressed_bytes,
+                    "hot_entries":archive.hot_entries,"hot_bytes":archive.hot_bytes,
+                    "compressed_entries":archive.compressed_entries,
+                    "compressed_bytes":archive.compressed_bytes,
+                    "pinned_entries":archive.active_entries}});
+            serde_json::to_writer(&mut response, &reply).map_err(|e| e.to_string())?;
+            response.write_all(b"\n").map_err(|e| e.to_string())?;
+            response.flush().map_err(|e| e.to_string())?;
+            continue;
         }
         let (id, args) = request(&line)?;
         if last_id.is_some_and(|last| id <= last) {
@@ -491,9 +540,28 @@ fn frozen_semantic_invocation(args: &[String]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        OWNED_RSS_BUDGET_BYTES, ast_selection, decoder_selection, owned_completion,
+        OWNED_RSS_BUDGET_BYTES, ast_selection, decoder_selection, idle_request, owned_completion,
         owned_retirement, request, typed_selection,
     };
+
+    #[test]
+    fn idle_controls_are_exact_and_distinct_from_compilation() {
+        for tier in ["hot", "compressed", "cold"] {
+            let frame = format!(r#"{{"id":7,"tier":"{tier}"}}"#);
+            assert_eq!(idle_request(frame.as_bytes()).unwrap(), Some((7, tier.into())));
+            assert!(request(frame.as_bytes()).is_err());
+        }
+        assert!(idle_request(br#"{"id":8,"args":["a.rs"]}"#).unwrap().is_none());
+        for frame in [
+            r#"{"id":7,"tier":"unknown"}"#,
+            r#"{"id":-1,"tier":"cold"}"#,
+            r#"{"id":7,"tier":"cold","args":["a.rs"]}"#,
+            r#"{"tier":"cold"}"#,
+            r#"{"id":7,"tier":false}"#,
+        ] {
+            assert!(idle_request(frame.as_bytes()).is_err());
+        }
+    }
 
     #[test]
     fn decoder_selection_is_explicit_and_defaults_off() {
