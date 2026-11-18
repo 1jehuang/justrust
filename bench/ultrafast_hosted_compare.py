@@ -119,7 +119,9 @@ def environment(root, stack, args):
                or k.startswith(('CARGO_', 'RUST', 'XDG_'))}
         home = root / 'home'
         home.mkdir(mode=0o700)
-        env.update(HOME=str(home), JUSTRUST_REMOTE='off',
+        env.update(HOME=str(home), JUSTRUST_HOME=str(home / '.justrust'),
+                   JUSTRUST_NO_UPDATE='1', JUSTRUST_AUTO_UPDATE='0',
+                   JUSTRUST_NO_TELEMETRY='1', JUSTRUST_REMOTE='off',
                    JUSTRUST_LOCAL_REASON=STABLE_LOCAL_REASON,
                    XDG_STATE_HOME=str(home / '.local/state'))
     if stack == 'upstream' and getattr(args, 'upstream_cli', 'cargo') == 'direct':

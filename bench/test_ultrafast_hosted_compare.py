@@ -128,6 +128,10 @@ class HostedTests(unittest.TestCase):
         for call in stable:
             env = call['env']
             self.assertEqual(env['JUSTRUST_REMOTE'], 'off')
+            self.assertEqual(env['JUSTRUST_HOME'], str(Path(env['HOME']) / '.justrust'))
+            self.assertEqual(env['JUSTRUST_NO_UPDATE'], '1')
+            self.assertEqual(env['JUSTRUST_AUTO_UPDATE'], '0')
+            self.assertEqual(env['JUSTRUST_NO_TELEMETRY'], '1')
             self.assertEqual(env['JUSTRUST_LOCAL_REASON'], compare.STABLE_LOCAL_REASON)
             self.assertTrue(Path(env['HOME']).is_relative_to(call['cwd'].parent))
             self.assertEqual(env['RUSTC'], str(self.args.toolchain / 'bin/rustc'))
