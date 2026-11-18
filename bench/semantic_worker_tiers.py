@@ -141,11 +141,32 @@ def validate(row):
                 raise AssertionError('Runtime differs for ' + mode)
 
 
-def green_loads(before, after):
+def green_loads(before, after, typed=False):
     native.validate_frontend(after)
-    for key in ('archive_hits', 'value_loads', 'typeck_loads', 'mir_loads'):
+    # An unchanged build may validate green nodes without demanding Typeck/MIR
+    # values. Ordinary body edits below must prove those separate load paths.
+    keys = ('archive_hits', 'value_loads') + (('typeck_loads', 'mir_loads') if typed else ())
+    for key in keys:
         if after[key] <= before.get(key, 0):
-            raise AssertionError('Unchanged wake has no genuine ' + key)
+            raise AssertionError('Wake has no genuine ' + key)
+
+
+def validate_tier_loads(control, current, mode, real_source):
+    native.validate_frontend(control)
+    native.validate_frontend(current)
+    if any(control.values()):
+        raise AssertionError('Frontend-off counters must all be zero')
+    for key in ('archive_hits', 'value_loads'):
+        if current[key] <= 0:
+            raise AssertionError(mode + ' reports no actual ' + key)
+    if mode == 'frontend-hot' and current['graph_hits'] <= 0:
+        raise AssertionError('Hot tier reports no actual graph hits')
+    if real_source:
+        for key in ('typeck_loads', 'mir_loads'):
+            if current[key] <= 0:
+                raise AssertionError(mode + ' reports no actual ' + key)
+    elif not any(current[key] > 0 for key in ('typeck_loads', 'mir_loads')):
+        raise AssertionError(mode + ' reports no actual typed query loads')
 
 
 def summarize(rows):
@@ -270,8 +291,11 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
                             result['awake_memory'] = memory(worker.process.pid)
                             if worker.counters['resident_hits']:
                                 raise AssertionError('Scalar resident values must remain disabled')
-                            if name == 'unchanged' and mode in ('frontend-hot', 'frontend-compressed'):
-                                green_loads(previous, worker.frontend_counters)
+                            if mode in ('frontend-hot', 'frontend-compressed'):
+                                if name == 'unchanged':
+                                    green_loads(previous, worker.frontend_counters)
+                                elif name == 'body-edit' and source_path:
+                                    green_loads(previous, worker.frontend_counters, typed=True)
                         if result['compile']['status'] == 0:
                             result['artifact_sha256'] = native.digest(binary)
                             if source_path:
@@ -284,8 +308,8 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
                                 result['runtime'] = native.run([binary], timeout)
                     validate(row)
                 for mode in ('frontend-hot', 'frontend-compressed'):
-                    native.validate_frontend_acceptance(workers['control'].frontend_counters,
-                                                        workers[mode].frontend_counters)
+                    validate_tier_loads(workers['control'].frontend_counters,
+                                        workers[mode].frontend_counters, mode, bool(source_path))
                 native.validate_frontend(workers['frontend-cold'].frontend_counters)
             finally:
                 failing = sys.exc_info()[0] is not None

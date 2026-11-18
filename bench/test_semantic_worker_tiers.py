@@ -90,12 +90,30 @@ class TierTests(unittest.TestCase):
                 tiers.control(worker, 'cold')
 
     def test_green_requires_both_real_load_kinds(self):
-        tiers.green_loads(counters(0), counters(1))
+        tiers.green_loads(counters(0), counters(1), typed=True)
         for key in ('archive_hits', 'value_loads', 'typeck_loads', 'mir_loads'):
             after = counters(1)
             after[key] = 0
             with self.subTest(key=key), self.assertRaises(AssertionError):
-                tiers.green_loads(counters(0), after)
+                tiers.green_loads(counters(0), after, typed=True)
+
+    def test_unchanged_green_validation_does_not_require_undemanded_typed_values(self):
+        after = counters(1)
+        after['typeck_loads'] = after['mir_loads'] = 0
+        tiers.green_loads(counters(0), after)
+        with self.assertRaises(AssertionError):
+            tiers.green_loads(counters(0), after, typed=True)
+
+    def test_compressed_tier_requires_typed_loads_but_not_evicted_graph_hits(self):
+        current = counters(1)
+        current['graph_hits'] = 0
+        tiers.validate_tier_loads(counters(0), current, 'frontend-compressed', True)
+        with self.assertRaises(AssertionError):
+            tiers.validate_tier_loads(counters(0), current, 'frontend-hot', True)
+        for key in ('typeck_loads', 'mir_loads'):
+            missing = dict(current, **{key: 0})
+            with self.subTest(key=key), self.assertRaises(AssertionError):
+                tiers.validate_tier_loads(counters(0), missing, 'frontend-compressed', True)
 
     def test_no_local_native_execution(self):
         with patch.object(tiers.native, 'identity') as identity:
