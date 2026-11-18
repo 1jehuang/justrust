@@ -43,7 +43,11 @@ class Model:
         if subject.DISK_ENV[0] in env:
             source = (cwd / 'fixture.rs').read_bytes()
             cache = Path(env[subject.DISK_ENV[0]])
-            entry = cache / hashlib.sha256(source).hexdigest()
+            entry = cache / (hashlib.sha256(source).hexdigest() + '.ast')
+            for name, data in (('writer.lock', b'lock sentinel'),
+                               ('pending.ast.tmp', b'temporary sentinel')):
+                if not (cache / name).exists():
+                    (cache / name).write_bytes(data)
             stats = Path(env[subject.DISK_ENV[1]])
             if entry.exists() and entry.read_bytes() == source:
                 events = ['miss'] if self.missing_hits else ['hit']
@@ -127,6 +131,9 @@ class HarnessTests(unittest.TestCase):
         report = self.capture(model)
         self.assertEqual(report['verdict'], 'passed', report)
         self.assertEqual(len(report['samples']), 2)
+        self.assertEqual(report['items'], 64)
+        self.assertEqual(report['fixture_generator'], 'clean-exported-u32-functions-v1')
+        self.assertEqual(report['extra_items_sha256'], hashlib.sha256(subject.extra_items(64).encode()).hexdigest())
         self.assertNotIn('initial', report['median_compiler_seconds'])
         self.assertEqual(len(report['cold_compiler_seconds']), 2)
         self.assertTrue(all(worker.closed for worker in model.workers))
@@ -207,6 +214,58 @@ class HarnessTests(unittest.TestCase):
                 subject.capture(Path('relative'), self.root / 'never')
         self.assertFalse((self.root / 'never').exists())
 
+    def test_host_share_root_owned_fallback(self):
+        marker = mock.Mock()
+        marker.is_file.return_value = False
+        share = mock.Mock()
+        share.is_dir.return_value = True
+        share.is_symlink.return_value = False
+        share.stat.return_value = SimpleNamespace(st_uid=0, st_dev=7, st_ino=8, st_mode=0o40755)
+        with mock.patch.object(subject, 'HOST_MARKER', marker), mock.patch.object(subject, 'HOST_SHARE', share):
+            result = subject.host_guard(True)
+            self.assertEqual(result['marker_kind'], 'root-owned-hosted-share')
+            self.assertEqual(result['marker_device'], 7)
+            share.stat.return_value.st_uid = 1000
+            with self.assertRaisesRegex(ValueError, 'hosted-only'):
+                subject.host_guard(True)
+            share.stat.return_value.st_uid = 0
+            share.is_symlink.return_value = True
+            with self.assertRaisesRegex(ValueError, 'hosted-only'):
+                subject.host_guard(True)
+
+    def test_item_bounds_and_clean_generation(self):
+        for items in (-1, 129, True, 1.5):
+            with self.assertRaisesRegex(ValueError, '--items'):
+                subject.cases(items)
+            with mock.patch.object(subject, 'host_guard') as guard:
+                with self.assertRaisesRegex(ValueError, '--items'):
+                    subject.capture(self.compiler, self.root / 'never', items=items)
+                guard.assert_not_called()
+        self.assertEqual(subject.extra_items(0), '')
+        for items in (0, 1, 64, 128):
+            fixture = subject.cases(items)
+            extra = subject.extra_items(items)
+            self.assertEqual(extra.count('pub fn item_'), items)
+            self.assertNotIn('#', extra)
+            self.assertNotIn('!', extra)
+            self.assertTrue(all(case[1].endswith(extra) for case in fixture))
+            self.assertEqual(fixture[0][1], fixture[2][1])
+        self.assertEqual(subject.cases(0)[0][1], subject.ast.ROOT)
+
+    def test_custom_item_count_provenance_and_controls_ignore_non_snapshots(self):
+        report = self.capture(Model(), items=3)
+        self.assertEqual(report['verdict'], 'passed', report)
+        self.assertEqual(report['items'], 3)
+        for index, sample in enumerate(report['samples']):
+            self.assertEqual(sample['items'], 3)
+            self.assertEqual(sample['observations'][0]['source'].count('pub fn item_'), 3)
+            for control in sample['controls']:
+                self.assertTrue(all(p['path'].endswith('.ast') for p in control['damaged']))
+                self.assertFalse(any('lock' in p['path'] or 'tmp' in p['path'] for p in control['damaged']))
+            cache = self.root / f'evidence/sample-{index:03d}/disk-cache'
+            self.assertEqual((cache / 'writer.lock').read_bytes(), b'lock sentinel')
+            self.assertEqual((cache / 'pending.ast.tmp').read_bytes(), b'temporary sentinel')
+
     def test_counterbalance(self):
         positions = [subject.ordered_modes(s, 0) for s in range(4)]
         for index in range(4):
@@ -268,6 +327,7 @@ class HarnessTests(unittest.TestCase):
             with mock.patch('builtins.print'):
                 self.assertEqual(subject.main(['--compiler', '/frozen', '--output', '/new', '--execute-host-workloads']), 0)
             self.assertEqual(capture.call_args.kwargs['samples'], 5)
+            self.assertEqual(capture.call_args.kwargs['items'], 64)
             self.assertTrue(capture.call_args.kwargs['execute_host_workloads'])
 
     def test_runtime_nonce_and_diagnostics_gates(self):

@@ -8,6 +8,7 @@ unless the host guard and explicit acknowledgement both pass.
 """
 import argparse
 from contextlib import contextmanager
+import hashlib
 import json
 import math
 import os
@@ -23,17 +24,27 @@ import stable_resident_ast as ast
 MODES = ('fresh', 'incremental', 'disk-ast', 'live-ast')
 DISK_ENV = ('JUSTRUST_RUSTC_DISK_AST', 'JUSTRUST_RUSTC_DISK_AST_STATS')
 HOST_MARKER = Path('/etc/justrust-hosted')
+HOST_SHARE = Path('/run/pool/share')
 
 
 def host_guard(execute_host_workloads):
     if not execute_host_workloads:
         raise ValueError('explicit --execute-host-workloads required')
-    if not HOST_MARKER.is_file():
-        raise ValueError('hosted-only: missing /etc/justrust-hosted identity marker')
-    info = HOST_MARKER.stat()
-    if info.st_uid != 0 or info.st_mode & 0o022:
-        raise ValueError('host identity marker must be root-owned and not group/world writable')
-    return dict(marker=str(HOST_MARKER), marker_sha256=shared.digest(HOST_MARKER),
+    if HOST_MARKER.is_file():
+        info = HOST_MARKER.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError('host identity marker must be root-owned and not group/world writable')
+        marker = dict(marker=str(HOST_MARKER), marker_sha256=shared.digest(HOST_MARKER))
+    elif HOST_SHARE.is_dir() and not HOST_SHARE.is_symlink() and HOST_SHARE.stat().st_uid == 0:
+        # The authenticated hosted guest exposes this root-owned shared mount.
+        # Never create the marker or mount as part of an experiment.
+        info = HOST_SHARE.stat()
+        marker = dict(marker=str(HOST_SHARE), marker_kind='root-owned-hosted-share',
+                      marker_device=info.st_dev, marker_inode=info.st_ino,
+                      marker_mode=info.st_mode)
+    else:
+        raise ValueError('hosted-only: missing root-owned /etc/justrust-hosted or /run/pool/share marker')
+    return dict(**marker,
                 hostname=platform.node(), kernel=platform.release(), machine=platform.machine(),
                 affinity=sorted(os.sched_getaffinity(0)), cpuinfo=Path('/proc/cpuinfo').read_text())
 
@@ -79,11 +90,25 @@ def ordered_modes(sample, case):
     return tuple(reversed(order)) if (sample // len(MODES)) % 2 else order
 
 
-def cases():
+def validate_items(items):
+    if type(items) is not int or not 0 <= items <= 128:
+        raise ValueError('--items must be an integer from 0 through 128')
+
+
+def extra_items(items):
+    validate_items(items)
+    return ''.join(f'pub fn item_{index}(x:u32)->u32 {{ (x ^ {index + 1}) & 255 }}\n'
+                   for index in range(items))
+
+
+def cases(items=64):
+    extra = extra_items(items)
     selected = ast.cases()[:9]
     changed = ast.ROOT.replace('^ 7', '^ 19')
     helper = ast.HELPER.replace('^ 11', '^ 23')
-    return selected + [('type-recovery', changed, helper, 19, 23, 'recover')]
+    selected += [('type-recovery', changed, helper, 19, 23, 'recover')]
+    return [(name, source + extra, helper, a, b, kind)
+            for name, source, helper, a, b, kind in selected]
 
 
 def events_since(path, offset, pid):
@@ -155,9 +180,9 @@ def verify_consumer(compiler, root, timeout, a, b):
         return ast.execute(compiler, root, '0', timeout, a, b)
 
 
-def capture_sample(compiler, root, sample, timeout):
+def capture_sample(compiler, root, sample, timeout, items=64):
     root.mkdir(mode=0o700)
-    result = dict(sample=sample, verdict='incomplete', observations=[], failures=[])
+    result = dict(sample=sample, items=items, verdict='incomplete', observations=[], failures=[])
     worker = None
     try:
         for name in ('incremental', 'disk-incremental', 'disk-cache'):
@@ -171,7 +196,7 @@ def capture_sample(compiler, root, sample, timeout):
                       worker_startup_seconds=time.monotonic() - setup)
         previous, offset = None, 0
         seen_pids, seen_nonces = set(), set()
-        for index, (name, source, helper, a, b, kind) in enumerate(cases()):
+        for index, (name, source, helper, a, b, kind) in enumerate(cases(items)):
             row = dict(name=name, kind=kind, a=a, b=b, records={},
                        order=ordered_modes(sample, index), source=source, helper=helper)
             result['observations'].append(row)
@@ -228,7 +253,7 @@ def corruption_controls(compiler, root, timeout, stats_path, offset, seen_pids,
                         seen_nonces, results):
     """Untimed fail-open checks, only perturbing this run's private disk cache."""
     for action in ('corrupt', 'truncate'):
-        files = sorted(p for p in (root / 'disk-cache').rglob('*') if p.is_file())
+        files = sorted(p for p in (root / 'disk-cache').rglob('*.ast') if p.is_file())
         if not files or any(p.is_symlink() for p in files):
             raise AssertionError('controls require private genuine snapshot files, no symlinks')
         row = dict(action=action, damaged=[], records={})
@@ -273,16 +298,17 @@ def corruption_controls(compiler, root, timeout, stats_path, offset, seen_pids,
         write_receipt(root / 'controls.json', results)
 
 
-def summaries(samples):
+def summaries(samples, items=64):
     if not samples or any(s['verdict'] != 'passed' for s in samples):
         raise AssertionError('no medians before all correctness gates pass')
     return {name: {mode: statistics.median(
                 sample['observations'][index]['records'][mode]['compile']['elapsed_seconds']
                 for sample in samples) for mode in MODES}
-            for index, (name, *_rest) in enumerate(cases()) if name != 'initial'}
+            for index, (name, *_rest) in enumerate(cases(items)) if name != 'initial'}
 
 
-def capture(compiler, output, samples=5, timeout=180, execute_host_workloads=False):
+def capture(compiler, output, samples=5, timeout=180, execute_host_workloads=False, items=64):
+    validate_items(items)
     host = host_guard(execute_host_workloads)
     compiler, output = Path(compiler), Path(output)
     if not compiler.is_absolute() or not compiler.is_file() or not os.access(compiler, os.X_OK):
@@ -291,7 +317,9 @@ def capture(compiler, output, samples=5, timeout=180, execute_host_workloads=Fal
         raise ValueError('positive samples and finite positive timeout required')
     output = output.absolute()
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
-    report = dict(schema=1, verdict='incomplete', host=host, samples=[],
+    report = dict(schema=1, verdict='incomplete', host=host, samples=[], items=items,
+                  fixture_generator='clean-exported-u32-functions-v1',
+                  extra_items_sha256=hashlib.sha256(extra_items(items).encode()).hexdigest(),
                   harness_sha256=shared.digest(Path(__file__)),
                   claim='Root parsed-AST snapshot only, not full compiler-state restoration or general speedup.',
                   timing='Compiler command only. Initial cold compiles and worker setup separate. Consumer verification excluded.')
@@ -299,7 +327,7 @@ def capture(compiler, output, samples=5, timeout=180, execute_host_workloads=Fal
         with no_inherited_disk():
             report['compiler_before'] = shared.identity(compiler)
         for sample in range(samples):
-            report['samples'].append(capture_sample(compiler, output / f'sample-{sample:03d}', sample, timeout))
+            report['samples'].append(capture_sample(compiler, output / f'sample-{sample:03d}', sample, timeout, items))
             write_receipt(output / 'receipt.json', report)
         with no_inherited_disk():
             report['compiler_after'] = shared.identity(compiler)
@@ -307,7 +335,7 @@ def capture(compiler, output, samples=5, timeout=180, execute_host_workloads=Fal
             raise AssertionError('frozen compiler changed during experiment')
         if any(s['verdict'] != 'passed' for s in report['samples']):
             raise AssertionError('sample correctness gate failed')
-        report['median_compiler_seconds'] = summaries(report['samples'])
+        report['median_compiler_seconds'] = summaries(report['samples'], items)
         report['cold_compiler_seconds'] = [{mode: s['observations'][0]['records'][mode]['compile']['elapsed_seconds']
                                             for mode in MODES} for s in report['samples']]
         report['verdict'] = 'passed'
@@ -324,6 +352,8 @@ def main(argv=None):
     parser.add_argument('--compiler', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--samples', type=int, default=5)
+    parser.add_argument('--items', type=int, default=64,
+                        help='extra clean exported primitive functions, 0..128 (default: 64)')
     parser.add_argument('--timeout', type=float, default=180)
     parser.add_argument('--execute-host-workloads', action='store_true')
     args = parser.parse_args(argv)
