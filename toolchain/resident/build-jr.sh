@@ -33,6 +33,7 @@ command -v justrust >/dev/null || { echo 'error: install the stable justrust cli
 export PATH="$TC/bin:$PATH"
 export JUSTRUST_REAL_CARGO="$TC/bin/cargo" JUSTRUST_REAL_RUSTC="$TC/bin/rustc" RUSTC="$TC/bin/rustc"
 export JUSTRUST_TOOLCHAIN=system JUSTRUST_REMOTE=off JUSTRUST_BUILDD=0 JUSTRUST_BUILDD_PREBUILD=0
+export JUSTRUST_LOCAL_REASON=${JUSTRUST_LOCAL_REASON:-"Resident engine bootstrap requires the exact pinned native compiler and vendored workspace"}
 export JUSTRUST_NO_TELEMETRY=1 JUSTRUST_PREBUILT=off JUSTRUST_PROCMACRO_CACHE=0
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/target}
 unset RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RA_JIT_GIT_SHA
