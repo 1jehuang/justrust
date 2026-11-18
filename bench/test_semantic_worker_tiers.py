@@ -169,16 +169,21 @@ class TierTests(unittest.TestCase):
                 tiers.tier_gate(tier, owned(), after)
 
     def test_hosted_marker_validation(self):
-        marker = Path('/share/mock-hosted-marker')
-        metadata = SimpleNamespace(st_uid=0, st_mode=0o100644)
+        marker = Path('/run/pool/share')
+        metadata = SimpleNamespace(st_uid=0, st_mode=0o100644, st_dev=1, st_ino=2)
         with patch.object(Path, 'lstat', return_value=metadata), \
-                patch.object(Path, 'read_text', return_value='justrust-hosted-semantic-worker-tiers-v1\n'), \
+                patch.object(Path, 'read_text', return_value='16\n'), \
                 patch.object(tiers.native, 'digest', return_value='mock'):
-            self.assertEqual(tiers.hosted_identity(marker)['uid'], 0)
+            self.assertEqual(tiers.hosted_identity(marker)['allocated_cpus'], 16)
             for uid, mode in ((1000, 0o100644), (0, 0o100666), (0, 0o120644)):
                 metadata.st_uid, metadata.st_mode = uid, mode
                 with self.assertRaises(ValueError):
                     tiers.hosted_identity(marker)
+        metadata.st_uid, metadata.st_mode = 0, 0o100644
+        for value in ('0', '-1', '1.5', '', 'sixteen'):
+            with patch.object(Path, 'lstat', return_value=metadata), \
+                    patch.object(Path, 'read_text', return_value=value), self.assertRaises(ValueError):
+                tiers.hosted_identity(marker)
         with self.assertRaises(ValueError):
             tiers.hosted_identity('/tmp/not-hosted')
         with patch.object(tiers.native, 'identity') as identity, \

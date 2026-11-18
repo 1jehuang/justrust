@@ -158,24 +158,25 @@ def summarize(rows):
 
 
 def hosted_identity(marker):
-    """Require operator provisioning on the hosted guest, not a CLI attestation alone."""
+    """Verify the existing production guest CPU share, never provision a marker."""
     marker = Path(marker)
-    if (not marker.is_absolute() or not marker.is_relative_to('/share')
-            or not marker.resolve().is_relative_to('/share')):
-        raise ValueError('Hosted marker must be an absolute /share path')
+    if marker != Path('/run/pool/share'):
+        raise ValueError('Hosted CPU share must be exactly /run/pool/share')
     metadata = marker.lstat()
     if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0
             or metadata.st_mode & 0o022):
         raise ValueError('Hosted marker must be a root-owned non-group/world-writable regular file')
     content = marker.read_text().strip()
-    if content != 'justrust-hosted-semantic-worker-tiers-v1':
-        raise ValueError('Invalid hosted marker content')
-    return dict(marker=str(marker), uid=metadata.st_uid, mode=oct(stat.S_IMODE(metadata.st_mode)),
-                sha256=native.digest(marker), hostname=socket.gethostname())
+    if not content.isdecimal() or int(content) <= 0:
+        raise ValueError('Hosted CPU share must be a positive decimal integer')
+    return dict(marker=str(marker), marker_kind='root-owned-hosted-share',
+                allocated_cpus=int(content), uid=metadata.st_uid,
+                mode=oct(stat.S_IMODE(metadata.st_mode)), marker_device=metadata.st_dev,
+                marker_inode=metadata.st_ino, sha256=native.digest(marker), hostname=socket.gethostname())
 
 
 def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=False,
-            hosted_marker=Path('/share/justrust-hosted-semantic-worker-tiers.marker')):
+            hosted_marker=Path('/run/pool/share')):
     if not hosted:
         raise ValueError('Native executions are hosted-only. Run on the hosted guest with hosted=True')
     if repetitions < 1 or items < 1 or timeout <= 0:
@@ -285,9 +286,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--hosted', action='store_true', help='Execute on guest with root-owned /share marker')
+    parser.add_argument('--hosted', action='store_true', help='Execute on guest with existing root-owned /run/pool/share')
     parser.add_argument('--hosted-marker', type=Path,
-                        default=Path('/share/justrust-hosted-semantic-worker-tiers.marker'))
+                        default=Path('/run/pool/share'))
     parser.add_argument('-n', '--repetitions', type=int, default=10)
     parser.add_argument('--items', type=int, default=64)
     parser.add_argument('--timeout', type=float, default=180)
