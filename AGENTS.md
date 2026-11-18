@@ -138,6 +138,20 @@ changed in the commit message. Still never destroy user data (accounts,
 billing, private caches) and never weaken the security invariants in
 `~/justrust-cloud/AGENTS.md`.
 
+## Dogfood on prod immediately. Do not wait.
+
+When you build something useful, put it in the live hosted system right away
+and dogfood it there. We test and iterate on production. Do not park finished
+work behind opt-in flags, canaries that never graduate, or later releases.
+
+- Make it the default in the same session: release the client
+  (`scripts/release-client.py`), deploy the cloud, or promote the toolchain.
+- Verify on prod with a real build (run id), then keep iterating there.
+- If it regresses, fix forward or roll back fast. Rollback is the safety net,
+  not a reason to delay.
+- The limits still hold: never destroy user data and never weaken the
+  security invariants in `~/justrust-cloud/AGENTS.md`.
+
 ## Git workflow
 
 - Work directly on `stable` in this checkout. No feature branches, no git
