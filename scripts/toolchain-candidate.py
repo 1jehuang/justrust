@@ -47,7 +47,21 @@ def validate_snapshot_source(root, revision):
         raise ValueError("source revision is no longer an ancestor of stable HEAD")
 
 
-def make_plan(root, revision, output):
+def compiler_commands(snapshot, optimize):
+    rustc = {"cwd": str(snapshot), "env": {"JR_STAGE": "1", "JR_TOOLS": "1"}}
+    if optimize == "none":
+        return [dict(rustc, argv=["bash", "toolchain/rustc/build-jr.sh", "release"])]
+    # PGO (trained on the bench snapshots) then BOLT on librustc_driver, the
+    # same pipeline as the shipped jr-ac20de5e7921. bolt.sh needs llvm-bolt
+    # in LLVM_BOLT_DIR (inherited from the caller's environment).
+    tc = str(snapshot / "toolchain/rustc")
+    return [dict(rustc, argv=["bash", "toolchain/rustc/build-jr.sh", "pgo-gen"]),
+            {"argv": ["bash", "pgo-train.sh"], "cwd": tc, "env": {"JR_STAGE": "1"}},
+            dict(rustc, argv=["bash", "toolchain/rustc/build-jr.sh", "pgo-bolt-base"]),
+            {"argv": ["bash", "bolt.sh"], "cwd": tc, "env": {"JR_STAGE": "1"}}]
+
+
+def make_plan(root, revision, output, optimize="none"):
     root = Path(root).resolve()
     validate_source(root, revision)
     version_data = git(root, "show", f"{revision}:toolchain/version.toml")
@@ -70,14 +84,13 @@ def make_plan(root, revision, output):
         "build_root": str(snapshot),
         "source_metadata": git(root, "show", "-s", "--format=%H%n%h%n%cs", "--abbrev=9", revision),
         "compiler_identity": "Archive metadata identifies integrated repository source; verify actual rustc -vV before packaging",
-        "commands": [
-            {"argv": ["bash", "toolchain/rustc/build-jr.sh", "release"],
-             "cwd": str(snapshot), "env": {"JR_STAGE": "1", "JR_TOOLS": "1"}},
+        "optimize": optimize,
+        "commands": compiler_commands(snapshot, optimize) + [
             {"argv": ["bash", "toolchain/cargo/build-jr.sh", "nightly-2026-10-08"],
              "cwd": str(snapshot), "env": {"JUSTRUST_REMOTE": "off", "CARGO_TARGET_DIR": str(target),
                                        "JR_CARGO_FEATURES": "all-static"}},
         ],
-        "artifacts": {"compiler_sysroot": str(snapshot / "toolchain/rustc/build/jr/release"),
+        "artifacts": {"compiler_sysroot": str(snapshot / "toolchain/rustc/build/jr" / ("pgo-bolt" if optimize == "pgo-bolt" else "release")),
                       "jr_cargo": str(target / "release/cargo")},
     }
 
@@ -104,6 +117,8 @@ def execute(plan):
         archive.unlink()
         # Only the private snapshot changes. Never rewrite live tracked metadata.
         (snapshot / "toolchain/rustc/git-commit-info").write_text(plan["source_metadata"] + "\n")
+        # Tells bootstrap to report that revision instead of a source content hash.
+        (snapshot / "toolchain/rustc/justrust-release-archive").write_text(plan["source_revision"] + "\n")
         for command in plan["commands"]:
             validate_snapshot_source(root, plan["source_revision"])
             env = dict(os.environ, **command["env"], CI="1", GIT_TERMINAL_PROMPT="0")
@@ -131,10 +146,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "target/toolchain-candidates")
+    parser.add_argument("--optimize", choices=["none", "pgo-bolt"], default="none",
+                        help="pgo-bolt: train PGO and BOLT the compiler (the production pipeline)")
     parser.add_argument("--execute", action="store_true", help="run the real compiler and Cargo build helpers")
     args = parser.parse_args(argv)
     try:
-        plan = make_plan(ROOT, args.source_commit, args.output_dir)
+        plan = make_plan(ROOT, args.source_commit, args.output_dir, args.optimize)
         print(json.dumps(execute(plan) if args.execute else plan, indent=2))
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         print(f"toolchain-candidate: {error}", file=sys.stderr)

@@ -49,6 +49,14 @@ impl GitInfo {
                 if root.join("toolchain/sources.json").is_file()
                     && root.join("toolchain/rustc").canonicalize().ok() == dir.canonicalize().ok()
                 {
+                    // A release candidate archive (scripts/toolchain-candidate.py)
+                    // records the integrated repository commit it was exported
+                    // from: that, not a content hash, is the published identity.
+                    if dir.join("justrust-release-archive").is_file() {
+                        if let Some(info) = read_commit_info_file(dir) {
+                            return GitInfo::OwnedSource(info);
+                        }
+                    }
                     return GitInfo::OwnedSource(owned_source_info(dir));
                 }
             }
