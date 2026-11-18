@@ -56,9 +56,9 @@ def compiler_commands(snapshot, optimize):
     # in LLVM_BOLT_DIR (inherited from the caller's environment).
     tc = str(snapshot / "toolchain/rustc")
     return [dict(rustc, argv=["bash", "toolchain/rustc/build-jr.sh", "pgo-gen"]),
-            {"argv": ["bash", "pgo-train.sh"], "cwd": tc, "env": {"JR_STAGE": "1"}},
+            {"argv": ["bash", "./pgo-train.sh"], "cwd": tc, "env": {"JR_STAGE": "1"}},
             dict(rustc, argv=["bash", "toolchain/rustc/build-jr.sh", "pgo-bolt-base"]),
-            {"argv": ["bash", "bolt.sh"], "cwd": tc, "env": {"JR_STAGE": "1"}}]
+            {"argv": ["bash", "./bolt.sh"], "cwd": tc, "env": {"JR_STAGE": "1"}}]
 
 
 def make_plan(root, revision, output, optimize="none"):
