@@ -71,6 +71,12 @@ pub fn class(outcome: &str) -> Class {
     }
 }
 
+/// A unit with a ledger that loaded nothing from incremental state: a first
+/// build in this target dir, a new compiler or flags, or lost state.
+pub fn is_cold(rows: &[Row]) -> bool {
+    !rows.is_empty() && !rows.iter().any(|r| r.outcome == "loaded" && r.count > 0)
+}
+
 /// Totals for one unit, or many.
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Totals {
@@ -85,6 +91,11 @@ pub struct Totals {
     pub necessary_count: u64,
     pub cgu_reused: u64,
     pub cgu_recompiled: u64,
+    /// Units that started without usable incremental state (nothing loaded),
+    /// and their summed query seconds. Their "necessary" work is a cold start,
+    /// not a change.
+    pub cold_units: u64,
+    pub cold_secs: f64,
 }
 
 impl Totals {
@@ -115,6 +126,19 @@ impl Totals {
                     self.necessary_count += r.count;
                 }
             }
+        }
+    }
+
+    /// Add one unit, noting whether it started cold.
+    pub fn add_unit(&mut self, rows: &[Row]) {
+        self.add(rows);
+        if is_cold(rows) {
+            self.cold_units += 1;
+            self.cold_secs += rows
+                .iter()
+                .filter(|r| r.query != "<cgu>" && class(&r.outcome) != Class::Reused)
+                .map(|r| r.secs)
+                .sum::<f64>();
         }
     }
 
@@ -329,14 +353,14 @@ pub fn command(days: f64, here: bool, top: usize, json: bool) -> Result<()> {
             any = true;
             ledger_units += 1;
             let mut t = Totals::default();
-            t.add(&u.reuse);
-            all.add(&u.reuse);
+            t.add_unit(&u.reuse);
+            all.add_unit(&u.reuse);
             if cascaded.contains(u.package.as_str()) {
                 cascade.0 += t.avoidable_secs;
                 cascade.1 += 1;
             }
             let c = crates.entry(unit_label(u)).or_default();
-            c.0.add(&u.reuse);
+            c.0.add_unit(&u.reuse);
             c.1 += u.wall;
             c.2 += 1;
             rows_all.push(u.reuse.clone());
@@ -398,6 +422,13 @@ pub fn command(days: f64, here: bool, top: usize, json: bool) -> Result<()> {
         "    opaque {:.0}s (unhashed or eval-always), necessary {:.0}s (changed or new values)",
         all.opaque_secs, all.necessary_secs
     );
+    if all.cold_units > 0 {
+        let _ = writeln!(
+            o,
+            "    cold starts: {} of {} units loaded no incremental state ({:.0}s of the recomputed time); fix these before per-query reuse",
+            all.cold_units, ledger_units, all.cold_secs
+        );
+    }
     let _ = writeln!(
         o,
         "    codegen units: {} reused, {} recompiled",
@@ -471,6 +502,19 @@ mod tests {
         assert_eq!(q[0].query, "typeck");
         assert_eq!(q[0].same_count, 10);
         assert_eq!(q[0].reused_count, 900);
+    }
+
+    #[test]
+    fn cold_units_are_counted_separately() {
+        let cold = parse("new\ttypeck\t2.0\t50\neval_always\tanalysis\t0.5\t1\nnew\t<cgu>\t0\t4\n");
+        let warm = parse("loaded\ttypeck\t0.1\t49\nchanged\ttypeck\t0.2\t1\n");
+        assert!(is_cold(&cold) && !is_cold(&warm) && !is_cold(&[]));
+        let mut t = Totals::default();
+        t.add_unit(&cold);
+        t.add_unit(&warm);
+        assert_eq!(t.cold_units, 1);
+        assert!((t.cold_secs - 2.5).abs() < 1e-9);
+        assert!((t.necessary_secs - 2.2).abs() < 1e-9);
     }
 
     #[test]
