@@ -882,6 +882,71 @@ struct JrPhaseLedger {
     /// process ends, and the reader may already have consumed it by then.
     written: std::sync::atomic::AtomicBool,
     phases: parking_lot::Mutex<FxHashMap<&'static str, (Duration, u64)>>,
+    /// The reuse ledger: per (outcome, query) the exclusive provider or load
+    /// time and count. See `jr_reuse_finish`.
+    reuse: parking_lot::Mutex<FxHashMap<(&'static str, &'static str), (Duration, u64)>>,
+}
+
+thread_local! {
+    /// Exclusive time of completed reuse-ledger scopes on this thread, so a
+    /// parent query does not also own the time of the queries it called.
+    static JR_REUSE_COMPLETED: std::cell::Cell<u128> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether the reuse ledger is on (the phase ledger is). One cached load.
+#[inline]
+pub fn jr_reuse_enabled() -> bool {
+    jr_phase_ledger().is_some()
+}
+
+/// A started reuse-ledger scope: `Instant` plus the completed nested time.
+#[derive(Clone, Copy)]
+pub struct JrReuseStart(Instant, u128);
+
+/// Start a reuse-ledger scope around a query provider invocation or load.
+/// `None` (free) when the ledger is off.
+#[inline]
+pub fn jr_reuse_start() -> Option<JrReuseStart> {
+    jr_reuse_enabled().then(|| JrReuseStart(Instant::now(), JR_REUSE_COMPLETED.with(|c| c.get())))
+}
+
+/// Finish a reuse-ledger scope as `outcome` for `query`. Outcomes are what
+/// incremental compilation did with this node:
+///
+/// * `loaded`: green, value loaded from the incremental cache (reused)
+/// * `green_recompute`: green, but no cached value so the provider ran again
+/// * `new`: no node in the previous session, provider ran
+/// * `same`: inputs changed, provider re-ran, produced the identical value
+///   (work a finer-grained dependency would have avoided)
+/// * `changed`: re-ran and produced a different value (necessary work)
+/// * `nohash`: re-ran, result is never hashed so reuse is impossible
+/// * `eval_always`: re-runs every session by design
+///
+/// The time is exclusive of nested reuse-ledger scopes on the same thread.
+pub fn jr_reuse_finish(start: JrReuseStart, query: &'static str, outcome: &'static str) {
+    let Some(ledger) = jr_phase_ledger() else { return };
+    let elapsed = start.0.elapsed().as_nanos();
+    let exclusive = JR_REUSE_COMPLETED.with(|c| {
+        let now = c.get();
+        let exclusive = elapsed.saturating_sub(now.saturating_sub(start.1));
+        c.set(now.saturating_add(exclusive));
+        exclusive
+    });
+    let dur = Duration::from_nanos(exclusive.min(u64::MAX as u128) as u64);
+    let mut reuse = ledger.reuse.lock();
+    let entry = reuse.entry((outcome, query)).or_insert((Duration::ZERO, 0));
+    entry.0 += dur;
+    entry.1 += 1;
+}
+
+/// Count `n` units of `outcome` for a non-query item kind (codegen units).
+pub fn jr_reuse_count(kind: &'static str, outcome: &'static str, dur: Duration) {
+    if let Some(ledger) = jr_phase_ledger() {
+        let mut reuse = ledger.reuse.lock();
+        let entry = reuse.entry((outcome, kind)).or_insert((Duration::ZERO, 0));
+        entry.0 += dur;
+        entry.1 += 1;
+    }
 }
 
 static JR_PHASES_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
@@ -902,6 +967,7 @@ fn jr_phase_ledger() -> Option<&'static JrPhaseLedger> {
                 start: *JR_PHASES_START.get_or_init(Instant::now),
                 written: std::sync::atomic::AtomicBool::new(false),
                 phases: parking_lot::Mutex::new(FxHashMap::default()),
+                reuse: parking_lot::Mutex::new(FxHashMap::default()),
             })
         })
         .as_ref()
@@ -952,6 +1018,27 @@ pub fn jr_phases_write(total: Duration) {
         rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(b.0)));
         for (label, (dur, count)) in rows {
             let _ = writeln!(out, "{label}\t{:.6}\t{count}", dur.as_secs_f64());
+        }
+    }
+    // The reuse ledger goes beside it (`<path>.reuse`, written first), so
+    // readers that predate it never mistake its rows for phases:
+    // `outcome\tquery\tseconds\tcount` per line.
+    let mut reuse_out = String::new();
+    {
+        let reuse = ledger.reuse.lock();
+        let mut rows: Vec<_> = reuse.iter().map(|(k, v)| (*k, *v)).collect();
+        rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+        for ((outcome, query), (dur, count)) in rows {
+            let _ = writeln!(reuse_out, "{outcome}\t{query}\t{:.6}\t{count}", dur.as_secs_f64());
+        }
+    }
+    if !reuse_out.is_empty() {
+        let mut name = ledger.path.clone().into_os_string();
+        name.push(".reuse");
+        let path = std::path::PathBuf::from(name);
+        let tmp = path.with_extension("reuse-tmp");
+        if fs::write(&tmp, reuse_out).is_ok() {
+            let _ = fs::rename(&tmp, &path);
         }
     }
     let _ = writeln!(out, "total\t{:.6}\t1", total.as_secs_f64());

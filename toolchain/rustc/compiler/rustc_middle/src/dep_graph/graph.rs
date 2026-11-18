@@ -790,6 +790,20 @@ impl DepGraphData {
         }
     }
 
+    /// justrust reuse ledger: classify a provider execution after its node was
+    /// allocated. `new` (absent from the previous session), `same` (re-ran,
+    /// identical value: green after execution), `changed`, or `nohash`.
+    pub fn jr_reexecution_outcome(&self, dep_node: &DepNode, hashed: bool) -> &'static str {
+        match self.previous.node_to_index_opt(dep_node) {
+            None => "new",
+            Some(_) if !hashed => "nohash",
+            Some(prev) => match self.colors.get(prev) {
+                DepNodeColor::Green(_) => "same",
+                _ => "changed",
+            },
+        }
+    }
+
     /// Returns true if the given node has been marked as green during the
     /// current compilation session. Used in various assertions
     #[inline]

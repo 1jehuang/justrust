@@ -799,6 +799,26 @@ pub fn codegen_crate<
     let cgu_reuse = tcx.sess.time("find_cgu_reuse", || {
         codegen_units.iter().map(|cgu| determine_cgu_reuse(tcx, cgu)).collect::<Vec<_>>()
     });
+    // justrust reuse ledger: what happened to each codegen unit.
+    if rustc_data_structures::profiling::jr_reuse_enabled() {
+        for (cgu, reuse) in codegen_units.iter().zip(&cgu_reuse) {
+            let outcome = match reuse {
+                CguReuse::PostLto | CguReuse::PreLto => "loaded",
+                CguReuse::No if !tcx.dep_graph.is_fully_enabled() => "untracked",
+                CguReuse::No
+                    if tcx.dep_graph.previous_work_product(&cgu.work_product_id()).is_none() =>
+                {
+                    "new"
+                }
+                CguReuse::No => "changed",
+            };
+            rustc_data_structures::profiling::jr_reuse_count(
+                "codegen_unit",
+                outcome,
+                Duration::ZERO,
+            );
+        }
+    }
 
     crate::assert_module_sources::assert_module_sources(tcx, &|cgu_reuse_tracker| {
         for (i, cgu) in codegen_units.iter().enumerate() {

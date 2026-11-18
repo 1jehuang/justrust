@@ -777,6 +777,7 @@ fn execute_job_incr<'tcx, C: QueryCache>(
     }
 
     let prof_timer = tcx.prof.query_provider();
+    let jr_reuse = rustc_data_structures::profiling::jr_reuse_start();
 
     let (result, dep_node_index) = start_query(tcx, job_id, query.depth_limit, query.name, || {
         // Call the query provider.
@@ -792,6 +793,14 @@ fn execute_job_incr<'tcx, C: QueryCache>(
     });
 
     prof_timer.finish_with_query_invocation_id(dep_node_index.into());
+    if let Some(start) = jr_reuse {
+        let outcome = if query.eval_always {
+            "eval_always"
+        } else {
+            dep_graph_data.jr_reexecution_outcome(&dep_node, query.hash_value_fn.is_some())
+        };
+        rustc_data_structures::profiling::jr_reuse_finish(start, query.name, outcome);
+    }
 
     retain_resident_value(tcx, query, dep_node, result);
     (result, dep_node_index)
@@ -832,6 +841,12 @@ fn load_from_disk_or_invoke_provider_green<'tcx, C: QueryCache>(
     // Keep that distinction observable without treating ordinary query cache
     // hits (which can be within this session) as cross-session value reuse.
     let _reuse_timer = tcx.prof.generic_activity_with_arg("jr_incremental_green_query", query.name);
+    let jr_reuse = rustc_data_structures::profiling::jr_reuse_start();
+    let jr_reuse_finish = |outcome| {
+        if let Some(start) = jr_reuse {
+            rustc_data_structures::profiling::jr_reuse_finish(start, query.name, outcome);
+        }
+    };
 
     // try_mark_green has validated dependencies and replayed diagnostics before
     // entering this function. Never consult process RAM before that point.
@@ -849,6 +864,7 @@ fn load_from_disk_or_invoke_provider_green<'tcx, C: QueryCache>(
             query.format_value,
         );
         retain_resident_value(tcx, query, *dep_node, value);
+        jr_reuse_finish("loaded");
         return value;
     }
 
@@ -861,6 +877,7 @@ fn load_from_disk_or_invoke_provider_green<'tcx, C: QueryCache>(
     } else {
         None
     };
+    let loaded = try_value.is_some();
     let (value, verify) = match try_value {
         Some(value) => {
             // This hook counts actual successful query rehydration, not merely
@@ -917,6 +934,7 @@ fn load_from_disk_or_invoke_provider_green<'tcx, C: QueryCache>(
     }
 
     retain_resident_value(tcx, query, *dep_node, value);
+    jr_reuse_finish(if loaded { "loaded" } else { "green_recompute" });
     value
 }
 
