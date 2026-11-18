@@ -28,6 +28,10 @@ class ProjectTests(unittest.TestCase):
             self.assertEqual(env['JUSTRUST_TOOLCHAIN'], 'system')
             self.assertEqual(env['RUSTC'], '/frozen/rustc')
             self.assertEqual(env['RUSTFLAGS'], '')
+            self.assertEqual(env['CARGO_INCREMENTAL'], '1')
+            concrete = h.environment(Path(temp), Path('/frozen/rustc'), 'off', cargo=Path('/toolchain/bin/cargo'))
+            self.assertEqual(concrete['JUSTRUST_REAL_CARGO'], '/toolchain/bin/cargo')
+            self.assertTrue(concrete['PATH'].startswith('/toolchain/bin' + os.pathsep))
             self.assertNotIn('RUSTC_WRAPPER', env)
             self.assertNotIn('CARGO_ENCODED_RUSTFLAGS', env)
             self.assertNotIn('JUSTRUST_API_KEY', env)
@@ -150,6 +154,7 @@ class ProjectTests(unittest.TestCase):
                 return dict(status=status, error=None, timed_out=False, elapsed_seconds=0.1)
 
             with patch.object(h.snapshot, 'host_guard', return_value={'mock': True}), \
+                    patch.object(h.snapshot.shared, 'identity', return_value={'drivers': ['mock-driver']}), \
                     patch.object(h.shared, 'pinned_source'), \
                     patch.object(h.runtime, 'run_process', side_effect=run):
                 self.assertEqual(h.execute(args), 0)

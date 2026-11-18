@@ -23,7 +23,7 @@ REASON = 'controlled native snapshot experiment on authenticated hosted guest'
 PHASES = oracle.PHASES + ('full-library',)
 
 
-def environment(root, compiler, mode, raw=False):
+def environment(root, compiler, mode, raw=False, cargo=None):
     """Whitelist process basics. Never copy operator credentials or Cargo config."""
     env = {key: os.environ[key] for key in ('PATH', 'LANG', 'LC_ALL', 'TZ')
            if key in os.environ}
@@ -39,10 +39,13 @@ def environment(root, compiler, mode, raw=False):
                JUSTRUST_NO_UPDATE='1', JUSTRUST_AUTO_UPDATE='0',
                JUSTRUST_NO_TELEMETRY='1', JUSTRUST_REMOTE='off',
                JUSTRUST_DEPCACHE='0', JUSTRUST_LOCALCACHE='0', JUSTRUST_PASSES='0',
-               JUSTRUST_LOCAL_REASON=REASON, CARGO_INCREMENTAL='0',
+               JUSTRUST_LOCAL_REASON=REASON, CARGO_INCREMENTAL='1',
                RUSTFLAGS='-Ztime-passes' if raw else '',
                JUSTRUST_RUSTC_DISK_AST_STATS=str(root / 'stats.jsonl'),
                JUSTRUST_RUSTC_DISK_AST_PHASES=str(root / 'phases.jsonl'))
+    if cargo is not None:
+        env['JUSTRUST_REAL_CARGO'] = str(cargo)
+        env['PATH'] = str(cargo.parent) + os.pathsep + env.get('PATH', '')
     if mode == 'on':
         env['JUSTRUST_RUSTC_DISK_AST'] = str(root / 'disk')
     return env
@@ -177,6 +180,7 @@ def execute(args):
             if stream.read(4) != b'\x7fELF' or not os.access(tool, os.X_OK):
                 raise ValueError('compiler and client must be absolute executable ELF files')
     identities = {str(p): runtime.base.digest(p) for p in (args.compiler, args.client)}
+    compiler_before = snapshot.shared.identity(args.compiler)
     before = shared.source_hashes(args.source)
     original = (args.source / 'src/summary.rs').read_bytes()
     args.output.mkdir(mode=0o700, parents=True)
@@ -184,6 +188,8 @@ def execute(args):
     receipt = dict(pin=shared.PIN, host=host, identities=identities, source_before=before,
                    scope=__doc__, raw_rustc_phases=args.raw_rustc_phases,
                    coverage_limit='Root-only native parsed AST cache is not whole-project AST reuse.',
+                   compiler_before=compiler_before, incremental=True,
+                   cargo=str(getattr(args, 'cargo', None)),
                    rows=rows, attribution_rows=attribution)
 
     def save():
@@ -203,7 +209,7 @@ def execute(args):
                     shutil.copytree(args.source, source, ignore=shutil.ignore_patterns('.git'))
                     if shared.source_hashes(source) != before:
                         raise ValueError('source changed during private copy')
-                    arms[mode] = (root, source, environment(root, args.compiler, mode, raw), [0, 0])
+                    arms[mode] = (root, source, environment(root, args.compiler, mode, raw, getattr(args, 'cargo', None)), [0, 0])
                 try:
                     for phase in PHASES:
                         for mode in (('off', 'on') if sample % 2 == 0 else ('on', 'off')):
@@ -239,7 +245,8 @@ def execute(args):
             raise
     finally:
         try:
-            receipt['unchanged'] = (before == shared.source_hashes(args.source) and
+            receipt['compiler_after'] = snapshot.shared.identity(args.compiler)
+            receipt['unchanged'] = (compiler_before == receipt['compiler_after'] and before == shared.source_hashes(args.source) and
                 identities == {str(p): runtime.base.digest(p) for p in (args.compiler, args.client)})
         except (OSError, ValueError) as exc:
             receipt.update(unchanged=False, identity_error=repr(exc))
@@ -256,6 +263,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('compiler', 'client', 'source', 'output'):
         parser.add_argument('--' + name, required=True, type=shared.absolute)
+    parser.add_argument('--cargo', type=shared.absolute, help='Concrete Cargo binary, not a rustup shim')
     parser.add_argument('--execute-host-workloads', action='store_true')
     parser.add_argument('--samples', type=int, default=3)
     parser.add_argument('--timeout', type=float, default=360)
