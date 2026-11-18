@@ -118,8 +118,56 @@ impl ResidentStats {
 
 #[derive(Default)]
 struct Cache {
-    entries: VecDeque<(Key, Arc<Archive>)>,
+    entries: VecDeque<(Key, Entry)>,
     stats: ResidentStats,
+}
+
+/// Idle policy acts only on owned encoded archives, never on live tcx state.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum IdleTier {
+    Compressed,
+    Cold,
+}
+
+/// Retained owner-cache charges, including indexes and allocation overhead.
+/// Active entries are hot entries that an idle transition must leave alone.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct TierStats {
+    pub hot_entries: u64,
+    pub hot_bytes: u64,
+    pub compressed_entries: u64,
+    pub compressed_bytes: u64,
+    pub active_entries: u64,
+}
+
+enum Entry {
+    Hot(Arc<Archive>),
+    Compressed { bytes: Vec<u8>, decoded_len: usize, start_pos: usize, indexes: Indexes },
+}
+
+impl Entry {
+    fn active(&self) -> bool {
+        match self {
+            Self::Hot(archive) => {
+                Arc::strong_count(archive) != 1 || Arc::strong_count(&archive.bytes) != 1
+            }
+            Self::Compressed { .. } => false,
+        }
+    }
+
+    fn charge(&self, key: &Key) -> u64 {
+        let payload = match self {
+            Self::Hot(archive) => archive.bytes.len() + archive.indexes.retained_bytes(),
+            Self::Compressed { bytes, indexes, .. } => bytes.capacity() + indexes.retained_bytes(),
+        };
+        (payload
+            + key.root.as_os_str().len()
+            + key.options.capacity()
+            + std::mem::size_of::<Archive>()
+            + std::mem::size_of::<Entry>()
+            + std::mem::size_of::<Key>()
+            + 64) as u64
+    }
 }
 
 impl Cache {
@@ -136,23 +184,112 @@ impl Cache {
             + key.root.as_os_str().len()
             + key.options.capacity()
             + std::mem::size_of::<Archive>()
+            + std::mem::size_of::<Entry>()
             + std::mem::size_of::<Key>()
             + 64) as u64
     }
 
     fn lookup(&mut self, key: &Key, bytes: &[u8], start_pos: usize) -> Option<Arc<Archive>> {
-        if let Some(pos) = self.entries.iter().position(|(k, a)| {
-            k == key && a.start_pos.is_none_or(|p| p == start_pos) && &*a.bytes == bytes
-        }) {
-            let entry = self.entries.remove(pos).unwrap();
-            let archive = entry.1.clone();
-            self.entries.push_back(entry);
-            self.stats.hits += 1;
-            Some(archive)
-        } else {
+        let Some(pos) = self.entries.iter().position(|(k, _)| k == key) else {
             self.stats.misses += 1;
-            None
+            return None;
+        };
+        let archive = match &self.entries[pos].1 {
+            Entry::Hot(archive)
+                if archive.start_pos.is_none_or(|p| p == start_pos) && &*archive.bytes == bytes =>
+            {
+                if archive.start_pos.is_none() {
+                    // A writer snapshot has no header offset until its first
+                    // validated read. Bind it before permitting compression.
+                    Arc::new(Archive {
+                        bytes: archive.bytes.clone(),
+                        indexes: archive.indexes.clone(),
+                        start_pos: Some(start_pos),
+                    })
+                } else {
+                    archive.clone()
+                }
+            }
+            Entry::Compressed { bytes: encoded, decoded_len, start_pos: header, indexes }
+                if *header == start_pos
+                    && *decoded_len == bytes.len()
+                    && *decoded_len <= MAX_BYTES =>
+            {
+                // Untrusted/corrupt compressed data may never cause unbounded
+                // allocation. Exact original bytes, not a digest, establish
+                // identity before these native indexes can be used again.
+                let decoded =
+                    miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(encoded, *decoded_len);
+                match decoded {
+                    Ok(decoded) if decoded == bytes => Arc::new(Archive {
+                        bytes: decoded.into(),
+                        indexes: indexes.clone(),
+                        start_pos: Some(start_pos),
+                    }),
+                    _ => {
+                        self.stats.misses += 1;
+                        return None;
+                    }
+                }
+            }
+            _ => {
+                self.stats.misses += 1;
+                return None;
+            }
+        };
+        // Promotion uses the ordinary bounded admission path. A corrupt entry
+        // above is simply a miss and the caller decodes the normal disk file.
+        self.insert(key.clone(), archive.clone());
+        self.stats.hits += 1;
+        Some(archive)
+    }
+
+    fn tier_stats(&self) -> TierStats {
+        let mut stats = TierStats::default();
+        for (key, entry) in &self.entries {
+            match entry {
+                Entry::Hot(_) => {
+                    stats.hot_entries += 1;
+                    stats.hot_bytes += entry.charge(key);
+                    stats.active_entries += u64::from(entry.active());
+                }
+                Entry::Compressed { .. } => {
+                    stats.compressed_entries += 1;
+                    stats.compressed_bytes += entry.charge(key);
+                }
+            }
         }
+        stats
+    }
+
+    fn transition_idle(&mut self, tier: IdleTier) -> TierStats {
+        self.entries.retain_mut(|(key, entry)| {
+            if entry.active() {
+                return true;
+            }
+            if matches!(tier, IdleTier::Cold) {
+                return false;
+            }
+            if let Entry::Hot(archive) = entry {
+                // Writer snapshots have no independently validated header yet.
+                // Leave them hot until lookup has established that identity.
+                if let Some(start_pos) = archive.start_pos {
+                    let bytes = miniz_oxide::deflate::compress_to_vec_zlib(&archive.bytes, 1);
+                    let compressed = Entry::Compressed {
+                        bytes,
+                        decoded_len: archive.bytes.len(),
+                        start_pos,
+                        indexes: archive.indexes.clone(),
+                    };
+                    if compressed.charge(key) < entry.charge(key) {
+                        *entry = compressed;
+                    }
+                }
+            }
+            true
+        });
+        self.stats.current_bytes = self.entries.iter().map(|(k, e)| e.charge(k)).sum();
+        self.tier_stats()
     }
 
     fn insert(&mut self, key: Key, archive: Arc<Archive>) -> bool {
@@ -163,16 +300,16 @@ impl Cache {
         // Only retain the latest artifact for a namespace.
         if let Some(pos) = self.entries.iter().position(|(k, _)| k == &key) {
             let (key, old) = self.entries.remove(pos).unwrap();
-            self.stats.current_bytes -= Self::charge(&key, &old);
+            self.stats.current_bytes -= old.charge(&key);
         }
         while self.entries.len() >= MAX_NAMESPACES
             || self.stats.current_bytes + charge > MAX_BYTES as u64
         {
             let (key, old) = self.entries.pop_front().unwrap();
-            self.stats.current_bytes -= Self::charge(&key, &old);
+            self.stats.current_bytes -= old.charge(&key);
         }
         self.stats.current_bytes += charge;
-        self.entries.push_back((key, archive));
+        self.entries.push_back((key, Entry::Hot(archive)));
         true
     }
 }
@@ -180,6 +317,14 @@ impl Cache {
 fn cache() -> &'static Mutex<Cache> {
     static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
     CACHE.get_or_init(Default::default)
+}
+
+pub(super) fn transition_idle(tier: IdleTier) -> TierStats {
+    cache().lock().map(|mut cache| cache.transition_idle(tier)).unwrap_or_default()
+}
+
+pub(super) fn tier_stats() -> TierStats {
+    cache().lock().map(|cache| cache.tier_stats()).unwrap_or_default()
 }
 
 pub(super) fn lookup(key: &Key, bytes: &[u8], start_pos: usize) -> Option<Arc<Archive>> {
@@ -262,6 +407,149 @@ mod tests {
         })
     }
 
+    fn assert_charge(cache: &Cache) {
+        let tiers = cache.tier_stats();
+        assert_eq!(cache.stats.current_bytes, tiers.hot_bytes + tiers.compressed_bytes);
+        assert!(cache.stats.current_bytes <= MAX_BYTES as u64);
+        assert!(cache.entries.len() <= MAX_NAMESPACES);
+    }
+
+    #[test]
+    fn compressed_roundtrip_retains_indexes_and_exact_identity() {
+        let bytes = vec![42; 8192];
+        let archive = archive(&bytes);
+        let indexes = archive.indexes.query_values_index.clone();
+        let mut cache = Cache::default();
+        cache.insert(key(0), archive);
+        let hot_bytes = cache.stats.current_bytes;
+        let tiers = cache.transition_idle(IdleTier::Compressed);
+        assert_eq!((tiers.hot_entries, tiers.compressed_entries), (0, 1));
+        assert!(tiers.compressed_bytes < hot_bytes);
+        assert_charge(&cache);
+        let hit = cache.lookup(&key(0), &bytes, 8).unwrap();
+        assert_eq!(&*hit.bytes, bytes);
+        assert!(Arc::ptr_eq(&hit.indexes.query_values_index, &indexes));
+        assert_eq!(hit.start_pos, Some(8));
+        assert_eq!(cache.tier_stats().hot_entries, 1);
+        assert_eq!(cache.stats.current_bytes, hot_bytes);
+        assert_charge(&cache);
+    }
+
+    #[test]
+    fn compressed_changed_bytes_or_header_miss_without_promotion() {
+        let bytes = vec![42; 8192];
+        let mut cache = Cache::default();
+        cache.insert(key(0), archive(&bytes));
+        cache.transition_idle(IdleTier::Compressed);
+        let mut changed = bytes.clone();
+        changed[4096] ^= 1;
+        assert!(cache.lookup(&key(0), &changed, 8).is_none());
+        assert!(cache.lookup(&key(0), &bytes, 9).is_none());
+        assert!(cache.lookup(&key(0), &bytes[..4096], 8).is_none());
+        assert_eq!(cache.tier_stats().compressed_entries, 1);
+        assert_eq!(cache.stats.misses, 3);
+        assert!(cache.lookup(&key(0), &bytes, 8).is_some());
+        assert_charge(&cache);
+    }
+
+    #[test]
+    fn corrupted_and_overexpanding_streams_fail_open() {
+        let bytes = vec![42; 8192];
+        let mut cache = Cache::default();
+        cache.insert(key(0), archive(&bytes));
+        cache.transition_idle(IdleTier::Compressed);
+        if let Entry::Compressed { bytes, .. } = &mut cache.entries[0].1 {
+            bytes[0] ^= 0xff;
+        } else {
+            panic!("expected compressed archive");
+        }
+        assert!(cache.lookup(&key(0), &bytes, 8).is_none());
+        // Admission after the miss is exactly the ordinary disk-decoding path.
+        assert!(cache.insert(key(0), archive(&bytes)));
+        cache.transition_idle(IdleTier::Compressed);
+        if let Entry::Compressed { decoded_len, .. } = &mut cache.entries[0].1 {
+            *decoded_len = 16;
+        }
+        assert!(cache.lookup(&key(0), &[42; 16], 8).is_none());
+        if let Entry::Compressed { decoded_len, .. } = &mut cache.entries[0].1 {
+            *decoded_len = MAX_BYTES + 1;
+        }
+        assert!(cache.lookup(&key(0), &bytes, 8).is_none());
+        assert_eq!(cache.stats.misses, 3);
+        assert_eq!(cache.stats.hits, 0);
+        assert_charge(&cache);
+    }
+
+    #[test]
+    fn idle_transitions_preserve_active_archive_and_encoded_byte_references() {
+        let bytes = vec![42; 8192];
+        let active = archive(&bytes);
+        let standalone_bytes = archive(&bytes);
+        let held_bytes = standalone_bytes.bytes.clone();
+        let mut cache = Cache::default();
+        cache.insert(key(0), active.clone());
+        cache.insert(key(1), standalone_bytes);
+        cache.insert(key(2), archive(&bytes));
+        let tiers = cache.transition_idle(IdleTier::Compressed);
+        assert_eq!((tiers.hot_entries, tiers.compressed_entries, tiers.active_entries), (2, 1, 2));
+        let tiers = cache.transition_idle(IdleTier::Cold);
+        assert_eq!((tiers.hot_entries, tiers.compressed_entries, tiers.active_entries), (2, 0, 2));
+        assert_eq!(&*active.bytes, bytes);
+        assert_eq!(&*held_bytes, bytes);
+        drop(active);
+        drop(held_bytes);
+        assert_eq!(cache.transition_idle(IdleTier::Cold), TierStats::default());
+        assert_eq!(cache.stats.current_bytes, 0);
+        assert_charge(&cache);
+    }
+
+    #[test]
+    fn compression_and_promotion_respect_owner_budget() {
+        let bytes = vec![42; MAX_BYTES / 2 + 1];
+        let mut cache = Cache::default();
+        cache.insert(key(0), archive(&bytes));
+        cache.transition_idle(IdleTier::Compressed);
+        cache.insert(key(1), archive(&bytes));
+        cache.transition_idle(IdleTier::Compressed);
+        assert_eq!(cache.tier_stats().compressed_entries, 2);
+        assert_charge(&cache);
+        assert!(cache.lookup(&key(0), &bytes, 8).is_some());
+        assert_charge(&cache);
+        assert!(cache.lookup(&key(1), &bytes, 8).is_some());
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(cache.entries[0].0, key(1));
+        assert_charge(&cache);
+        assert_eq!(cache.transition_idle(IdleTier::Cold), TierStats::default());
+    }
+
+    #[test]
+    fn unprofitable_compression_stays_hot() {
+        let mut cache = Cache::default();
+        cache.insert(key(0), archive(b"x"));
+        let before = cache.stats.current_bytes;
+        let tiers = cache.transition_idle(IdleTier::Compressed);
+        assert_eq!((tiers.hot_entries, tiers.compressed_entries), (1, 0));
+        assert_eq!(cache.stats.current_bytes, before);
+        assert_charge(&cache);
+    }
+
+    #[test]
+    fn writer_snapshot_binds_header_before_compression() {
+        let bytes = vec![42; 8192];
+        let mut snapshot = archive(&bytes);
+        Arc::get_mut(&mut snapshot).unwrap().start_pos = None;
+        let mut cache = Cache::default();
+        cache.insert(key(0), snapshot);
+        assert_eq!(cache.transition_idle(IdleTier::Compressed).hot_entries, 1);
+        drop(cache.lookup(&key(0), &bytes, 8).unwrap());
+        let tiers = cache.transition_idle(IdleTier::Compressed);
+        assert_eq!(tiers.compressed_entries, 1);
+        assert_eq!(cache.transition_idle(IdleTier::Compressed), tiers);
+        assert!(cache.lookup(&key(0), &bytes, 9).is_none());
+        assert!(cache.lookup(&key(0), &bytes, 8).is_some());
+        assert_charge(&cache);
+    }
+
     #[test]
     fn same_length_different_bytes_and_namespaces_miss() {
         let mut cache = Cache::default();
@@ -291,7 +579,7 @@ mod tests {
         assert_eq!(cache.entries.len(), MAX_NAMESPACES);
         assert_eq!(
             cache.stats.current_bytes,
-            cache.entries.iter().map(|(key, archive)| Cache::charge(key, archive)).sum::<u64>()
+            cache.entries.iter().map(|(key, entry)| entry.charge(key)).sum::<u64>()
         );
     }
 
