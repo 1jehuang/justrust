@@ -185,9 +185,18 @@ const AUTO_WINDOW_SECS: f64 = 3600.0;
 const AUTO_MIN_AVAILABLE_MB: u64 = 8 * 1024;
 
 /// At most this many resident daemons per machine: `floor((64 GB - 16 GB) /
-/// 6 GB)` on a hosted VM (docs/early-exit-hosted.md). Starting one more stops
-/// the least recently queried.
+/// 6 GB)` on a hosted VM (docs/early-exit-hosted.md), fewer on smaller
+/// machines (`daemon_cap`). Starting one more stops the least recently queried.
 const MAX_DAEMONS: usize = 8;
+const DAEMON_BUDGET_MB: u64 = 6 * 1024;
+const BUILD_RESERVE_MB: u64 = 16 * 1024;
+
+/// Daemons that fit beside `BUILD_RESERVE_MB` for builds, at least one.
+fn daemon_cap(total_mb: Option<u64>) -> usize {
+    total_mb.map_or(MAX_DAEMONS, |t| {
+        ((t.saturating_sub(BUILD_RESERVE_MB) / DAEMON_BUDGET_MB) as usize).clamp(1, MAX_DAEMONS)
+    })
+}
 /// Hosted only: below this much available memory the least recently queried
 /// daemon stops, checked every `PRESSURE_EVERY`. Builds win over early answers.
 const PRESSURE_MIN_AVAILABLE_MB: u64 = 12 * 1024;
@@ -658,7 +667,7 @@ fn spawn_daemon(root: &Path, dir: &Path) -> Result<()> {
             .into_iter()
             .filter(|(d, _)| d != dir)
             .collect();
-        for victim in lru_victims(&live, MAX_DAEMONS) {
+        for victim in lru_victims(&live, daemon_cap(crate::procfs::meminfo().map(|m| m.total_mb))) {
             stop_daemon(&victim);
         }
     }
@@ -1788,6 +1797,10 @@ mod tests {
         assert_eq!(lru_victims(&live, 8), vec![PathBuf::from("/e/0")]);
         assert!(lru_victims(&live[..7], 8).is_empty());
         assert_eq!(lru_victims(&live, 6).len(), 3);
+        assert_eq!(daemon_cap(Some(64 * 1024)), 8);
+        assert_eq!(daemon_cap(Some(28 * 1024)), 2);
+        assert_eq!(daemon_cap(Some(8 * 1024)), 1);
+        assert_eq!(daemon_cap(Some(512 * 1024)), 8);
     }
 
     #[test]
