@@ -510,6 +510,11 @@ pub(crate) fn cargo_config_env(name: &str) -> bool {
         "CARGO_INSTALL_",
         "CARGO_CACHE_",
         "CARGO_FUTURE_INCOMPAT_",
+        // `resolver.feature-unification`: its effect reaches rustc only as
+        // `--cfg feature=...` arguments, which are keyed. Keying the variable
+        // split identical dependency keys between workspace-unified and
+        // ordinary builds: 69.6 min of repeat misses in 2 days (2026-11-18).
+        "CARGO_RESOLVER_",
     ];
     PREFIXES.iter().any(|p| name.starts_with(p))
         || matches!(
@@ -2059,6 +2064,7 @@ mod tests {
         ] {
             assert!(!keyed_env(k), "{k}");
         }
+        assert!(!keyed_env("CARGO_RESOLVER_FEATURE_UNIFICATION"));
         assert!(keyed_env("CARGO_MANIFEST_DIR"));
         assert!(keyed_env("RUSTC_BOOTSTRAP"));
         assert!(keyed_env("CARGO_PKG_NAME"));
