@@ -149,11 +149,18 @@ fn parse_source_file<'a>(
             crate::unwrap_or_emit_fatal(Err(errors))
         }
     };
-    if !enabled() {
+    let memory_enabled = enabled();
+    let disk_enabled = crate::disk_ast::enabled();
+    if !memory_enabled && !disk_enabled {
         return parser.parse_crate_mod();
     }
     let admissible = source_eligible(&source) && clean(psess);
-    if admissible {
+    if admissible && disk_enabled {
+        if let Some(krate) = crate::disk_ast::load(psess, &source, strip_mode) {
+            return Ok(krate);
+        }
+    }
+    if admissible && memory_enabled {
         let found = CACHE.with(|slot| {
             let mut slot = slot.borrow_mut();
             let cache = slot.as_mut().expect("active AST scope");
@@ -197,6 +204,12 @@ fn parse_source_file<'a>(
         reject();
         return result;
     };
+    if disk_enabled {
+        crate::disk_ast::store(psess, &source, strip_mode, krate);
+    }
+    if !memory_enabled {
+        return result;
+    }
     let Some(bytes) = admission
         .estimated_bytes
         .checked_add(source.src.as_ref().map_or(0, |src| src.len()))

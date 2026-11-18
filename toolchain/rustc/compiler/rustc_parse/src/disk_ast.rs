@@ -33,7 +33,7 @@ use rustc_span::{
 
 use crate::resident_ast_eligibility::{Limits, inspect};
 
-const MAGIC: &[u8; 16] = b"JRDISKAST00000001";
+const MAGIC: &[u8; 16] = b"JRDISKAST0000001";
 const SCHEMA: u32 = 1;
 const HEADER: usize = 16 + 4 + 32 + 8 + 32;
 const MAX_PAYLOAD: usize = 8 * 1024 * 1024;
@@ -703,6 +703,8 @@ mod tests {
         });
         rustc_span::create_default_session_globals_then(|| {
             // Perturb interning order. Serialized symbol indices would be wrong.
+            // Deliberately perturb dynamic interner order before restoring text symbols.
+            #[allow(rustc::symbol_intern_string_literal)]
             Symbol::intern("different_first_symbol");
             let psess = ParseSess::new();
             let source = psess.source_map().new_source_file(

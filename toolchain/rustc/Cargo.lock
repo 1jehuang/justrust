@@ -4606,6 +4606,7 @@ name = "rustc_parse"
 version = "0.0.0"
 dependencies = [
  "bitflags",
+ "libc",
  "rustc-literal-escaper",
  "rustc_ast",
  "rustc_ast_pretty",
@@ -4616,6 +4617,7 @@ dependencies = [
  "rustc_lexer",
  "rustc_lint_defs",
  "rustc_macros",
+ "rustc_serialize",
  "rustc_session",
  "rustc_span",
  "thin-vec",

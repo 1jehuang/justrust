@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 # tidy-alphabetical-start
 bitflags = "2.4.1"
+libc = "0.2"
 rustc-literal-escaper = "0.0.8"
 rustc_ast = { path = "../rustc_ast" }
 rustc_ast_pretty = { path = "../rustc_ast_pretty" }
@@ -16,6 +17,7 @@ rustc_index = { path = "../rustc_index" }
 rustc_lexer = { path = "../rustc_lexer" }
 rustc_lint_defs = { path = "../rustc_lint_defs" }
 rustc_macros = { path = "../rustc_macros" }
+rustc_serialize = { path = "../rustc_serialize" }
 rustc_session = { path = "../rustc_session" }
 rustc_span = { path = "../rustc_span" }
 thin-vec = "0.2.19"

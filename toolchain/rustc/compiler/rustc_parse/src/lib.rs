@@ -34,6 +34,7 @@ use crate::lexer::StripTokens;
 
 pub mod lexer;
 
+pub mod disk_ast;
 pub mod resident;
 pub mod resident_ast;
 mod resident_ast_eligibility;
