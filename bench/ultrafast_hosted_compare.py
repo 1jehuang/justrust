@@ -155,6 +155,7 @@ def execute(args):
                         if 'upstream' in stacks and getattr(args, 'upstream_cli', 'cargo') == 'direct'
                         else 'Legacy cargo CLI environment; same Cargo profiles.'),
                     scope='Host-only pinned filtered tests. No universal speed claim.',
+                    warm_unchanged_policy='Identical source bytes are rewritten before invocation. This touches the file and is not an untouched no-op build.',
                     cold_policy='Fresh private target and engine stores per replicate; OS page cache not flushed.',
                     full_library_policy='required' if not args.skip_full_library else 'explicitly skipped; not correctness-certified',
                     proc_macro_policy='Both server variables 0, rustc-built compatibility path.',

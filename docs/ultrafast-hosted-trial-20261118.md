@@ -14,7 +14,7 @@ command times:
 | Phase | Pinned stock Cargo | Owned engine | Cargo / engine |
 |---|---:|---:|---:|
 | Cold private stores | 10.204164 s | 21.216608 s | 0.481x |
-| Warm unchanged tests | 937.242 ms | 33.051 ms | 28.36x |
+| Same-byte rewrite tests (not untouched no-op) | 937.242 ms | 33.051 ms | 28.36x |
 | Reachable test-body edit | 984.101 ms | 170.721 ms | 5.76x |
 | Type error | 594.188 ms | 76.642 ms | 7.75x |
 | Type recovery | 979.287 ms | 152.258 ms | 6.43x |

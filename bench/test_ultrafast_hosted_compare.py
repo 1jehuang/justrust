@@ -102,6 +102,7 @@ class HostedTests(unittest.TestCase):
         self.enable_upstream()
         self.assertEqual(self.run_harness(), 0)
         self.assertEqual(self.metadata()['stacks'], ['stock', 'engine', 'upstream'])
+        self.assertIn('not an untouched no-op', self.metadata()['warm_unchanged_policy'])
         self.assertEqual(len(self.metadata()['restored_copies']), 15)
         for rep in range(5):
             for phase in compare.PHASES + (('full-library',) if rep == 0 else ()):
