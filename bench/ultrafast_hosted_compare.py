@@ -82,7 +82,8 @@ def identities(args):
     if getattr(args, 'upstream', None):
         result['upstream'] = {'path': str(args.upstream),
                               'sha256': runtime.base.digest(args.upstream),
-                              'required_version': UPSTREAM_VERSION}
+                              'required_version': getattr(args, 'upstream_version', UPSTREAM_VERSION),
+                              'cli': getattr(args, 'upstream_cli', 'cargo')}
     return result
 
 
@@ -93,12 +94,15 @@ def tool_for(stack, args):
 
 def test_command(stack, args, arguments):
     return shared.command(tool_for(stack, args),
-                          'reference' if stack == 'upstream' else stack,
+                          'reference' if stack == 'upstream' and
+                          getattr(args, 'upstream_cli', 'cargo') == 'cargo' else stack,
                           arguments=arguments)
 
 
 def environment(root, stack, args):
     env = shared.environment(root, stack, args.toolchain, None)
+    if stack == 'upstream' and getattr(args, 'upstream_cli', 'cargo') == 'direct':
+        env['BLAZE_TOOLCHAINS'] = str(args.toolchain.parent)
     # No rustup selection, compiler wrappers, remote downloads of compiler artifacts,
     # automatic publishing, or inherited user Cargo configuration.
     env.update(RUSTC=str(args.toolchain / 'bin/rustc'),
@@ -115,6 +119,11 @@ def execute(args):
         raise ValueError('explicit --execute-host-workloads acknowledgement required')
     if args.samples < 5 or args.timeout <= 0:
         raise ValueError('at least five samples and positive timeout required')
+    upstream_version = getattr(args, 'upstream_version', UPSTREAM_VERSION)
+    if not upstream_version or '\n' in upstream_version or '\r' in upstream_version:
+        raise ValueError('upstream version must be one exact nonempty line')
+    if getattr(args, 'upstream_cli', 'cargo') not in ('cargo', 'direct'):
+        raise ValueError('upstream CLI must be cargo or direct')
     if (args.output.exists() or args.output.is_relative_to(args.source)
             or args.source.is_relative_to(args.output) or len(os.fsencode(args.output)) > 50):
         raise ValueError('output must be fresh, disjoint from source, and <=50 path bytes')
@@ -200,7 +209,7 @@ def execute(args):
                 row['version_text'] = text
                 row['accepted'] = runtime.base.succeeded(row) and bool(re.search(
                     r'^jr-engine experimental .*build resident-v1-[0-9a-f]{64}\)' if stack == 'engine'
-                    else '^' + re.escape(UPSTREAM_VERSION) + r'$' if stack == 'upstream'
+                    else r'\A' + re.escape(upstream_version) + r'$' if stack == 'upstream'
                     else r'^cargo ', text, re.M))
                 if stack == 'stock':
                     rust, version = invoke(stack, rep, 'rustc-version',
@@ -296,6 +305,10 @@ def main():
         parser.add_argument('--' + name, required=True, type=shared.absolute)
     parser.add_argument('--upstream', type=shared.absolute,
                         help='Optional official stable Blaze 0.20261027.0 absolute ELF path')
+    parser.add_argument('--upstream-version', default=UPSTREAM_VERSION,
+                        help='Exact required first version-output line, default official stable')
+    parser.add_argument('--upstream-cli', choices=('cargo', 'direct'), default='cargo',
+                        help='Upstream cargo subcommand or direct test command, default cargo')
     parser.add_argument('--host-label', required=True, help='Dedicated host identity/operator label')
     parser.add_argument('--execute-host-workloads', action='store_true')
     parser.add_argument('--samples', type=int, default=5)

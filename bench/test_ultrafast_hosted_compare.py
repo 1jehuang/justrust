@@ -133,6 +133,57 @@ class HostedTests(unittest.TestCase):
             if s == 'upstream' and p == 'version-after' else None
         self.assertEqual(self.run_harness(), 1)
 
+    def test_explicit_canary_direct_cli_and_toolchains(self):
+        self.enable_upstream()
+        self.args.upstream_version = 'blaze 0.20261105.4 (e930296 2026-11-05)'
+        self.args.upstream_cli = 'direct'
+        version_output = self.args.upstream_version + '\n' + str(self.args.upstream) + '\n'
+        self.fault = lambda s, p, r, t, x: (version_output, x) \
+            if s == 'upstream' and p in ('version', 'version-after') else None
+        self.assertEqual(self.run_harness(), 0)
+        for call in self.calls:
+            if call['stack'] == 'upstream':
+                self.assertEqual(call['env']['BLAZE_TOOLCHAINS'], str(self.args.toolchain.parent))
+                if call['phase'] in compare.PHASES + ('full-library',):
+                    self.assertEqual(call['cmd'][:2], [str(self.args.upstream), 'test'])
+                    self.assertNotIn('cargo', call['cmd'])
+            else:
+                self.assertNotIn('BLAZE_TOOLCHAINS', call['env'])
+        with patch.object(compare.shared, 'toolchain_identity', return_value={}):
+            identity = compare.identities(self.args)['upstream']
+        self.assertEqual(identity['required_version'], self.args.upstream_version)
+        self.assertEqual(identity['cli'], 'direct')
+
+    def test_canary_not_accepted_by_stable_default(self):
+        self.enable_upstream()
+        self.fault = lambda s, p, r, t, x: ('blaze 0.20261105.4 (e930296 2026-11-05)\n/path\n', x) \
+            if s == 'upstream' and p in ('version', 'version-after') else None
+        self.assertEqual(self.run_harness(), 1)
+
+    def test_upstream_version_must_be_exact_first_line(self):
+        self.enable_upstream()
+        self.fault = lambda s, p, r, t, x: ('unexpected banner\n' + t, x) \
+            if s == 'upstream' and p in ('version', 'version-after') else None
+        self.assertEqual(self.run_harness(), 1)
+
+    def test_upstream_version_line_cannot_be_prefix(self):
+        self.enable_upstream()
+        self.fault = lambda s, p, r, t, x: (t.replace(compare.UPSTREAM_VERSION,
+            compare.UPSTREAM_VERSION + ' unexpected'), x) \
+            if s == 'upstream' and p in ('version', 'version-after') else None
+        self.assertEqual(self.run_harness(), 1)
+
+    def test_upstream_version_and_cli_option_guards(self):
+        for version in ('', 'blaze\nother', 'blaze\rother'):
+            self.args.upstream_version = version
+            with self.assertRaisesRegex(ValueError, 'one exact nonempty line'):
+                self.run_harness()
+        self.args.upstream_version = compare.UPSTREAM_VERSION
+        self.args.upstream_cli = 'unknown'
+        with self.assertRaisesRegex(ValueError, 'cargo or direct'):
+            self.run_harness()
+        self.assertFalse(self.calls)
+
     def test_upstream_full_parity_mismatch_fails_closed(self):
         self.enable_upstream()
         self.fault = lambda s, p, r, t, x: (t.replace('other::test_000', 'other::wrong'), x) \
