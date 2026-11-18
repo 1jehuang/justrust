@@ -111,6 +111,51 @@ The cold-owner mode above **keeps its process alive** and is not the long-idle
 zero-worker-RAM tier. An actual terminate-and-restart disk tier is a separate
 acceptance path.
 
+## Actual terminated-worker disk tier
+
+The follow-up harness in `e997469ee` adds `frontend-disk`. After each completed
+request it closes and reaps that worker, proves its old PID is absent, and
+restarts a new worker against the same ordinary incremental directory. Each
+generation has separate raw logs. Wake time starts before process creation and
+ends after the compilation reply, so it includes dynamic loading and compiler
+startup, not merely the constructor's short `Popen` interval.
+
+The unchanged original receipt is authenticated in
+`semantic-worker-hosted-20261118-1314-disk-a-lossless`: 5,761,923 bytes,
+SHA256 `2be699c3b6300f9d568829fd718a65aa38da09673e0973ca31ab75080e00a398`.
+The preceding one-repetition diagnostic also passed and is retained as
+`semantic-worker-hosted-20261118-1314-disk-diagnostic-lossless`.
+Five balanced repetitions cover six modes and 300 compiler requests. All
+diagnostic, named-test, runtime nonce, typed-load and memory-tier gates passed.
+All 45 between-request disk transitions proved successful process exit, old
+PID absence, a different restart PID and identical durable artifact contents
+during terminated idle. Compiler and supplied source identities stayed exact.
+
+| Mode | Wake wall ms | Idle PSS KiB | Idle private KiB | Transition ms |
+| --- | ---: | ---: | ---: | ---: |
+| persistent control, archive off | 94.907 | 28702 | 9124 | 0.139 |
+| semantic hot | 100.149 | 38845 | 19232 | 0.140 |
+| semantic compressed | 100.536 | 33622 | 14120 | 1.914 |
+| semantic owners dropped, process alive | 100.581 | 33814 | 14332 | 0.105 |
+| worker terminated, disk-backed restart | 113.023 | 0 | 0 | 28.080 |
+
+These wake medians exclude the initial compilation and include restart startup
+for disk mode. They are not the aggregate compiler-only medians in the earlier
+table. The disk transition interval includes the harness's content-hash evidence
+collection as well as shutdown, so 28.080 ms is not an isolated production
+shutdown cost. The terminated worker has zero process memory by verified
+absence, not by reading `smaps` after exit. Its disk artifacts remain: median
+3,101,835 bytes across 101 files. Kernel file cache and disk storage are not zero.
+This measures restart with the host page cache uncontrolled, not a physical
+cold-storage read or a restored compiler heap.
+
+Within this six-mode run, compression saves 5,223 KiB PSS relative to hot.
+Shared-mapping apportionment differs from the five-mode run, so compare memory
+within a run rather than treating the PSS difference between runs as a change.
+The disk-backed worker wakes about 12.9 ms later than the hot semantic worker.
+This supports a hot/compressed/terminated lifecycle as a memory policy, but
+does not show a speed advantage over the faster archive-off persistent control.
+
 ## Interpretation and remaining boundary
 
 The semantic archive path genuinely reused query values, including Typeck and
@@ -127,3 +172,21 @@ without reusing stale spans, crate identities, diagnostics, build-script or
 proc-macro effects. The existing native archive decoder is a correctness path
 for restoring encoded values, not proof that those live input/identity problems
 have already been solved.
+
+The concrete next boundary is `resolver_for_lowering_raw` in
+`rustc_interface/src/passes.rs`. Its product is not an AST alone: it contains
+the expanded crate, `ResolverAstLowering` and `ResolverGlobalCtxt`, after crate
+store freeze. Reusing only the AST while rebuilding or mixing those resolver
+outputs cannot establish semantic equivalence. A replacement needs stable
+per-owner expanded/HIR inputs, complete macro/configuration/environment/file
+dependencies, replayable diagnostics, and green proofs bound to the retained
+type universe. The current `RevisionIdentity::authorize_reuse` deliberately
+rejects changed source/body revisions; removing that gate is not an
+implementation of owner-level invalidation.
+
+Accordingly, the hosted memory lifecycle is validated, but a general live
+post-expansion semantic engine is still unimplemented. No production-wide
+frontend-cache switch was enabled: both balanced runs favored the persistent
+archive-off control. Keep normal incremental restoration as the correctness
+path, and evaluate a stable-input semantic engine separately before replacing
+it or claiming a 10x edit-loop gain.
