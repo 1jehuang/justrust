@@ -1,4 +1,4 @@
-//! justrust: jr-cargo fork server (opt-in, `JUSTRUST_CARGO_DAEMON=1`).
+//! justrust: jr-cargo fork server (default on, `JUSTRUST_CARGO_DAEMON=0` opts out).
 //!
 //! A warm `cargo check`/`test` on a big workspace spends 150-250 ms before
 //! the first rustc starts: loading manifests and config, resolving, reading
@@ -30,7 +30,10 @@
 //! daemon child skips cargo's once-a-day auto-gc of `CARGO_HOME`, and the
 //! config environment snapshot keeps the server's values for the volatile
 //! variables (justrust run ids; they never reach cargo's build decisions).
-//! A server exits after 15 minutes without requests.
+//! A server exits after 15 minutes without requests, when it is not among
+//! the [`MAX_PARKED`] most recently used servers (socket mtime, touched per
+//! request), or when `MemAvailable` drops below [`MEM_FLOOR_KB`]. Each
+//! parked server costs ~230 MB RSS (FINDINGS 61).
 
 #![allow(
     clippy::disallowed_methods,
@@ -55,6 +58,9 @@ const ENABLE_ENV: &str = "JUSTRUST_CARGO_DAEMON";
 const SERVE_ENV: &str = "JUSTRUST_CARGO_SERVE";
 const PROTOCOL: u32 = 1;
 const IDLE: Duration = Duration::from_secs(15 * 60);
+const TICK: Duration = Duration::from_secs(20);
+const MAX_PARKED: usize = 6;
+const MEM_FLOOR_KB: u64 = 2 * 1024 * 1024;
 
 /// Variables that identify the caller (agent, terminal, justrust run), not
 /// the build. Excluded from the key; the child still gets the client's
@@ -155,7 +161,7 @@ fn subcommand(args: &[OsString]) -> Option<&str> {
 
 /// The socket for this invocation, if it may use the daemon.
 fn eligible_socket() -> Option<PathBuf> {
-    if std::env::var_os(ENABLE_ENV).is_none_or(|v| v != "1")
+    if std::env::var_os(ENABLE_ENV).is_some_and(|v| v == "0")
         || std::env::var_os(SERVE_ENV).is_some()
     {
         return None;
@@ -477,10 +483,14 @@ pub fn park(bcx: &BuildContext<'_, '_>, has_logger: bool) {
             events: libc::POLLIN,
             revents: 0,
         };
-        let n = unsafe { libc::poll(&mut pfd, 1, IDLE.as_millis() as i32) };
+        let n = unsafe { libc::poll(&mut pfd, 1, TICK.as_millis() as i32) };
         if n == 0 {
-            shutdown(sock, "idle");
+            if let Some(why) = evict_reason(sock) {
+                shutdown(sock, why);
+            }
+            continue;
         }
+        touch(sock);
         let Ok((mut conn, _)) = listener.accept() else {
             continue;
         };
@@ -522,6 +532,38 @@ fn only_idle_threads() -> bool {
             || std::fs::read_to_string(e.path().join("comm"))
                 .is_ok_and(|c| c.trim() == "futures-timer")
     })
+}
+
+fn touch(sock: &Path) {
+    // A socket cannot be opened, so set its mtime by path.
+    if let Ok(c) = std::ffi::CString::new(sock.as_os_str().as_encoded_bytes()) {
+        unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), std::ptr::null(), 0) };
+    }
+}
+
+fn mem_available_kb() -> Option<u64> {
+    let s = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let l = s.lines().find(|l| l.starts_with("MemAvailable:"))?;
+    l.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// Why this parked server should exit now, if at all.
+fn evict_reason(sock: &Path) -> Option<&'static str> {
+    let mine = std::fs::symlink_metadata(sock).ok()?.modified().ok()?;
+    if mine.elapsed().unwrap_or_default() >= IDLE {
+        return Some("idle");
+    }
+    if mem_available_kb().is_some_and(|kb| kb < MEM_FLOOR_KB) {
+        return Some("low memory");
+    }
+    let newer = std::fs::read_dir(sock.parent()?)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path() != sock && e.path().extension().is_some_and(|x| x == "sock"))
+        .filter_map(|e| e.metadata().ok()?.modified().ok())
+        .filter(|m| *m > mine)
+        .count();
+    (newer >= MAX_PARKED).then_some("lru cap")
 }
 
 fn shutdown(sock: &Path, why: &str) -> ! {

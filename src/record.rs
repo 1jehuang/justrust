@@ -1520,7 +1520,7 @@ fn sampled_tree_cpu_delta(
     delta
 }
 
-/// A jr-cargo daemon child (`JUSTRUST_CARGO_DAEMON=1`) runs the build
+/// A jr-cargo daemon child (default on, `JUSTRUST_CARGO_DAEMON=0` opts out) runs the build
 /// outside cargo's process tree and writes its pid here.
 const DAEMON_PID_FILE: &str = "cargo-daemon.pid";
 
