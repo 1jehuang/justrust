@@ -22,9 +22,14 @@ import stable_resident as shared
 import stable_resident_ast as ast
 
 MODES = ('fresh', 'incremental', 'disk-ast', 'live-ast')
-DISK_ENV = ('JUSTRUST_RUSTC_DISK_AST', 'JUSTRUST_RUSTC_DISK_AST_STATS')
+DISK_ENV = ('JUSTRUST_RUSTC_DISK_AST', 'JUSTRUST_RUSTC_DISK_AST_STATS',
+            'JUSTRUST_RUSTC_DISK_AST_PHASES')
 HOST_MARKER = Path('/etc/justrust-hosted')
 HOST_SHARE = Path('/run/pool/share')
+# Each generated arithmetic function visits 21 admission nodes. Root is 23 nodes:
+# 23 + 193*21 = 4076 <=4096, with 195 root items <=256. 194 exceeds node budget.
+MAX_EXTRA_ITEMS = 193
+COMPARISON_VERSION = 1
 
 
 def host_guard(execute_host_workloads):
@@ -94,8 +99,8 @@ def ordered_modes(sample, case):
 
 
 def validate_items(items):
-    if type(items) is not int or not 0 <= items <= 128:
-        raise ValueError('--items must be an integer from 0 through 128')
+    if type(items) is not int or not 0 <= items <= MAX_EXTRA_ITEMS:
+        raise ValueError(f'--items must be an integer from 0 through {MAX_EXTRA_ITEMS}')
 
 
 def extra_items(items):
@@ -127,6 +132,29 @@ def events_since(path, offset, pid):
             raise AssertionError('invalid disk telemetry event')
         if type(event.get('pid')) is not int or event['pid'] != pid:
             raise AssertionError('disk telemetry PID does not match fresh compiler process')
+        events.append(event)
+    return events, len(data)
+
+
+def phases_since(path, offset, pid):
+    """Separate optional native timing stream. Never used as genuine-hit evidence."""
+    if not path.exists():
+        return [], offset
+    data = path.read_bytes()
+    if len(data) < offset:
+        raise AssertionError('append-only phase telemetry was truncated')
+    events = []
+    for line in data[offset:].splitlines():
+        event = json.loads(line)
+        if not isinstance(event, dict) or event.get('event') != 'phase':
+            raise AssertionError('invalid phase telemetry event')
+        if type(event.get('pid')) is not int or event['pid'] != pid:
+            raise AssertionError('phase telemetry PID does not match fresh compiler process')
+        if not isinstance(event.get('phase'), str) or not event['phase']:
+            raise AssertionError('phase telemetry requires a phase name')
+        for key in ('elapsed_ns', 'bytes'):
+            if type(event.get(key)) is not int or event[key] < 0:
+                raise AssertionError('phase telemetry requires nonnegative integer ' + key)
         events.append(event)
     return events, len(data)
 
@@ -183,7 +211,8 @@ def verify_consumer(compiler, root, timeout, a, b):
         return ast.execute(compiler, root, '0', timeout, a, b)
 
 
-def capture_sample(compiler, root, sample, timeout, items=64):
+def capture_sample(compiler, root, sample, timeout, items=64, phase_telemetry=False,
+                   raw_rustc_phases=False):
     root.mkdir(mode=0o700)
     result = dict(sample=sample, items=items, verdict='incomplete', observations=[], failures=[])
     worker = None
@@ -191,13 +220,14 @@ def capture_sample(compiler, root, sample, timeout, items=64):
         for name in ('incremental', 'disk-incremental', 'disk-cache'):
             (root / name).mkdir(mode=0o700)
         stats_path = root / 'disk-events.jsonl'
+        phases_path = root / 'disk-phases.jsonl'
         (root / 'consumer.rs').write_text(ast.consumer_source())
         setup = time.monotonic()
         with no_inherited_disk():
             worker = ast.AstResident(compiler, root, '1', timeout)
         result.update(live_pid=worker.process.pid,
                       worker_startup_seconds=time.monotonic() - setup)
-        previous, offset = None, 0
+        previous, offset, phase_offset = None, 0, 0
         seen_pids, seen_nonces = set(), set()
         for index, (name, source, helper, a, b, kind) in enumerate(cases(items)):
             row = dict(name=name, kind=kind, a=a, b=b, records={},
@@ -217,6 +247,8 @@ def capture_sample(compiler, root, sample, timeout, items=64):
                 if mode == 'disk-ast':
                     env.update(JUSTRUST_RUSTC_DISK_AST=str(root / 'disk-cache'),
                                JUSTRUST_RUSTC_DISK_AST_STATS=str(stats_path))
+                    if phase_telemetry:
+                        env['JUSTRUST_RUSTC_DISK_AST_PHASES'] = str(phases_path)
                 record = row['records'][mode] = dict(argv=argv)
                 record['compile'] = (worker.compile(argv) if mode == 'live-ast' else
                                      run([compiler, *argv], timeout, root, env))
@@ -225,6 +257,9 @@ def capture_sample(compiler, root, sample, timeout, items=64):
                 if mode == 'disk-ast':
                     record['disk_events'], offset = events_since(stats_path, offset,
                                                                   record['compile']['pid'])
+                    if phase_telemetry:
+                        record['phase_events'], phase_offset = phases_since(
+                            phases_path, phase_offset, record['compile']['pid'])
                 if record['compile']['status'] == 0:
                     record['artifact_sha256'] = shared.digest(artifact)
                     record['runtime'] = verify_consumer(compiler, root, timeout, a, b)
@@ -239,6 +274,10 @@ def capture_sample(compiler, root, sample, timeout, items=64):
         result['controls'] = []
         corruption_controls(compiler, root, timeout, stats_path, offset,
                             seen_pids, seen_nonces, result['controls'])
+        if raw_rustc_phases:
+            result['raw_rustc_phases'] = []
+            raw_phase_attribution(compiler, root, timeout, seen_pids, seen_nonces,
+                                  result['raw_rustc_phases'])
         result['verdict'] = 'failed' if result['failures'] else 'passed'
     except BaseException as error:
         result.update(verdict='failed', error=f'{type(error).__name__}: {error}')
@@ -250,6 +289,36 @@ def capture_sample(compiler, root, sample, timeout, items=64):
                 result.update(verdict='failed', shutdown_error=str(error))
         write_receipt(root / 'receipt.json', result)
     return result
+
+
+def raw_phase_attribution(compiler, root, timeout, seen_pids, seen_nonces, records):
+    """Extra fresh processes after timing/gates. Retain raw -Ztime-passes stderr.
+
+    These diagnostic-only invocations are never compared for exact diagnostics,
+    never contribute timings/hit evidence, and never replace the ordinary gates.
+    """
+    for mode in ('fresh', 'disk-ast'):
+        (root / 'libast_fixture.rlib').unlink(missing_ok=True)
+        argv, env = ast.arguments(root) + ['-Ztime-passes'], environment()
+        if mode == 'disk-ast':
+            argv += ['-Cincremental=' + str(root / 'disk-incremental')]
+            env['JUSTRUST_RUSTC_DISK_AST'] = str(root / 'disk-cache')
+        record = dict(mode=mode, compile=run([compiler, *argv], timeout, root, env))
+        records.append(record)
+        write_receipt(root / 'raw-rustc-phases.json', records)
+        compiled = record['compile']
+        if compiled['pid'] in seen_pids:
+            raise AssertionError('raw attribution compiler PID reused')
+        seen_pids.add(compiled['pid'])
+        if compiled['timed_out'] or compiled['status'] != 0:
+            raise AssertionError('raw rustc phase attribution failed')
+        record['runtime'] = verify_consumer(compiler, root, timeout, 19, 23)
+        ast.validate_runtime(record['runtime'], 19, 23)
+        nonce = record['runtime']['nonce']
+        if nonce in seen_nonces:
+            raise AssertionError('raw attribution consumer nonce reused')
+        seen_nonces.add(nonce)
+        write_receipt(root / 'raw-rustc-phases.json', records)
 
 
 def corruption_controls(compiler, root, timeout, stats_path, offset, seen_pids,
@@ -310,7 +379,117 @@ def summaries(samples, items=64):
             for index, (name, *_rest) in enumerate(cases(items)) if name != 'initial'}
 
 
-def capture(compiler, output, samples=5, timeout=180, execute_host_workloads=False, items=64):
+def comparison_manifest(items, samples, timeout, require_phase_telemetry=False,
+                        raw_rustc_phases=False):
+    """Exact workload contract, independent of output directories and compiler bytes."""
+    return dict(version=COMPARISON_VERSION, items=items, samples=samples, timeout=timeout,
+                modes=list(MODES), require_phase_telemetry=require_phase_telemetry,
+                raw_rustc_phases=raw_rustc_phases,
+                fixture_sha256=hashlib.sha256(json.dumps(cases(items)).encode()).hexdigest(),
+                ordering='latin-alternating-v1', timing='compiler-command-only-v1')
+
+
+def compare_reports(before, after):
+    """Strict paired summary, never infers a speedup or accepts partial receipts.
+
+    Compiler identities may differ across runs, but must be frozen within each.
+    Host, harness, workload, sample count and instrumentation must match exactly.
+    Raw samples, not saved medians, are the source of the returned timings.
+    """
+    for report in (before, after):
+        if report.get('verdict') != 'passed':
+            raise AssertionError('comparison requires passed correctness gates')
+        manifest = report.get('comparison')
+        if not isinstance(manifest, dict) or manifest.get('version') != COMPARISON_VERSION:
+            raise AssertionError('missing supported comparison manifest')
+        if not report.get('compiler_before') or report['compiler_before'] != report.get('compiler_after'):
+            raise AssertionError('comparison requires frozen compiler identity')
+        samples = report['samples']
+        expected = comparison_manifest(report['items'], len(samples), manifest['timeout'],
+                                       manifest['require_phase_telemetry'],
+                                       manifest['raw_rustc_phases'])
+        if manifest != expected:
+            raise AssertionError('comparison manifest does not match workload')
+        names = [case[0] for case in cases(report['items'])]
+        for index, sample in enumerate(samples):
+            if sample.get('sample') != index or sample.get('items') != report['items']:
+                raise AssertionError('sample identity does not match workload')
+            if [r['name'] for r in sample['observations']] != names:
+                raise AssertionError('sample case sequence does not match workload')
+            if [c.get('verdict') for c in sample.get('controls', [])] != ['passed', 'passed']:
+                raise AssertionError('comparison requires corruption controls')
+            previous, pids, nonces = None, set(), set()
+            for case_index, row in enumerate(sample['observations']):
+                name, source, helper, a, b, kind = cases(report['items'])[case_index]
+                if (row['name'], row['source'], row['helper'], row['a'], row['b'], row['kind']) != (name, source, helper, a, b, kind):
+                    raise AssertionError('comparison requires exact fixture content')
+                if list(row['order']) != list(ordered_modes(index, case_index)):
+                    raise AssertionError('comparison requires exact execution ordering')
+                if set(row['records']) != set(MODES):
+                    raise AssertionError('comparison requires every mode')
+                for record in row['records'].values():
+                    value = record['compile']['elapsed_seconds']
+                    if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+                        raise AssertionError('comparison requires finite positive timings')
+                previous = gate_row(row, previous, sample['live_pid'], pids, nonces)
+            for action, control in zip(('corrupt', 'truncate'), sample['controls']):
+                if control.get('action') != action or not control.get('damaged'):
+                    raise AssertionError('comparison requires genuine corruption controls')
+                if set(control['records']) != {'fresh', 'disk-ast'}:
+                    raise AssertionError('comparison requires complete corruption controls')
+                for record in control['records'].values():
+                    compiled = record['compile']
+                    pid = compiled.get('pid')
+                    if type(pid) is not int or pid <= 0 or pid in pids or pid == sample['live_pid']:
+                        raise AssertionError('control compiler PID reused or invalid')
+                    pids.add(pid)
+                    if compiled.get('timed_out') or compiled['status'] != 0:
+                        raise AssertionError('damaged snapshot failed to compile successfully')
+                    ast.validate_runtime(record['runtime'], 19, 23)
+                    nonce = record['runtime']['nonce']
+                    if nonce in nonces:
+                        raise AssertionError('control consumer nonce reused')
+                    nonces.add(nonce)
+                fresh = control['records']['fresh']['compile']
+                disk = control['records']['disk-ast']
+                if shared.observable(fresh) != shared.observable(disk['compile']):
+                    raise AssertionError('damaged snapshot diagnostics/status differ from fresh')
+                events = disk['disk_events']
+                if (not any(e['event'] in ('reject', 'miss') for e in events)
+                        or any(e['event'] == 'hit' for e in events)
+                        or any(e.get('pid') != disk['compile']['pid'] for e in events)):
+                    raise AssertionError('invalid corruption fail-open telemetry')
+            if manifest['raw_rustc_phases']:
+                raw = sample.get('raw_rustc_phases', [])
+                if [r.get('mode') for r in raw] != ['fresh', 'disk-ast']:
+                    raise AssertionError('missing raw rustc attribution records')
+                for record in raw:
+                    compiled = record['compile']
+                    if compiled['status'] != 0 or compiled.get('timed_out') or compiled['pid'] in pids:
+                        raise AssertionError('invalid raw rustc attribution process')
+                    pids.add(compiled['pid'])
+                    ast.validate_runtime(record['runtime'], 19, 23)
+                    if record['runtime']['nonce'] in nonces:
+                        raise AssertionError('raw attribution consumer nonce reused')
+                    nonces.add(record['runtime']['nonce'])
+        computed = summaries(samples, report['items'])
+        if report.get('median_compiler_seconds') != computed:
+            raise AssertionError('saved medians disagree with raw samples')
+    for key in ('schema', 'host', 'harness_sha256', 'comparison', 'fixture_generator',
+                'extra_items_sha256', 'timing'):
+        if key not in before or before[key] != after.get(key):
+            raise AssertionError('incomparable reports: ' + key)
+    return dict(verdict='comparable', comparison=before['comparison'],
+                compiler_before=before['compiler_before'], compiler_after=after['compiler_before'],
+                cases={name: {mode: dict(before_seconds=value,
+                           after_seconds=after['median_compiler_seconds'][name][mode],
+                           delta_seconds=after['median_compiler_seconds'][name][mode] - value)
+                              for mode, value in modes.items()}
+                       for name, modes in before['median_compiler_seconds'].items()})
+
+
+def capture(compiler, output, samples=5, timeout=180, execute_host_workloads=False, items=64,
+            phase_telemetry=False, raw_rustc_phases=False):
     validate_items(items)
     host = host_guard(execute_host_workloads)
     compiler, output = Path(compiler), Path(output)
@@ -321,6 +500,10 @@ def capture(compiler, output, samples=5, timeout=180, execute_host_workloads=Fal
     output = output.absolute()
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     report = dict(schema=1, verdict='incomplete', host=host, samples=[], items=items,
+                  comparison=comparison_manifest(items, samples, timeout, phase_telemetry,
+                                                 raw_rustc_phases),
+                  phase_telemetry=phase_telemetry,
+                  raw_rustc_phases=raw_rustc_phases,
                   fixture_generator='clean-exported-u32-functions-v1',
                   extra_items_sha256=hashlib.sha256(extra_items(items).encode()).hexdigest(),
                   harness_sha256=shared.digest(Path(__file__)),
@@ -330,7 +513,9 @@ def capture(compiler, output, samples=5, timeout=180, execute_host_workloads=Fal
         with no_inherited_disk():
             report['compiler_before'] = shared.identity(compiler)
         for sample in range(samples):
-            report['samples'].append(capture_sample(compiler, output / f'sample-{sample:03d}', sample, timeout, items))
+            report['samples'].append(capture_sample(compiler, output / f'sample-{sample:03d}',
+                                                   sample, timeout, items, phase_telemetry,
+                                                   raw_rustc_phases))
             write_receipt(output / 'receipt.json', report)
         with no_inherited_disk():
             report['compiler_after'] = shared.identity(compiler)
@@ -356,9 +541,13 @@ def main(argv=None):
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--samples', type=int, default=5)
     parser.add_argument('--items', type=int, default=64,
-                        help='extra clean exported primitive functions, 0..128 (default: 64)')
+                        help='extra clean exported primitive functions, 0..193 (native node/item budgets, default: 64)')
     parser.add_argument('--timeout', type=float, default=180)
     parser.add_argument('--execute-host-workloads', action='store_true')
+    parser.add_argument('--phase-telemetry', action='store_true',
+                        help='opt-in native disk phase JSONL, adds measured instrumentation overhead')
+    parser.add_argument('--raw-rustc-phases', action='store_true',
+                        help='extra untimed fresh/disk -Ztime-passes processes after all timing and correctness gates')
     args = parser.parse_args(argv)
     result = capture(**vars(args))
     print(json.dumps(dict(verdict=result['verdict'], receipt=str(args.output / 'receipt.json'))))

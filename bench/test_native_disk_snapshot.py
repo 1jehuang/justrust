@@ -21,11 +21,12 @@ def observation(status=0, pid=100):
 
 class Model:
     """Deliberately small process/cache model, not native acceptance evidence."""
-    def __init__(self, missing_hits=False, malformed=False):
+    def __init__(self, missing_hits=False, malformed=False, missing_phases=False):
         self.pids = itertools.count(1000)
         self.nonces = itertools.count()
         self.calls = []
         self.missing_hits, self.malformed = missing_hits, malformed
+        self.missing_phases = missing_phases
         self.workers = []
 
     def compile(self, root, pid):
@@ -48,7 +49,6 @@ class Model:
                                ('pending.ast.tmp', b'temporary sentinel')):
                 if not (cache / name).exists():
                     (cache / name).write_bytes(data)
-            stats = Path(env[subject.DISK_ENV[1]])
             if entry.exists() and entry.read_bytes() == source:
                 events = ['miss'] if self.missing_hits else ['hit']
             else:
@@ -56,12 +56,25 @@ class Model:
                 if '& 255 ) }' not in source.decode():
                     entry.write_bytes(source)
                     events.append('store')
-            with stats.open('a') as stream:
-                if self.malformed:
-                    stream.write('not JSON\n')
-                else:
-                    for event in events:
-                        stream.write(json.dumps(dict(event=event, pid=pid)) + '\n')
+            if subject.DISK_ENV[1] in env:
+                with Path(env[subject.DISK_ENV[1]]).open('a') as stream:
+                    if self.malformed:
+                        stream.write('not JSON\n')
+                    else:
+                        for event in events:
+                            stream.write(json.dumps(dict(event=event, pid=pid)) + '\n')
+            if subject.DISK_ENV[2] in env and not self.missing_phases:
+                phases = ['key', 'open']
+                if 'hit' in events:
+                    phases += ['read', 'envelope', 'decode', 'admit']
+                if 'store' in events:
+                    phases += ['store_encode', 'store_write']
+                with Path(env[subject.DISK_ENV[2]]).open('a') as stream:
+                    for phase in phases:
+                        stream.write(json.dumps(dict(event='phase', pid=pid, phase=phase,
+                                                     elapsed_ns=42, bytes=len(source))) + '\n')
+        if '-Ztime-passes' in command:
+            result['stderr_b64'] = subject.shared.encoded(b'time: 0.000 mock-phase\n')
         return result
 
     def consumer(self, compiler, root, timeout, a, b):
@@ -240,7 +253,7 @@ class HarnessTests(unittest.TestCase):
                 subject.host_guard(True)
 
     def test_item_bounds_and_clean_generation(self):
-        for items in (-1, 129, True, 1.5):
+        for items in (-1, 194, 254, True, 1.5):
             with self.assertRaisesRegex(ValueError, '--items'):
                 subject.cases(items)
             with mock.patch.object(subject, 'host_guard') as guard:
@@ -248,7 +261,7 @@ class HarnessTests(unittest.TestCase):
                     subject.capture(self.compiler, self.root / 'never', items=items)
                 guard.assert_not_called()
         self.assertEqual(subject.extra_items(0), '')
-        for items in (0, 1, 64, 128):
+        for items in (0, 1, 64, 128, 192, 193):
             fixture = subject.cases(items)
             extra = subject.extra_items(items)
             self.assertEqual(extra.count('pub fn item_'), items)
@@ -277,6 +290,77 @@ class HarnessTests(unittest.TestCase):
         for index in range(4):
             self.assertEqual({order[index] for order in positions}, set(subject.MODES))
         self.assertEqual(subject.ordered_modes(4, 0), tuple(reversed(subject.MODES)))
+
+    def test_largest_supported_workload_passes_all_existing_gates(self):
+        report = self.capture(Model(), items=193)
+        self.assertEqual(report['verdict'], 'passed', report)
+        self.assertEqual(report['samples'][0]['observations'][0]['source'].count('pub fn'), 194)
+
+    def test_strict_comparison_from_raw_samples(self):
+        before = self.capture(Model())
+        after = copy.deepcopy(before)
+        after['compiler_before'] = after['compiler_after'] = {'compiler': 'candidate'}
+        result = subject.compare_reports(before, after)
+        self.assertEqual(result['verdict'], 'comparable')
+        self.assertNotIn('initial', result['cases'])
+        self.assertEqual(result['cases']['unchanged']['disk-ast']['delta_seconds'], 0)
+
+    def test_raw_phase_attribution_is_separate_and_preserves_stderr(self):
+        model = Model()
+        report = self.capture(model, raw_rustc_phases=True)
+        self.assertEqual(report['verdict'], 'passed', report)
+        for sample in report['samples']:
+            raw = sample['raw_rustc_phases']
+            self.assertEqual([r['mode'] for r in raw], ['fresh', 'disk-ast'])
+            for record in raw:
+                self.assertEqual(record['compile']['stderr_b64'],
+                                 subject.shared.encoded(b'time: 0.000 mock-phase\n'))
+            for row in sample['observations']:
+                self.assertTrue(all('-Ztime-passes' not in r['argv'] for r in row['records'].values()))
+        self.assertEqual(subject.compare_reports(report, copy.deepcopy(report))['verdict'], 'comparable')
+
+    def test_optional_phase_telemetry_collection(self):
+        report = self.capture(Model(), phase_telemetry=True)
+        self.assertEqual(report['verdict'], 'passed', report)
+        disk = report['samples'][0]['observations'][1]['records']['disk-ast']
+        self.assertEqual({p['phase'] for p in disk['phase_events']},
+                         {'key', 'open', 'read', 'envelope', 'decode', 'admit'})
+
+    def test_phase_stream_is_strict_and_pid_bound(self):
+        path = self.root / 'phases'
+        valid = dict(event='phase', pid=12, phase='decode', elapsed_ns=0, bytes=0)
+        path.write_text(json.dumps(valid) + '\n')
+        events, offset = subject.phases_since(path, 0, 12)
+        self.assertEqual(events, [valid])
+        for replacement in ({'pid': 13}, {'pid': True}, {'phase': ''}, {'event': 'hit'},
+                            {'elapsed_ns': -1}, {'elapsed_ns': True}, {'bytes': 1.5}):
+            path.write_text(json.dumps(dict(valid, **replacement)) + '\n')
+            with self.subTest(replacement=replacement), self.assertRaises(AssertionError):
+                subject.phases_since(path, 0, 12)
+        path.write_text('')
+        with self.assertRaisesRegex(AssertionError, 'truncated'):
+            subject.phases_since(path, offset, 12)
+
+    def test_comparison_rejects_incompatible_or_incomplete_evidence(self):
+        before = self.capture(Model())
+        mutations = [
+            lambda r: r.update(verdict='failed'),
+            lambda r: r.update(host={'host': 'other'}),
+            lambda r: r.update(harness_sha256='different'),
+            lambda r: r.update(compiler_after={'compiler': 'changed'}),
+            lambda r: r['comparison'].update(timeout=181),
+            lambda r: r['comparison'].update(samples=3),
+            lambda r: r['comparison'].update(fixture_sha256='different'),
+            lambda r: r['samples'][0].update(controls=[]),
+            lambda r: r['samples'][0]['observations'].pop(),
+            lambda r: r['median_compiler_seconds']['unchanged'].update(fresh=999),
+            lambda r: r['samples'][0]['observations'][0]['records']['fresh']['compile'].update(elapsed_seconds=float('nan')),
+        ]
+        for mutate in mutations:
+            after = copy.deepcopy(before)
+            mutate(after)
+            with self.subTest(mutate=mutate), self.assertRaises(AssertionError):
+                subject.compare_reports(before, after)
 
     def test_fixture_clean_and_helper_edit_preserves_root(self):
         cases = subject.cases()
