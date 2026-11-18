@@ -28,6 +28,8 @@ class ProjectTests(unittest.TestCase):
             self.assertEqual(env['JUSTRUST_TOOLCHAIN'], 'system')
             self.assertEqual(env['RUSTC'], '/frozen/rustc')
             self.assertEqual(env['RUSTFLAGS'], '')
+            self.assertNotIn('JUSTRUST_DEPCACHE', env)
+            self.assertNotIn('JUSTRUST_LOCALCACHE', env)
             self.assertEqual(env['CARGO_INCREMENTAL'], '1')
             concrete = h.environment(Path(temp), Path('/frozen/rustc'), 'off', cargo=Path('/toolchain/bin/cargo'))
             self.assertEqual(concrete['JUSTRUST_REAL_CARGO'], '/toolchain/bin/cargo')

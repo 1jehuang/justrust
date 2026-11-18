@@ -38,7 +38,7 @@ def environment(root, compiler, mode, raw=False, cargo=None):
                JUSTRUST_TOOLCHAIN='system', RUSTC=str(compiler),
                JUSTRUST_NO_UPDATE='1', JUSTRUST_AUTO_UPDATE='0',
                JUSTRUST_NO_TELEMETRY='1', JUSTRUST_REMOTE='off',
-               JUSTRUST_DEPCACHE='0', JUSTRUST_LOCALCACHE='0', JUSTRUST_PASSES='0',
+               JUSTRUST_PASSES='0',
                JUSTRUST_LOCAL_REASON=REASON, CARGO_INCREMENTAL='1',
                RUSTFLAGS='-Ztime-passes' if raw else '',
                JUSTRUST_RUSTC_DISK_AST_STATS=str(root / 'stats.jsonl'),
