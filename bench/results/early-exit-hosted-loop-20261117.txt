@@ -1,0 +1,26 @@
+{"round": 0, "mode": "default", "file": "src/paths.rs", "err_wall": 0.9, "err_code": 101, "early": true, "fix_wall": 3.54, "fix_code": 0}
+{"round": 0, "mode": "opt_out", "file": "src/early.rs", "err_wall": 3.18, "err_code": 101, "early": false, "fix_wall": 10.2, "fix_code": 0}
+{"round": 1, "mode": "default", "file": "src/procfs.rs", "err_wall": 1.42, "err_code": 101, "early": true, "fix_wall": 3.45, "fix_code": 0}
+{"round": 1, "mode": "opt_out", "file": "src/slots.rs", "err_wall": 3.17, "err_code": 101, "early": false, "fix_wall": 3.39, "fix_code": 0}
+{"round": 2, "mode": "default", "file": "src/procfs.rs", "err_wall": 1.19, "err_code": 101, "early": true, "fix_wall": 6.57, "fix_code": 0}
+{"round": 2, "mode": "opt_out", "file": "src/update.rs", "err_wall": 3.16, "err_code": 101, "early": false, "fix_wall": 10.51, "fix_code": 0}
+{"round": 3, "mode": "default", "file": "src/update.rs", "err_wall": 1.03, "err_code": 101, "early": true, "fix_wall": 3.26, "fix_code": 0}
+{"round": 3, "mode": "opt_out", "file": "src/update.rs", "err_wall": 3.37, "err_code": 101, "early": false, "fix_wall": 3.29, "fix_code": 0}
+{"round": 4, "mode": "default", "file": "src/update.rs", "err_wall": 1.0, "err_code": 101, "early": true, "fix_wall": 3.3, "fix_code": 0}
+{"round": 4, "mode": "opt_out", "file": "src/paths.rs", "err_wall": 3.17, "err_code": 101, "early": false, "fix_wall": 3.32, "fix_code": 0}
+{"round": 5, "mode": "default", "file": "src/procfs.rs", "err_wall": 0.91, "err_code": 101, "early": true, "fix_wall": 3.35, "fix_code": 0}
+{"round": 5, "mode": "opt_out", "file": "src/update.rs", "err_wall": 7.49, "err_code": 101, "early": false, "fix_wall": 3.21, "fix_code": 0}
+{"round": 6, "mode": "default", "file": "src/procfs.rs", "err_wall": 0.95, "err_code": 101, "early": true, "fix_wall": 3.5, "fix_code": 0}
+{"round": 6, "mode": "opt_out", "file": "src/update.rs", "err_wall": 3.16, "err_code": 101, "early": false, "fix_wall": 3.22, "fix_code": 0}
+{"round": 7, "mode": "default", "file": "src/update.rs", "err_wall": 0.96, "err_code": 101, "early": true, "fix_wall": 3.31, "fix_code": 0}
+{"round": 7, "mode": "opt_out", "file": "src/early.rs", "err_wall": 3.19, "err_code": 101, "early": false, "fix_wall": 3.27, "fix_code": 0}
+{"round": 8, "mode": "default", "file": "src/procfs.rs", "err_wall": 1.29, "err_code": 101, "early": true, "fix_wall": 3.66, "fix_code": 0}
+{"round": 8, "mode": "opt_out", "file": "src/update.rs", "err_wall": 4.15, "err_code": 101, "early": false, "fix_wall": 3.26, "fix_code": 0}
+{"round": 9, "mode": "default", "file": "src/slots.rs", "err_wall": 1.25, "err_code": 101, "early": true, "fix_wall": 3.54, "fix_code": 0}
+{"round": 9, "mode": "opt_out", "file": "src/paths.rs", "err_wall": 3.24, "err_code": 101, "early": false, "fix_wall": 3.22, "fix_code": 0}
+{"round": 10, "mode": "default", "file": "src/early.rs", "err_wall": 1.26, "err_code": 101, "early": true, "fix_wall": 3.36, "fix_code": 0}
+{"round": 10, "mode": "opt_out", "file": "src/procfs.rs", "err_wall": 3.27, "err_code": 101, "early": false, "fix_wall": 3.37, "fix_code": 0}
+{"round": 11, "mode": "default", "file": "src/slots.rs", "err_wall": 1.4, "err_code": 101, "early": true, "fix_wall": 3.39, "fix_code": 0}
+{"round": 11, "mode": "opt_out", "file": "src/procfs.rs", "err_wall": 3.16, "err_code": 101, "early": false, "fix_wall": 3.29, "fix_code": 0}
+default error-run median 1.19 s; early 12 / 12
+opt_out error-run median 3.19 s; early 0 / 12

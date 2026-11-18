@@ -92,3 +92,28 @@ Not covered and still to measure on a VM before turning it on: rust-analyzer
 latency on c7i (the laptop numbers are from an Ultra X9 388H), memory with
 several agents' worktrees of one repo (each worktree is its own workspace
 root, so each gets its own 5 GB; share by path remapping later).
+
+## Implemented (2026-11-17)
+
+Client: `buildd` serves `ON_AGENT` runs. `remote_agent::hosted_early_env`
+sets `JUSTRUST_EARLY=auto`, `JUSTRUST_EARLY_EXIT=1`,
+`JUSTRUST_EARLY_IDLE_SECS=1800` unless the client sent its own value or
+the VM has `EARLY_EXIT_DEFAULT=0`. Only `JUSTRUST_EARLY_EXIT=0` is
+forwarded from the client (opt-out, never opt-in). The count cap is
+`daemon_cap` (8 at 64 GB, scaled down to machine memory, 2 on today's
+28 GB hosts). Pressure eviction runs on hosted daemons every 10 s below
+12 GB available, least recently queried (`used` mtime) first. Liveness comes
+from the daemon flock, so probing does not reset idle clocks. rust-analyzer
+falls back from a `jr-` toolchain (no RA published) to the newest official
+installed one.
+
+Cloud: `EARLY_EXIT_DEFAULT=0` worker env writes the kill switch into new
+hosts' `/etc/environment`. Bootstrap enables linger for the build user and
+writes `~/.justrust/early/launcher.json` = systemd-run --user --scope
+MemoryMax=6G. Existing hosts have neither (no linger: `systemd-run --user`
+fails there), so they need a maintenance pass before the launcher applies.
+
+Measured (bench/early_exit/hosted_loop.py, justrust lib copy, hosted
+16 vCPU/28 GB, dev agent): E0308 edit then `check --lib`, 12 rounds each:
+default 1.19 s median, early 12/12. `JUSTRUST_EARLY_EXIT=0` 3.19 s, early
+0/12. Clean check 3.3 s. rust-analyzer ready 9 s after autostart, 1.5 GB RSS.
