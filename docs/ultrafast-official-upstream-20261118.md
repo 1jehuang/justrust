@@ -138,6 +138,66 @@ files are losslessly archived together as
 `bench/ultrafast-upstream-20261118-prerequisites-lossless`, original SHA256
 `ca7c5649d4b42c7ce82cf96906e8bfd070d5e754c42be94e964bb8f36666d10c`.
 
+## Completed newer-canary five-replicate trial
+
+The XFS trial completed at approximately 04:54 UTC on November 18, using the
+frozen `e02f064ee` harness and the separately pinned canary executable above.
+All five repetitions ran. The coordinator connection was interrupted by a
+server reload, but the existing remote harness survived and was observed to
+completion without rerunning or replacing its inputs.
+
+| Stack | Accepted workload phases | Rejected workload phases |
+|---|---:|---:|
+| Stock Cargo | 36 | 0 |
+| Owned Blaze-derived engine | 36 | 0 |
+| Official canary | 30 | 6 |
+
+Canary passed cold compilation, same-byte rewrite, ordinary edit, type-error
+and recovery, and intentional assertion-failure checks. However, the subsequent
+assertion recovery failed in **all five independent repetitions**. The full
+library check in repetition zero also failed. Every rejection had the same
+native linker diagnostic: `span 131 of ecedf895ca59, whose table has 111`.
+The filtered test executable was never built in these rejected phases. We did
+not reset the cache to hide recovery failure or count failed compilation as a
+fast successful build. The owned engine and Cargo passed both the corresponding
+recovery phases and the full library oracle.
+
+Source, executable, and toolchain identities remained unchanged. All fifteen
+private source copies were restored, and `cleanup_errors` is empty. The generated
+summary correctly says `failed/incomplete`, with **empty timing medians** and
+failed full-library parity. There is no correctness-qualified canary-versus-owned
+speed ratio from this trial. This fixture supports keeping our existing derived
+engine for further experimentation, not a claim that our fork is universally
+faster or more correct than upstream.
+
+The phase historically named `warm-unchanged` rewrites identical source bytes
+before invocation. It measures a same-content file touch, **not an untouched
+no-op build**. In the first repetition canary took about 41.7 seconds there and
+recompiled dependencies, while the owned engine took about 30 milliseconds.
+Those are individual diagnostic observations, not certified aggregate speed
+claims. Commit `326a1c4e3` makes this distinction explicit for future metadata
+and corrects the earlier owned-versus-Cargo report without changing old receipts
+or the frozen running protocol.
+
+Untouched canary originals were archived as:
+
+- `bench/ultrafast-upstream-canary-20261118-0435-metadata`
+- `bench/ultrafast-upstream-canary-20261118-0435-summary`
+- `bench/ultrafast-upstream-canary-20261118-0435-records-lossless`
+- `bench/ultrafast-upstream-canary-20261118-0435-raw-lossless`
+- `bench/ultrafast-upstream-canary-20261118-0435-workers-lossless`
+
+The archive helper verified authenticated byte-for-byte reconstruction of the
+records and raw bundles. The records array is 624,764 bytes with SHA256
+`41998aa76c0a8460e3290b194ff0bdc8f0fa790aa544f2116aff4d8d060cd8fb`.
+
+## Host shutdown
+
+After authenticated archival, the dedicated instance `i-0e0843922bdb5f48d`
+was stopped and its `stopped` state verified at 04:56 UTC on November 18.
+The encrypted evidence disk `vol-0bc1075a06eec2b20` remains attached and retained.
+No production routing, billing, installed default client, or tenant data changed.
+
 ## Limits
 
 These are operator-host compiler-stack experiments on one pinned project, not a
