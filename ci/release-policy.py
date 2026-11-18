@@ -166,7 +166,10 @@ def attest(snapshot, target, since, cwd, runs, binary=None):
         if type(s.get("exit")) is not int or s["exit"] != 0 or m.get("place") != "hosted" or m.get("toolchain") != want:
             raise ValueError("release build did not use selected hosted compiler")
         compiler = m.get("real_rustc", "")
-        if not isinstance(compiler, str) or not compiler.replace("\\", "/").endswith(f"/toolchains/{want}/bin/rustc") or ".." in compiler.replace("\\", "/").split("/"):
+        # Two-slot installs (src/toolchain/slots.rs) put a newly promoted
+        # compiler under toolchains/staged/<id>, the same managed root.
+        normalized = compiler.replace("\\", "/") if isinstance(compiler, str) else ""
+        if not isinstance(compiler, str) or not (normalized.endswith(f"/toolchains/{want}/bin/rustc") or normalized.endswith(f"/toolchains/staged/{want}/bin/rustc")) or ".." in normalized.split("/"):
             raise ValueError("recorded actual compiler path does not match policy")
         matches.append({"run_id": m["id"], "compiler": compiler, "toolchain": want,
                         "target": target, "policy_sha256": digest(snapshot), "place": "hosted",
