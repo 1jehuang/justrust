@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import select
 import signal
@@ -19,6 +20,35 @@ import time
 
 import stable_resident as shared
 import stable_resident_owned as owned
+
+
+MODES = ('fresh', 'warm', 'restored')
+
+
+def mode_order(value):
+    order = tuple(value.split(',')) if isinstance(value, str) else tuple(value)
+    if len(order) != len(MODES) or set(order) != set(MODES):
+        raise ValueError('mode order must be an exact permutation of fresh,warm,restored')
+    return order
+
+
+def provenance():
+    """Local observations, not a remote attestation or anonymized host claim."""
+    info = dict(hostname=platform.node(), platform=platform.platform(),
+                machine=platform.machine(), kernel=platform.release(),
+                python=sys.version, executable=sys.executable, uid=os.getuid(),
+                invocation=[sys.executable, *sys.argv], captured_unix_seconds=time.time(),
+                logical_cpus=os.cpu_count())
+    for key, filename in (('cpuinfo', '/proc/cpuinfo'), ('meminfo', '/proc/meminfo'),
+                          ('boot_id', '/proc/sys/kernel/random/boot_id')):
+        try:
+            info[key] = Path(filename).read_text()
+        except OSError as error:
+            info[key + '_error'] = str(error)
+    info['harness_sources'] = [dict(path=str(Path(module.__file__).resolve()),
+                                   sha256=shared.digest(module.__file__))
+                               for module in (sys.modules[__name__], shared, owned)]
+    return info
 
 
 def launcher(compiler, root, channel):
@@ -154,10 +184,12 @@ def restore(worker, criu, directory, evidence):
     evidence['restored_pid'] = pid
 
 
-def capture(compiler, root, criu, timeout):
-    report = dict(schema=1, verdict='incomplete', mechanism='CRIU disk full-process dump/restore',
+def capture(compiler, root, criu, timeout, order=MODES):
+    order = mode_order(order)
+    report = dict(schema=2, verdict='incomplete', mechanism='CRIU disk full-process dump/restore',
                   claim='Prototype timings only, not production or general speedup evidence.',
-                  observations=[], cwd=str(root), compiler=str(compiler), criu=str(criu))
+                  observations=[], cwd=str(root), compiler=str(compiler), criu=str(criu),
+                  mode_order=list(order), host_provenance=provenance())
     workers = []
     source_paths = [root / 'fixture.rs', root / 'helper.rs']
     originals = {p: p.read_bytes() if p.exists() else None for p in source_paths}
@@ -189,7 +221,7 @@ def capture(compiler, root, criu, timeout):
             checkpoint(snap, criu, images, row['checkpoint'])
             for p, text in zip(source_paths, (source, helper)):
                 p.write_text(text)
-            for mode in ('fresh', 'warm', 'restored'):
+            for mode in order:
                 binary = root / 'fixture'
                 binary.unlink(missing_ok=True)
                 result = row['modes'][mode] = {}
@@ -240,12 +272,41 @@ def main():
     parser.add_argument('--out', '--output', type=Path, required=True)
     parser.add_argument('--criu', type=Path, required=True)
     parser.add_argument('--timeout', type=float, default=180)
+    parser.add_argument('--mode-order', default=','.join(MODES),
+                        help='Comma-separated exact permutation of fresh,warm,restored')
+    parser.add_argument('--repeats', type=int, default=1,
+                        help='Independent worker sessions, each in a new repeat directory')
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error('--timeout must be positive')
+    if args.repeats <= 0:
+        parser.error('--repeats must be positive')
+    try:
+        order = mode_order(args.mode_order)
+    except ValueError as error:
+        parser.error(str(error))
     root = args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    report = capture(args.compiler.resolve(), root, args.criu.resolve(), args.timeout)
+    if args.repeats == 1:
+        report = capture(args.compiler.resolve(), root, args.criu.resolve(), args.timeout, order)
+    else:
+        report = dict(schema=2, verdict='incomplete', repeats_requested=args.repeats,
+                      mode_order=list(order), host_provenance=provenance(), repeats=[])
+        try:
+            for index in range(args.repeats):
+                directory = root / ('repeat-%03d' % index)
+                directory.mkdir()
+                row = capture(args.compiler.resolve(), directory, args.criu.resolve(), args.timeout, order)
+                report['repeats'].append(dict(index=index, receipt=str(directory / 'receipt.json'),
+                                              verdict=row['verdict']))
+                if row['verdict'] != 'passed':
+                    break
+            report['verdict'] = ('passed' if len(report['repeats']) == args.repeats and
+                                 all(r['verdict'] == 'passed' for r in report['repeats']) else 'failed')
+        except BaseException as error:
+            report.update(verdict='failed', error=f'{type(error).__name__}: {error}')
+        finally:
+            (root / 'receipt.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
     return 0 if report['verdict'] == 'passed' else 1
 

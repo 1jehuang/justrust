@@ -2,6 +2,7 @@
 """Mocked harness checks only. Never compiler/checkpoint performance evidence."""
 import json
 from pathlib import Path
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -16,6 +17,49 @@ def result(status=0):
 
 
 class SnapshotTests(unittest.TestCase):
+    def test_mode_order_requires_exact_permutation(self):
+        self.assertEqual(snapshot.mode_order('restored,fresh,warm'), ('restored', 'fresh', 'warm'))
+        for value in ('fresh,fresh,restored', 'warm,restored', 'fresh,warm,restored,unknown'):
+            with self.assertRaises(ValueError):
+                snapshot.mode_order(value)
+
+    def test_provenance_has_host_and_harness_hashes(self):
+        info = snapshot.provenance()
+        self.assertIn('kernel', info)
+        self.assertIn('hostname', info)
+        self.assertEqual(len(info['harness_sources']), 3)
+        self.assertTrue(all(len(row['sha256']) == 64 for row in info['harness_sources']))
+
+    def test_cli_repeats_use_new_directories_and_preserve_order(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'new'
+            argv = ['compiler_process_snapshot.py', '--compiler', '/mock/compiler',
+                    '--criu', '/mock/criu', '--out', str(root), '--repeats', '2',
+                    '--mode-order', 'restored,warm,fresh']
+            with patch.object(sys, 'argv', argv), \
+                    patch.object(snapshot, 'capture', return_value={'verdict': 'passed'}) as capture, \
+                    patch('builtins.print'):
+                self.assertEqual(snapshot.main(), 0)
+            self.assertEqual(capture.call_count, 2)
+            self.assertEqual(capture.call_args_list[0].args[1], root / 'repeat-000')
+            self.assertEqual(capture.call_args_list[1].args[1], root / 'repeat-001')
+            self.assertEqual(capture.call_args.args[4], ('restored', 'warm', 'fresh'))
+            report = json.loads((root / 'receipt.json').read_text())
+            self.assertEqual(report['verdict'], 'passed')
+            self.assertEqual(report['repeats_requested'], 2)
+
+    def test_cli_repeats_stop_after_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'new'
+            argv = ['snapshot.py', '--compiler', '/mock/compiler', '--criu', '/mock/criu',
+                    '--out', str(root), '--repeats', '3']
+            with patch.object(sys, 'argv', argv), \
+                    patch.object(snapshot, 'capture', return_value={'verdict': 'failed'}) as capture, \
+                    patch('builtins.print'):
+                self.assertEqual(snapshot.main(), 1)
+            self.assertEqual(capture.call_count, 1)
+            self.assertEqual(json.loads((root / 'receipt.json').read_text())['verdict'], 'failed')
+
     def test_requires_memory_images_not_just_metadata(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -143,8 +187,11 @@ class SnapshotTests(unittest.TestCase):
                     patch.object(snapshot.owned, 'runtime', side_effect=next_runtime), \
                     patch.object(snapshot, 'checkpoint', side_effect=checkpoint), \
                     patch.object(snapshot, 'restore', side_effect=restore):
-                report = snapshot.capture(Path('/mock/compiler'), root, Path('/mock/criu'), 1)
+                report = snapshot.capture(Path('/mock/compiler'), root, Path('/mock/criu'), 1,
+                                          order=('restored', 'warm', 'fresh'))
             self.assertEqual(report['verdict'], 'passed', report.get('error'))
+            self.assertEqual(report['mode_order'], ['restored', 'warm', 'fresh'])
+            self.assertEqual(list(report['observations'][0]['modes']), ['restored', 'warm', 'fresh'])
             self.assertEqual(len(report['observations']), 7)
             self.assertFalse((root / 'fixture.rs').exists())
             for row in report['observations']:
