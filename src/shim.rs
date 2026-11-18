@@ -587,13 +587,8 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     if force_bootstrap {
         cmd.env("RUSTC_BOOTSTRAP", "1");
     }
-    let early = (plan.is_none() && described.local && described.incremental && early_reply_on())
-        .then(|| EarlyReply::attach(&mut cmd))
-        .flatten();
     let start = paths::now();
-    let spawned = cmd.spawn();
-    let early = early.map(EarlyReply::spawned);
-    let mut child = spawned.ok()?;
+    let mut child = cmd.spawn().ok()?;
     let job = crate::sys::Job::for_child(&child);
     let stderr = child.stderr.take()?;
     let rmeta_at: Arc<Mutex<Option<f64>>> = Arc::default();
@@ -609,27 +604,14 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
         })
     };
 
-    // jr-rustc replied after the link (outputs complete, no errors, all
-    // diagnostics printed) and is still persisting its incremental state:
-    // report success now. The next rustc of this crate waits for the
-    // persist (jr-rustc `jr_wait_for_persisting`).
-    let replied = early.as_ref().is_some_and(EarlyReply::wait);
     let crate::sys::Usage {
         code: exit,
         user,
         sys,
         max_rss_mb,
-    } = if replied {
-        crate::sys::Usage::default()
-    } else {
-        crate::sys::wait_usage(&mut child, job.as_ref())
-    };
+    } = crate::sys::wait_usage(&mut child, job.as_ref());
     let end = paths::now();
     let _ = reader.join();
-    if replied {
-        // Not reaped: cargo never waits for it, init adopts it on exit.
-        std::mem::forget(child);
-    }
 
     let mut unit = described;
     if let (Some(plan), Some(captured)) = (&plan, &captured) {
@@ -714,81 +696,6 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
         let _ = paths::append_line(&run_dir.join("units.jsonl"), &line);
     }
     Some(exit)
-}
-
-/// `JUSTRUST_RUSTC_EARLY_REPLY=1`: let jr-rustc reply after the link
-/// and persist its incremental state after the shim returned (opt-in,
-/// FINDINGS 60). Only rustc builds that know `JUSTRUST_RUSTC_EARLY_REPLY_FD`
-/// use the pipe; any other rustc ignores it and is waited for as usual.
-fn early_reply_on() -> bool {
-    cfg!(target_os = "linux")
-        && matches!(
-            std::env::var("JUSTRUST_RUSTC_EARLY_REPLY").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
-        )
-}
-
-/// Write end of the early-reply pipe (unix only; never set elsewhere).
-#[cfg(unix)]
-type ReplyFd = std::os::fd::OwnedFd;
-#[cfg(not(unix))]
-type ReplyFd = std::fs::File;
-
-/// The pipe jr-rustc writes one byte to once it can be considered done.
-struct EarlyReply {
-    read: std::fs::File,
-    #[allow(dead_code)]
-    write: Option<ReplyFd>,
-}
-
-impl EarlyReply {
-    #[cfg(target_os = "linux")]
-    fn attach(cmd: &mut Command) -> Option<EarlyReply> {
-        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-        let mut fds = [0; 2];
-        // SAFETY: pipe2 writes two descriptors into the array on success.
-        // Both start close-on-exec; only the write end is then inherited.
-        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-            return None;
-        }
-        // SAFETY: fresh descriptors owned by nobody else.
-        let (read, write) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
-        // SAFETY: clearing FD_CLOEXEC on our own descriptor.
-        unsafe { libc::fcntl(write.as_raw_fd(), libc::F_SETFD, 0) };
-        cmd.env(
-            "JUSTRUST_RUSTC_EARLY_REPLY_FD",
-            write.as_raw_fd().to_string(),
-        );
-        Some(EarlyReply {
-            read: std::fs::File::from(read),
-            write: Some(write),
-        })
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn attach(_cmd: &mut Command) -> Option<EarlyReply> {
-        None
-    }
-
-    /// Close our copy of the write end once the child has it, so a rustc
-    /// that exits without replying shows up as EOF.
-    fn spawned(mut self) -> EarlyReply {
-        self.write = None;
-        self
-    }
-
-    /// True if rustc replied; false on EOF (it exited, or never knew the fd).
-    fn wait(&self) -> bool {
-        use std::io::Read;
-        let mut b = [0u8; 1];
-        loop {
-            match (&self.read).read(&mut b) {
-                Ok(1) => return b[0] == 1,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                _ => return false,
-            }
-        }
-    }
 }
 
 fn forward_stderr(
