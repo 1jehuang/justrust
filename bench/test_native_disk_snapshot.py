@@ -305,6 +305,16 @@ class HarnessTests(unittest.TestCase):
         self.assertNotIn('initial', result['cases'])
         self.assertEqual(result['cases']['unchanged']['disk-ast']['delta_seconds'], 0)
 
+    def test_comparison_ignores_only_instantaneous_cpu_clock(self):
+        before = self.capture(Model())
+        before['host']['cpuinfo'] = 'model name : identical\ncpu MHz\t: 1000\n'
+        after = copy.deepcopy(before)
+        after['host']['cpuinfo'] = 'model name : identical\ncpu MHz\t: 3000\n'
+        self.assertEqual(subject.compare_reports(before, after)['verdict'], 'comparable')
+        after['host']['cpuinfo'] = 'model name : other\ncpu MHz\t: 1000\n'
+        with self.assertRaisesRegex(AssertionError, 'host'):
+            subject.compare_reports(before, after)
+
     def test_raw_phase_attribution_is_separate_and_preserves_stderr(self):
         model = Model()
         report = self.capture(model, raw_rustc_phases=True)
@@ -325,6 +335,17 @@ class HarnessTests(unittest.TestCase):
         disk = report['samples'][0]['observations'][1]['records']['disk-ast']
         self.assertEqual({p['phase'] for p in disk['phase_events']},
                          {'key', 'open', 'read', 'envelope', 'decode', 'admit'})
+        summary = report['disk_phase_summary']['unchanged']['decode']
+        self.assertEqual(summary['processes'], 2)
+        self.assertEqual(summary['median_elapsed_ns'], 42)
+        samples = copy.deepcopy(report['samples'])
+        samples[0]['observations'][1]['records']['disk-ast']['phase_events'].append(
+            copy.deepcopy(disk['phase_events'][-2]))
+        summary = subject.phase_summaries(samples)['unchanged']['decode']
+        self.assertEqual(summary['median_elapsed_ns'], 63)
+        samples[0]['verdict'] = 'failed'
+        with self.assertRaisesRegex(AssertionError, 'no medians'):
+            subject.phase_summaries(samples)
 
     def test_phase_stream_is_strict_and_pid_bound(self):
         path = self.root / 'phases'
@@ -351,7 +372,12 @@ class HarnessTests(unittest.TestCase):
             lambda r: r['comparison'].update(timeout=181),
             lambda r: r['comparison'].update(samples=3),
             lambda r: r['comparison'].update(fixture_sha256='different'),
+            lambda r: r['comparison'].update(arguments=['other']),
+            lambda r: r['comparison'].update(support_sha256={}),
+            lambda r: r['comparison'].update(consumer_sha256='different'),
             lambda r: r['samples'][0].update(controls=[]),
+            lambda r: r['samples'][0]['controls'][0]['records']['disk-ast']['compile'].update(stderr_b64='different'),
+            lambda r: r['samples'][0]['observations'][1]['records']['disk-ast']['compile'].update(stderr_b64='different'),
             lambda r: r['samples'][0]['observations'].pop(),
             lambda r: r['median_compiler_seconds']['unchanged'].update(fresh=999),
             lambda r: r['samples'][0]['observations'][0]['records']['fresh']['compile'].update(elapsed_seconds=float('nan')),

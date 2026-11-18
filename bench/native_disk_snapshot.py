@@ -128,12 +128,16 @@ def events_since(path, offset, pid):
     events = []
     for line in data[offset:].splitlines():
         event = json.loads(line)
-        if not isinstance(event, dict) or event.get('event') not in ('hit', 'miss', 'store', 'reject'):
-            raise AssertionError('invalid disk telemetry event')
-        if type(event.get('pid')) is not int or event['pid'] != pid:
-            raise AssertionError('disk telemetry PID does not match fresh compiler process')
+        validate_disk_event(event, pid)
         events.append(event)
     return events, len(data)
+
+
+def validate_disk_event(event, pid):
+    if not isinstance(event, dict) or event.get('event') not in ('hit', 'miss', 'store', 'reject'):
+        raise AssertionError('invalid disk telemetry event')
+    if type(event.get('pid')) is not int or event['pid'] != pid:
+        raise AssertionError('disk telemetry PID does not match fresh compiler process')
 
 
 def phases_since(path, offset, pid):
@@ -146,17 +150,21 @@ def phases_since(path, offset, pid):
     events = []
     for line in data[offset:].splitlines():
         event = json.loads(line)
-        if not isinstance(event, dict) or event.get('event') != 'phase':
-            raise AssertionError('invalid phase telemetry event')
-        if type(event.get('pid')) is not int or event['pid'] != pid:
-            raise AssertionError('phase telemetry PID does not match fresh compiler process')
-        if not isinstance(event.get('phase'), str) or not event['phase']:
-            raise AssertionError('phase telemetry requires a phase name')
-        for key in ('elapsed_ns', 'bytes'):
-            if type(event.get(key)) is not int or event[key] < 0:
-                raise AssertionError('phase telemetry requires nonnegative integer ' + key)
+        validate_phase_event(event, pid)
         events.append(event)
     return events, len(data)
+
+
+def validate_phase_event(event, pid):
+    if not isinstance(event, dict) or event.get('event') != 'phase':
+        raise AssertionError('invalid phase telemetry event')
+    if type(event.get('pid')) is not int or event['pid'] != pid:
+        raise AssertionError('phase telemetry PID does not match fresh compiler process')
+    if not isinstance(event.get('phase'), str) or not event['phase']:
+        raise AssertionError('phase telemetry requires a phase name')
+    for key in ('elapsed_ns', 'bytes'):
+        if type(event.get(key)) is not int or event[key] < 0:
+            raise AssertionError('phase telemetry requires nonnegative integer ' + key)
 
 
 def gate_row(row, previous_ast, live_pid, seen_pids, seen_nonces):
@@ -189,6 +197,10 @@ def gate_row(row, previous_ast, live_pid, seen_pids, seen_nonces):
                 raise AssertionError('consumer nonce reused')
             seen_nonces.add(nonce)
     disk = row['records']['disk-ast']
+    for event in disk['disk_events']:
+        validate_disk_event(event, disk['compile']['pid'])
+    for event in disk.get('phase_events', []):
+        validate_phase_event(event, disk['compile']['pid'])
     if row['name'] in ('unchanged', 'unrelated-helper-edit'):
         if not any(event['event'] == 'hit' for event in disk['disk_events']):
             raise AssertionError('positive genuine cross-process disk AST hit required')
@@ -379,14 +391,60 @@ def summaries(samples, items=64):
             for index, (name, *_rest) in enumerate(cases(items)) if name != 'initial'}
 
 
+def phase_summaries(samples, items=64):
+    """Per-process phase sums, then medians. Phases are not a wall-time partition.
+
+    Coverage counts are explicit: absent phases are not silently replaced by zero.
+    Native phase stream writes add overhead. Compare only identically instrumented
+    reports, and use uninstrumented captures for compiler command latency claims.
+    """
+    summaries(samples, items)  # No attribution summaries before correctness passes.
+    result = {}
+    for index, (name, *_rest) in enumerate(cases(items)):
+        processes = []
+        for sample in samples:
+            process = {}
+            record = sample['observations'][index]['records']['disk-ast']
+            for event in record.get('phase_events', []):
+                aggregate = process.setdefault(event['phase'], dict(elapsed_ns=0, bytes=0))
+                aggregate['elapsed_ns'] += event['elapsed_ns']
+                aggregate['bytes'] += event['bytes']
+            processes.append(process)
+        phases = sorted(set().union(*(set(process) for process in processes)))
+        result[name] = {phase: dict(processes=sum(phase in p for p in processes),
+                                    median_elapsed_ns=statistics.median(
+                                        p[phase]['elapsed_ns'] for p in processes if phase in p),
+                                    median_bytes=statistics.median(
+                                        p[phase]['bytes'] for p in processes if phase in p))
+                        for phase in phases}
+    return result
+
+
 def comparison_manifest(items, samples, timeout, require_phase_telemetry=False,
                         raw_rustc_phases=False):
     """Exact workload contract, independent of output directories and compiler bytes."""
     return dict(version=COMPARISON_VERSION, items=items, samples=samples, timeout=timeout,
                 modes=list(MODES), require_phase_telemetry=require_phase_telemetry,
                 raw_rustc_phases=raw_rustc_phases,
+                arguments=ast.arguments(Path('/fixture')),
+                consumer_sha256=hashlib.sha256(ast.consumer_source().encode()).hexdigest(),
+                support_sha256={Path(module.__file__).name: shared.digest(Path(module.__file__))
+                                for module in (shared, ast, ast.owned)},
                 fixture_sha256=hashlib.sha256(json.dumps(cases(items)).encode()).hexdigest(),
                 ordering='latin-alternating-v1', timing='compiler-command-only-v1')
+
+
+def comparable_host(host):
+    """Keep topology/identity, not the instantaneous per-core clock sample.
+
+    Full /proc/cpuinfo is retained in each receipt. CPU MHz changes even within
+    one run and is not a host identity. Nothing else is dropped or normalized.
+    """
+    result = dict(host)
+    if 'cpuinfo' in result:
+        result['cpuinfo'] = '\n'.join(line for line in result['cpuinfo'].splitlines()
+                                      if line.partition(':')[0].strip() != 'cpu MHz')
+    return result
 
 
 def compare_reports(before, after):
@@ -410,6 +468,9 @@ def compare_reports(before, after):
                                        manifest['raw_rustc_phases'])
         if manifest != expected:
             raise AssertionError('comparison manifest does not match workload')
+        if (report.get('phase_telemetry') != manifest['require_phase_telemetry']
+                or report.get('raw_rustc_phases') != manifest['raw_rustc_phases']):
+            raise AssertionError('comparison instrumentation does not match manifest')
         names = [case[0] for case in cases(report['items'])]
         for index, sample in enumerate(samples):
             if sample.get('sample') != index or sample.get('items') != report['items']:
@@ -475,7 +536,12 @@ def compare_reports(before, after):
         computed = summaries(samples, report['items'])
         if report.get('median_compiler_seconds') != computed:
             raise AssertionError('saved medians disagree with raw samples')
-    for key in ('schema', 'host', 'harness_sha256', 'comparison', 'fixture_generator',
+        if (manifest['require_phase_telemetry'] and report.get('disk_phase_summary')
+                != phase_summaries(samples, report['items'])):
+            raise AssertionError('saved phase summary disagrees with raw samples')
+    if comparable_host(before['host']) != comparable_host(after['host']):
+        raise AssertionError('incomparable reports: host')
+    for key in ('schema', 'harness_sha256', 'comparison', 'fixture_generator',
                 'extra_items_sha256', 'timing'):
         if key not in before or before[key] != after.get(key):
             raise AssertionError('incomparable reports: ' + key)
@@ -524,12 +590,15 @@ def capture(compiler, output, samples=5, timeout=180, execute_host_workloads=Fal
         if any(s['verdict'] != 'passed' for s in report['samples']):
             raise AssertionError('sample correctness gate failed')
         report['median_compiler_seconds'] = summaries(report['samples'], items)
+        if phase_telemetry:
+            report['disk_phase_summary'] = phase_summaries(report['samples'], items)
         report['cold_compiler_seconds'] = [{mode: s['observations'][0]['records'][mode]['compile']['elapsed_seconds']
                                             for mode in MODES} for s in report['samples']]
         report['verdict'] = 'passed'
     except BaseException as error:
         report.update(verdict='failed', error=f'{type(error).__name__}: {error}')
         report.pop('median_compiler_seconds', None)
+        report.pop('disk_phase_summary', None)
     finally:
         write_receipt(output / 'receipt.json', report)
     return report
