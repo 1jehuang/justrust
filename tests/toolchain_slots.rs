@@ -37,6 +37,11 @@ impl Fixture {
                 "isolated native compiler lease process acceptance",
             )
             .env("JUSTRUST_DEPCACHE", "off")
+            // The lease tests own the cargo process directly. On a hosted
+            // agent buildd would otherwise serve the run (9d442a749) and stop
+            // cargo when the client dies, by design.
+            .env("JUSTRUST_BUILDD", "0")
+            .env_remove("JUSTRUST_ON_REMOTE_AGENT")
             .env_remove("JUSTRUST_REMOTE_REQUIRED")
             .env_remove("JUSTRUST_RUN_DIR")
             .env_remove("JUSTRUST_DISABLE")
