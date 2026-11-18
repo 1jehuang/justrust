@@ -273,7 +273,6 @@ pub fn maybe_run(full: &[OsString]) -> Option<i32> {
         || !enabled()
         || std::env::var_os(CHILD_ENV).is_some()
         || std::env::var_os("JUSTRUST_RUN_DIR").is_some()
-        || std::env::var_os(crate::route::ON_AGENT).is_some()
         // A terminal gets cargo's progress bar and colours from a build
         // that sees it; through the daemon it would see pipes.
         || isatty(0)

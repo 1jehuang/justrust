@@ -184,6 +184,69 @@ const AUTO_MIN_BUILDS: usize = 3;
 const AUTO_WINDOW_SECS: f64 = 3600.0;
 const AUTO_MIN_AVAILABLE_MB: u64 = 8 * 1024;
 
+/// At most this many resident daemons per machine: `floor((64 GB - 16 GB) /
+/// 6 GB)` on a hosted VM (docs/early-exit-hosted.md). Starting one more stops
+/// the least recently queried.
+const MAX_DAEMONS: usize = 8;
+/// Hosted only: below this much available memory the least recently queried
+/// daemon stops, checked every `PRESSURE_EVERY`. Builds win over early answers.
+const PRESSURE_MIN_AVAILABLE_MB: u64 = 12 * 1024;
+const PRESSURE_EVERY: Duration = Duration::from_secs(10);
+
+/// Running daemons as (state dir, last query time), least recent first. A
+/// daemon touches `used` in its state dir on every query.
+fn live_daemons(early: &Path) -> Vec<(PathBuf, SystemTime)> {
+    let mut out: Vec<(PathBuf, SystemTime)> = std::fs::read_dir(early)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|d| daemon_alive(d))
+        .map(|d| {
+            let t = ["used", "sock"]
+                .iter()
+                .find_map(|f| std::fs::metadata(d.join(f)).and_then(|m| m.modified()).ok())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            (d, t)
+        })
+        .collect();
+    out.sort_by_key(|(_, t)| *t);
+    out
+}
+
+/// A daemon holds `lock` for its lifetime. Probing it, unlike connecting to
+/// `sock`, does not count as a query and so leaves the idle clock alone.
+fn daemon_alive(dir: &Path) -> bool {
+    match std::fs::OpenOptions::new().write(true).open(dir.join("lock")) {
+        Ok(f) => f.try_lock().is_err(),
+        Err(_) => false,
+    }
+}
+
+/// The daemons to stop so that one more fits under `max`.
+fn lru_victims(live: &[(PathBuf, SystemTime)], max: usize) -> Vec<PathBuf> {
+    let excess = (live.len() + 1).saturating_sub(max);
+    live.iter().take(excess).map(|(d, _)| d.clone()).collect()
+}
+
+fn stop_daemon(dir: &Path) {
+    if let Ok(mut s) = UnixStream::connect(dir.join("sock")) {
+        let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+        let _ = writeln!(s, "{}", json!({"op": "stop"}));
+        let mut b = String::new();
+        let _ = s.read_to_string(&mut b);
+    }
+}
+
+fn touch_used(dir: &Path) {
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("used"))
+        .and_then(|f| f.set_modified(SystemTime::now()));
+}
+
 /// Recent agent builds per workspace root, from the tail of the run index.
 fn recent_agent_builds(index: &str, root: &Path, now: f64) -> usize {
     index
@@ -588,6 +651,16 @@ fn spawn_daemon(root: &Path, dir: &Path) -> Result<()> {
             age.as_secs(),
             std::fs::read_to_string(&failed).unwrap_or_default().trim()
         );
+    }
+    // Count cap: make room by stopping the least recently queried daemons.
+    if let Some(early) = dir.parent() {
+        let live: Vec<_> = live_daemons(early)
+            .into_iter()
+            .filter(|(d, _)| d != dir)
+            .collect();
+        for victim in lru_victims(&live, MAX_DAEMONS) {
+            stop_daemon(&victim);
+        }
     }
     let log = std::fs::OpenOptions::new()
         .create(true)
@@ -1554,6 +1627,7 @@ fn daemon(root: &Path) -> Result<()> {
     let sock = dir.join("sock");
     let _ = std::fs::remove_file(&sock);
     let listener = UnixListener::bind(&sock)?;
+    touch_used(&dir);
     log(&format!("daemon up for {}", root.display()));
     let started = Instant::now();
     let tc = analyzer(root).ok().map(|x| x.0);
@@ -1591,10 +1665,30 @@ fn daemon(root: &Path) -> Result<()> {
         .unwrap_or(3 * 3600);
     let last = Arc::new(Mutex::new(Instant::now()));
     {
-        let (last, state, sock) = (last.clone(), state.clone(), sock.clone());
+        let (last, state, sock, dir) = (last.clone(), state.clone(), sock.clone(), dir.clone());
         std::thread::spawn(move || {
+            let hosted = std::env::var_os(crate::route::ON_AGENT).is_some();
+            let mut idle_check = Instant::now();
             loop {
-                std::thread::sleep(Duration::from_secs(30));
+                std::thread::sleep(PRESSURE_EVERY);
+                // Memory pressure on a hosted VM: the least recently queried
+                // daemon goes first. One daemon acts per tick (the oldest
+                // sees itself first), the next tick re-measures.
+                if hosted
+                    && crate::procfs::meminfo()
+                        .is_some_and(|m| m.available_mb < PRESSURE_MIN_AVAILABLE_MB)
+                    && let Some(early) = dir.parent()
+                    && live_daemons(early).first().is_some_and(|(d, _)| *d == dir)
+                {
+                    log("memory pressure, exiting (least recently queried)");
+                    let _ = std::fs::remove_file(&sock);
+                    let _ = state.lock().map(|mut s| s.lsp.child.kill());
+                    std::process::exit(0);
+                }
+                if idle_check.elapsed() < Duration::from_secs(30) {
+                    continue;
+                }
+                idle_check = Instant::now();
                 if last.lock().unwrap().elapsed() > Duration::from_secs(idle_secs) {
                     log("idle, exiting");
                     let _ = std::fs::remove_file(&sock);
@@ -1607,6 +1701,7 @@ fn daemon(root: &Path) -> Result<()> {
     for conn in listener.incoming() {
         let Ok(conn) = conn else { continue };
         *last.lock().unwrap() = Instant::now();
+        touch_used(&dir);
         let state = state.clone();
         let sock = sock.clone();
         // A query holds the state lock; status answers without waiting
@@ -1686,6 +1781,28 @@ fn daemon(root: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn lru_cap_stops_least_recently_queried_to_fit_one_more() {
+        let t = |s| SystemTime::UNIX_EPOCH + Duration::from_secs(s);
+        let live: Vec<_> = (0..8).map(|i| (PathBuf::from(format!("/e/{i}")), t(i))).collect();
+        assert_eq!(lru_victims(&live, 8), vec![PathBuf::from("/e/0")]);
+        assert!(lru_victims(&live[..7], 8).is_empty());
+        assert_eq!(lru_victims(&live, 6).len(), 3);
+    }
+
+    #[test]
+    fn liveness_follows_the_daemon_lock() {
+        let d = std::env::temp_dir().join(format!("jr-early-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        assert!(!daemon_alive(&d));
+        let f = std::fs::File::create(d.join("lock")).unwrap();
+        assert!(!daemon_alive(&d));
+        f.try_lock().unwrap();
+        assert!(daemon_alive(&d));
+        drop(f);
+        assert!(!daemon_alive(&d));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
     #[test]
     fn limited_analyzer_demand_loads_without_changing_local_defaults() {
         let target = Path::new("/dedicated analyzer target");

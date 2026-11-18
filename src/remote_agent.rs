@@ -1058,6 +1058,10 @@ fn start_run(
     }
     // Never route a build the agent runs back to another machine.
     c.env(crate::route::ON_AGENT, "1");
+    // Hosted default: answer from rust-analyzer early (docs/early-exit-hosted.md).
+    for (k, v) in hosted_early_env(env, std::env::var("EARLY_EXIT_DEFAULT").ok().as_deref()) {
+        c.env(k, v);
+    }
     let policy = crate::toolchain_policy::current();
     match store_toolchain(cwd, args, env, policy.as_ref()) {
         Ok(Some(tc)) => {
@@ -1263,6 +1267,32 @@ fn parse_max_run(v: Option<&str>) -> std::time::Duration {
         .unwrap_or(DEFAULT_MAX_RUN)
 }
 
+/// Early exit defaults for a hosted run: `JUSTRUST_EARLY=auto` and
+/// `JUSTRUST_EARLY_EXIT=1` unless the client chose either itself or the
+/// machine's kill switch (`EARLY_EXIT_DEFAULT=0`, from the VM bootstrap) is off.
+fn hosted_early_env(
+    env: &[(String, String)],
+    kill_switch: Option<&str>,
+) -> Vec<(&'static str, &'static str)> {
+    if matches!(kill_switch, Some("0" | "off" | "false" | "no")) {
+        return Vec::new();
+    }
+    let has = |k: &str| env.iter().any(|(key, _)| key == k);
+    let mut out = Vec::new();
+    if has("JUSTRUST_EARLY_EXIT") {
+        return out;
+    }
+    out.push(("JUSTRUST_EARLY_EXIT", "1"));
+    if !has("JUSTRUST_EARLY") {
+        out.push(("JUSTRUST_EARLY", "auto"));
+    }
+    // Match the VM's 30 minute idle stop instead of the 3 h laptop default.
+    if !has("JUSTRUST_EARLY_IDLE_SECS") {
+        out.push(("JUSTRUST_EARLY_IDLE_SECS", "1800"));
+    }
+    out
+}
+
 /// A detached recorder is still owned by this agent. Normal disconnects
 /// signal the run group, but SIGKILL (or an early fatal exit before PID
 /// publication) cannot execute that cleanup.
@@ -1292,6 +1322,21 @@ fn own_run_lifetime(command: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::hosted_hybrid_env;
+
+    #[test]
+    fn hosted_early_defaults_respect_client_and_kill_switch() {
+        use super::hosted_early_env;
+        let none: Vec<(String, String)> = Vec::new();
+        let d = hosted_early_env(&none, None);
+        assert!(d.contains(&("JUSTRUST_EARLY_EXIT", "1")));
+        assert!(d.contains(&("JUSTRUST_EARLY", "auto")));
+        assert!(hosted_early_env(&none, Some("0")).is_empty());
+        assert_eq!(hosted_early_env(&none, Some("1")), d);
+        let opt_out = vec![("JUSTRUST_EARLY_EXIT".to_string(), "0".to_string())];
+        assert!(hosted_early_env(&opt_out, None).is_empty());
+        let mode = vec![("JUSTRUST_EARLY".to_string(), "1".to_string())];
+        assert!(!hosted_early_env(&mode, None).iter().any(|(k, _)| *k == "JUSTRUST_EARLY"));
+    }
 
     fn hybrid_config() -> Vec<(String, String)> {
         [
