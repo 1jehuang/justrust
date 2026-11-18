@@ -813,7 +813,7 @@ pub fn codegen_crate<
                 CguReuse::No => "changed",
             };
             rustc_data_structures::profiling::jr_reuse_count(
-                "codegen_unit",
+                "<cgu>",
                 outcome,
                 Duration::ZERO,
             );

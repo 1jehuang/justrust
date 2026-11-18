@@ -90,7 +90,7 @@ pub struct Totals {
 impl Totals {
     pub fn add(&mut self, rows: &[Row]) {
         for r in rows {
-            if r.query == "codegen_unit" {
+            if r.query == "<cgu>" {
                 match r.outcome.as_str() {
                     "loaded" => self.cgu_reused += r.count,
                     _ => self.cgu_recompiled += r.count,
@@ -247,7 +247,7 @@ fn by_query<'a>(rows: impl Iterator<Item = &'a [Row]>) -> Vec<QueryTotals> {
     let mut m: BTreeMap<&str, QueryTotals> = BTreeMap::new();
     for rs in rows {
         for r in rs {
-            if r.query == "codegen_unit" {
+            if r.query == "<cgu>" {
                 continue;
             }
             let q = m.entry(r.query.as_str()).or_insert_with(|| QueryTotals {
@@ -455,7 +455,7 @@ mod tests {
     #[test]
     fn parse_and_classify() {
         let rows = parse(
-            "same\ttypeck\t1.5\t10\nloaded\ttypeck\t0.2\t900\ngreen_recompute\toptimized_mir\t0.5\t3\nchanged\ttypeck\t0.3\t1\nnohash\thir_crate\t0.1\t1\nloaded\tcodegen_unit\t0\t14\nchanged\tcodegen_unit\t0\t2\nbad line\n",
+            "same\ttypeck\t1.5\t10\nloaded\ttypeck\t0.2\t900\ngreen_recompute\toptimized_mir\t0.5\t3\nchanged\ttypeck\t0.3\t1\nnohash\thir_crate\t0.1\t1\nloaded\t<cgu>\t0\t14\nchanged\t<cgu>\t0\t2\nbad line\n",
         );
         assert_eq!(rows.len(), 7);
         let mut t = Totals::default();
