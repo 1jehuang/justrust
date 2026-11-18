@@ -11,6 +11,7 @@
 //! bytes, original-source hash/normalization information, filename, edition, strip
 //! mode and absolute start position. The encoder checks *every encoded span* for
 //! root hygiene, no parent, and membership in that exact source (or DUMMY_SP).
+//! The decoder checks the same source bounds on every span before construction.
 //! Symbols are spelled out by MemEncoder and re-interned on decode.
 
 use std::env;
@@ -46,9 +47,7 @@ const TEMP: &str = ".justrust-disk-ast-v1.tmp";
 const LOCK: &str = ".justrust-disk-ast-v1.lock";
 
 fn directory() -> Option<PathBuf> {
-    env::var_os("JUSTRUST_RUSTC_DISK_AST")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+    env::var_os("JUSTRUST_RUSTC_DISK_AST").filter(|value| !value.is_empty()).map(PathBuf::from)
 }
 
 /// An explicit directory is required. No implicit home/cache directory is used.
@@ -86,6 +85,49 @@ fn telemetry(event: &str) {
     let _ = (path, event);
 }
 
+/// Independent of STATS: disabled timing does not read the clock, and telemetry
+/// failures never affect cache acceptance or the compiler result.
+struct Phases(Option<PathBuf>);
+
+impl Phases {
+    fn new() -> Self {
+        Self(
+            env::var_os("JUSTRUST_RUSTC_DISK_AST_PHASES")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from),
+        )
+    }
+
+    fn measure<T>(&self, phase: &str, bytes: usize, operation: impl FnOnce() -> T) -> T {
+        let Some(path) = &self.0 else { return operation() };
+        let start = std::time::Instant::now();
+        let result = operation();
+        let elapsed_ns = start.elapsed().as_nanos();
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .write(true)
+                .append(true)
+                .create(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(path)
+            {
+                if private_file(&file).is_ok() {
+                    let _ = file.write_all(format!(
+                        "{{\"event\":\"phase\",\"pid\":{},\"phase\":\"{phase}\",\"elapsed_ns\":{elapsed_ns},\"bytes\":{bytes}}}\n",
+                        std::process::id(),
+                    ).as_bytes());
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (path, phase, bytes, elapsed_ns);
+        result
+    }
+}
+
 fn digest(bytes: &[u8]) -> [u8; 32] {
     SourceFileHash::new_in_memory(SourceFileHashAlgorithm::Blake3, bytes)
         .hash_bytes()
@@ -119,10 +161,7 @@ fn compiler_identity() -> Option<[u8; 32]> {
         field(&mut bytes, &SCHEMA.to_le_bytes());
         field(&mut bytes, source_hash.as_bytes());
         field(&mut bytes, version_hash.as_bytes());
-        field(
-            &mut bytes,
-            option_env!("CFG_VERSION").unwrap_or("").as_bytes(),
-        );
+        field(&mut bytes, option_env!("CFG_VERSION").unwrap_or("").as_bytes());
         field(&mut bytes, &digest(include_str!("disk_ast.rs").as_bytes()));
         Some(digest(&bytes))
     })
@@ -141,10 +180,7 @@ fn key(psess: &ParseSess, source: &SourceFile, strip: u8) -> Option<[u8; 32]> {
     field(&mut bytes, format!("{:?}", source.name).as_bytes());
     field(&mut bytes, source.src_hash.hash_bytes());
     field(&mut bytes, &source.unnormalized_source_len.to_le_bytes());
-    field(
-        &mut bytes,
-        format!("{:?}", source.normalized_pos).as_bytes(),
-    );
+    field(&mut bytes, format!("{:?}", source.normalized_pos).as_bytes());
     field(&mut bytes, text.as_bytes());
     Some(digest(&bytes))
 }
@@ -160,11 +196,9 @@ fn envelope(key: &[u8; 32], payload: &[u8]) -> Option<Vec<u8>> {
     bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
     // Authenticate the header as well as the payload. This is accidental-
     // corruption detection, not authentication against the cache's own owner.
-    let checksum = SourceFileHash::new(
-        SourceFileHashAlgorithm::Blake3,
-        bytes.as_slice().chain(payload),
-    )
-    .ok()?;
+    let checksum =
+        SourceFileHash::new(SourceFileHashAlgorithm::Blake3, bytes.as_slice().chain(payload))
+            .ok()?;
     bytes.extend_from_slice(checksum.hash_bytes());
     bytes.extend_from_slice(payload);
     Some(bytes)
@@ -190,11 +224,9 @@ fn open_envelope<'a>(bytes: &'a [u8], expected: &[u8; 32]) -> Option<&'a [u8]> {
     if !payload.ends_with(MAGIC_END_BYTES) {
         return None;
     }
-    let checksum = SourceFileHash::new(
-        SourceFileHashAlgorithm::Blake3,
-        bytes.get(..60)?.chain(payload),
-    )
-    .ok()?;
+    let checksum =
+        SourceFileHash::new(SourceFileHashAlgorithm::Blake3, bytes.get(..60)?.chain(payload))
+            .ok()?;
     if checksum.hash_bytes() != bytes.get(60..HEADER)? {
         return None;
     }
@@ -202,10 +234,7 @@ fn open_envelope<'a>(bytes: &'a [u8], expected: &[u8; 32]) -> Option<&'a [u8]> {
 }
 
 fn slot(key: &[u8; 32]) -> String {
-    format!(
-        "justrust-disk-ast-v1-{:02}.ast",
-        usize::from(key[0]) % SLOTS
-    )
+    format!("justrust-disk-ast-v1-{:02}.ast", usize::from(key[0]) % SLOTS)
 }
 
 /// Load only after the caller's source/ParseSess purity checks and fresh lexing.
@@ -214,27 +243,45 @@ pub fn load(psess: &ParseSess, source: &SourceFile, strip: u8) -> Option<ast::Cr
     if !enabled() {
         return None;
     }
+    let phases = Phases::new();
     let result = (|| {
-        let key = key(psess, source, strip).ok_or(())?;
-        let dir = PrivateDir::open(directory().ok_or(())?).map_err(|_| ())?;
-        let mut file = match dir.open_file(&slot(&key), false) {
+        let key = phases
+            .measure("key", source.src.as_ref().map_or(0, |s| s.len()), || {
+                key(psess, source, strip)
+            })
+            .ok_or(())?;
+        let opened = phases
+            .measure("open", 0, || {
+                let dir = PrivateDir::open(
+                    directory().ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?,
+                )?;
+                let file = dir.open_file(&slot(&key), false);
+                Ok::<_, io::Error>((dir, file))
+            })
+            .map_err(|_| ())?;
+        let (_dir, file) = opened;
+        let mut file = match file {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(()),
         };
-        if file.metadata().map_err(|_| ())?.len() > (HEADER + MAX_PAYLOAD) as u64 {
+        let file_len = file.metadata().map_err(|_| ())?.len();
+        if file_len > (HEADER + MAX_PAYLOAD) as u64 {
             return Err(());
         }
         let mut bytes = Vec::new();
-        (&mut file)
-            .take((HEADER + MAX_PAYLOAD + 1) as u64)
-            .read_to_end(&mut bytes)
+        phases
+            .measure("read", file_len as usize, || {
+                (&mut file).take((HEADER + MAX_PAYLOAD + 1) as u64).read_to_end(&mut bytes)
+            })
             .map_err(|_| ())?;
-        let payload = open_envelope(&bytes, &key).ok_or(())?;
-        let krate = decode(payload).ok_or(())?;
-        // Recheck the admitted subset and all encoded spans after decoding too.
+        let payload =
+            phases.measure("envelope", bytes.len(), || open_envelope(&bytes, &key)).ok_or(())?;
+        let krate = phases.measure("decode", payload.len(), || decode(payload, source)).ok_or(())?;
+        // Recheck the admitted subset after decoding. Every span was checked
+        // directly by CheckedDecoder, without re-encoding the entire AST.
         // This does not make malicious, owner-authored ASTs a supported input.
-        if inspect(&krate, Limits::default()).is_err() || encode(&krate, source).is_none() {
+        if phases.measure("admit", payload.len(), || inspect(&krate, Limits::default())).is_err() {
             return Err(());
         }
         Ok(Some(krate))
@@ -261,20 +308,26 @@ pub fn store(psess: &ParseSess, source: &SourceFile, strip: u8, krate: &ast::Cra
     if !enabled() {
         return;
     }
+    let phases = Phases::new();
     let stored = (|| {
         if inspect(krate, Limits::default()).is_err() {
             return None;
         }
         let key = key(psess, source, strip)?;
-        let payload = encode(krate, source)?;
+        let payload =
+            phases.measure("store_encode", source.src.as_ref().map_or(0, |s| s.len()), || {
+                encode(krate, source)
+            })?;
         let bytes = envelope(&key, &payload)?;
         let dir = PrivateDir::open(directory()?).ok()?;
-        let mut file = dir.open_file(TEMP, true).ok()?;
-        file.set_len(0).ok()?;
-        file.write_all(&bytes).ok()?;
-        // Atomic publication prevents readers from seeing incomplete records.
-        // Durability is not required: a lost record is an ordinary cache miss.
-        dir.rename(TEMP, &slot(&key)).ok()?;
+        phases.measure("store_write", bytes.len(), || {
+            let mut file = dir.open_file(TEMP, true).ok()?;
+            file.set_len(0).ok()?;
+            file.write_all(&bytes).ok()?;
+            // Atomic publication prevents readers from seeing incomplete records.
+            // Durability is not required: a lost record is an ordinary cache miss.
+            dir.rename(TEMP, &slot(&key)).ok()
+        })?;
         Some(())
     })();
     telemetry(if stored.is_some() { "store" } else { "reject" });
@@ -343,16 +396,8 @@ impl SpanEncoder for SnapshotEncoder {
 }
 
 fn encode(krate: &ast::Crate, source: &SourceFile) -> Option<Vec<u8>> {
-    let end = source
-        .start_pos
-        .0
-        .checked_add(u32::try_from(source.src.as_ref()?.len()).ok()?)?;
-    let mut encoder = SnapshotEncoder {
-        inner: MemEncoder::new(),
-        start: source.start_pos.0,
-        end,
-        valid: true,
-    };
+    let (start, end) = source_bounds(source)?;
+    let mut encoder = SnapshotEncoder { inner: MemEncoder::new(), start, end, valid: true };
     krate.encode(&mut encoder);
     if !encoder.valid || encoder.inner.position() > MAX_PAYLOAD - MAGIC_END_BYTES.len() {
         return None;
@@ -369,6 +414,8 @@ fn encode(krate: &ast::Crate, source: &SourceFile) -> Option<Vec<u8>> {
 /// session-local IDs instead of inventing replacements.
 struct CheckedDecoder<'a> {
     inner: MemDecoder<'a>,
+    start: u32,
+    end: u32,
 }
 
 fn invalid() -> ! {
@@ -444,7 +491,10 @@ impl SpanDecoder for CheckedDecoder<'_> {
     fn decode_span(&mut self) -> Span {
         let lo = BytePos::decode(self);
         let hi = BytePos::decode(self);
-        if lo > hi {
+        // MemEncoder stores only endpoints, so root hygiene and no parent are
+        // restored below. Only (0, 0) is dummy, matching Span::is_dummy, and it
+        // remains valid even when this exact source starts at a nonzero offset.
+        if lo > hi || !((lo.0 == 0 && hi.0 == 0) || (lo.0 >= self.start && hi.0 <= self.end)) {
             invalid();
         }
         Span::new(lo, hi, SyntaxContext::root(), None)
@@ -466,10 +516,17 @@ impl SpanDecoder for CheckedDecoder<'_> {
     }
 }
 
-fn decode(payload: &[u8]) -> Option<ast::Crate> {
+fn source_bounds(source: &SourceFile) -> Option<(u32, u32)> {
+    let start = source.start_pos.0;
+    let end = start.checked_add(u32::try_from(source.src.as_ref()?.len()).ok()?)?;
+    Some((start, end))
+}
+
+fn decode(payload: &[u8], source: &SourceFile) -> Option<ast::Crate> {
+    let (start, end) = source_bounds(source)?;
     let inner = MemDecoder::new(payload, 0).ok()?;
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut decoder = CheckedDecoder { inner };
+        let mut decoder = CheckedDecoder { inner, start, end };
         let krate = ast::Crate::decode(&mut decoder);
         if decoder.inner.remaining() != 0 {
             invalid();
@@ -490,10 +547,7 @@ fn private_file(file: &File) -> io::Result<()> {
         || metadata.mode() & 0o777 != 0o600
         || metadata.nlink() != 1
     {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "nonprivate AST cache file",
-        ));
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "nonprivate AST cache file"));
     }
     Ok(())
 }
@@ -547,11 +601,7 @@ impl PrivateDir {
         let flags = libc::O_NOFOLLOW
             | libc::O_CLOEXEC
             | libc::O_NONBLOCK
-            | if create {
-                libc::O_RDWR | libc::O_CREAT
-            } else {
-                libc::O_RDONLY
-            };
+            | if create { libc::O_RDWR | libc::O_CREAT } else { libc::O_RDONLY };
         // SAFETY: valid live directory FD, NUL-terminated basename, and supplied
         // mode for O_CREAT. The returned FD is adopted exactly once on success.
         let fd = unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), flags, 0o600) };
@@ -575,12 +625,7 @@ impl PrivateDir {
         // SAFETY: both names are internal NUL-terminated basenames and the same
         // pinned directory FD remains live for the whole atomic rename.
         if unsafe {
-            libc::renameat(
-                self.file.as_raw_fd(),
-                from.as_ptr(),
-                self.file.as_raw_fd(),
-                to.as_ptr(),
-            )
+            libc::renameat(self.file.as_raw_fd(), from.as_ptr(), self.file.as_raw_fd(), to.as_ptr())
         } != 0
         {
             return Err(io::Error::last_os_error());
@@ -595,10 +640,7 @@ struct PrivateDir;
 #[cfg(not(target_os = "linux"))]
 impl PrivateDir {
     fn open(_: PathBuf) -> io::Result<Self> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "disk AST prototype requires Linux",
-        ))
+        Err(io::Error::new(io::ErrorKind::Unsupported, "disk AST prototype requires Linux"))
     }
     fn open_file(&self, _: &str, _: bool) -> io::Result<File> {
         Err(io::Error::from(io::ErrorKind::Unsupported))
@@ -630,18 +672,12 @@ mod tests {
     fn every_truncation_and_single_byte_corruption_is_rejected_before_decode() {
         let bytes = envelope(&[7; 32], &payload()).unwrap();
         for len in 0..bytes.len() {
-            assert!(
-                open_envelope(&bytes[..len], &[7; 32]).is_none(),
-                "truncated at {len}"
-            );
+            assert!(open_envelope(&bytes[..len], &[7; 32]).is_none(), "truncated at {len}");
         }
         for index in 0..bytes.len() {
             let mut damaged = bytes.clone();
             damaged[index] ^= 1;
-            assert!(
-                open_envelope(&damaged, &[7; 32]).is_none(),
-                "damaged at {index}"
-            );
+            assert!(open_envelope(&damaged, &[7; 32]).is_none(), "damaged at {index}");
         }
         let mut trailing = bytes;
         trailing.push(0);
@@ -670,11 +706,59 @@ mod tests {
         let inner = MemDecoder::new(&bytes, 0).unwrap();
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut decoder = CheckedDecoder { inner };
+                let mut decoder = CheckedDecoder { inner, start: 100, end: 200 };
                 let _ = decoder.read_str();
             }))
             .is_err()
         );
+    }
+
+    // Encode endpoints directly so even reversed spans reach CheckedDecoder
+    // without Span::new normalizing them first.
+    fn decode_test_span(lo: u32, hi: u32) -> Result<Span, Box<dyn std::any::Any + Send>> {
+        let mut encoder = MemEncoder::new();
+        BytePos(lo).encode(&mut encoder);
+        BytePos(hi).encode(&mut encoder);
+        let mut bytes = encoder.finish();
+        bytes.extend_from_slice(MAGIC_END_BYTES);
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut decoder =
+                CheckedDecoder { inner: MemDecoder::new(&bytes, 0).unwrap(), start: 100, end: 200 };
+            let span = decoder.decode_span();
+            assert_eq!(decoder.inner.remaining(), 0);
+            span
+        }))
+    }
+
+    #[test]
+    fn checked_decoder_rejects_every_out_of_source_span_shape() {
+        rustc_span::create_default_session_globals_then(|| {
+            for (lo, hi) in [
+                (99, 100),
+                (100, 201),
+                (0, 100),
+                (0, 1),
+                (201, 201),
+                (150, 149),
+                (u32::MAX, u32::MAX),
+            ] {
+                assert!(decode_test_span(lo, hi).is_err(), "accepted {lo}..{hi}");
+            }
+        });
+    }
+
+    #[test]
+    fn checked_decoder_accepts_dummy_and_exact_source_boundaries() {
+        rustc_span::create_default_session_globals_then(|| {
+            let dummy = decode_test_span(0, 0).expect("dummy outside source remains valid");
+            assert!(dummy.is_dummy());
+            assert!(dummy.ctxt().is_root());
+            assert!(dummy.parent().is_none());
+            for (lo, hi) in [(100, 100), (100, 200), (200, 200)] {
+                let span = decode_test_span(lo, hi).expect("exact source bounds");
+                assert_eq!((span.lo().0, span.hi().0), (lo, hi));
+            }
+        });
     }
 
     #[test]
@@ -692,14 +776,9 @@ mod tests {
                 crate::lexer::StripTokens::Nothing,
             )
             .unwrap_or_else(|_| panic!("valid lexing"));
-            let krate = parser
-                .parse_crate_mod()
-                .unwrap_or_else(|_| panic!("valid AST"));
+            let krate = parser.parse_crate_mod().unwrap_or_else(|_| panic!("valid AST"));
             assert!(inspect(&krate, Limits::default()).is_ok());
-            (
-                encode(&krate, &source).expect("admitted native AST codec"),
-                source.start_pos,
-            )
+            (encode(&krate, &source).expect("admitted native AST codec"), source.start_pos)
         });
         rustc_span::create_default_session_globals_then(|| {
             // Perturb interning order. Serialized symbol indices would be wrong.
@@ -712,46 +791,34 @@ mod tests {
                 text.to_owned(),
             );
             assert_eq!(source.start_pos, original_start);
-            let krate = decode(&bytes).expect("native AST roundtrip");
-            assert_eq!(
-                krate.items[0].kind.ident().unwrap().name.as_str(),
-                "disk_snapshot_value"
-            );
+            let krate = decode(&bytes, &source).expect("native AST roundtrip");
+            assert_eq!(krate.items[0].kind.ident().unwrap().name.as_str(), "disk_snapshot_value");
             assert_eq!(encode(&krate, &source).unwrap(), bytes);
+            assert!(inspect(&krate, Limits::default()).is_ok());
+            let shifted_source = psess.source_map().new_source_file(
+                rustc_span::FileName::anon_source_code("different-source-offset"),
+                text.to_owned(),
+            );
+            assert_ne!(shifted_source.start_pos, source.start_pos);
+            assert!(decode(&bytes, &shifted_source).is_none());
         });
     }
 
     #[test]
     fn encoder_rejects_parent_spans_and_out_of_source_positions() {
         rustc_span::create_default_session_globals_then(|| {
-            let mut encoder = SnapshotEncoder {
-                inner: MemEncoder::new(),
-                start: 100,
-                end: 200,
-                valid: true,
-            };
-            encoder.encode_span(Span::new(
-                BytePos(100),
-                BytePos(200),
-                SyntaxContext::root(),
-                None,
-            ));
+            let mut encoder =
+                SnapshotEncoder { inner: MemEncoder::new(), start: 100, end: 200, valid: true };
+            encoder.encode_span(Span::new(BytePos(100), BytePos(200), SyntaxContext::root(), None));
             assert!(encoder.valid);
-            encoder.encode_span(Span::new(
-                BytePos(99),
-                BytePos(200),
-                SyntaxContext::root(),
-                None,
-            ));
+            encoder.encode_span(Span::new(BytePos(99), BytePos(200), SyntaxContext::root(), None));
             assert!(!encoder.valid);
             encoder.valid = true;
             encoder.encode_span(Span::new(
                 BytePos(100),
                 BytePos(200),
                 SyntaxContext::root(),
-                Some(rustc_span::def_id::LocalDefId {
-                    local_def_index: DefIndex::from_u32(1),
-                }),
+                Some(rustc_span::def_id::LocalDefId { local_def_index: DefIndex::from_u32(1) }),
             ));
             assert!(!encoder.valid);
         });
