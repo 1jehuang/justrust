@@ -51,3 +51,13 @@ The complete archive is 9,451,013 bytes, SHA256 `e36f7a402a6471d2f29f27bb4bff439
 
 The dedicated instance was stopped and its stopped state verified after archival. Its retained encrypted disk preserves the page images. No production compiler defaults, installed client, billing or tenant isolation were changed. Source, tests and this report are committed on `stable`.
 
+## Requested production-host rerun, 07:30 UTC
+
+The real running production pool instance is a `c8a.metal-24xl` with **96 physical cores and one thread per core**, independently verified through EC2. The earlier isolated trial host's 16 vCPUs were eight physical cores with two threads each, not this production host.
+
+Normal authenticated `justrust remote ssh` reaches this account's production guest. Its effective affinity is CPUs 0-15, its guaranteed share is 16, and its kernel is `6.1.155+`. Crucially, the actual guest `/proc/config.gz` reports `# CONFIG_CHECKPOINT_RESTORE is not set` and `# CONFIG_UNIX_DIAG is not set`. The build user has no effective or permitted capabilities and no general passwordless sudo. A 96-core physical host does not make all 96 CPUs visible inside a 16-vCPU guest.
+
+**The requested production disk-snapshot benchmark is blocked at the real kernel prerequisite. No production snapshot timing was measured.** Granting more CPU affinity would not enable the missing checkpoint implementation. A supported guest kernel plus a narrowly scoped privileged checkpoint operation would need a separate, validated production rollout before this harness could run there. No live guest kernel, resource allocation, root-access policy, billing or tenant isolation was changed to bypass the blocker. The normal production guest and host remain running.
+
+The exact generated authenticated guest preflight is archived as `compiler-process-snapshot-hosted-20261118-preflight`, 953 bytes, SHA256 `a008573b066f49933281e105d997fe5094ca4ec984dfeb84cdb5d326e1d2989d`, with authenticated lossless reconstruction verified. This is a blocked preflight, not performance evidence and not a substitute for a 96-core run.
+
