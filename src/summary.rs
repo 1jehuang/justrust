@@ -788,6 +788,8 @@ pub fn build(
         }
     };
     let mut first_test_line: Option<f64> = None;
+    // Every `test result:` line: (binary, tests in the binary, filtered out).
+    let mut results: Vec<(Option<String>, u64, u64)> = Vec::new();
     let mut orphan_spans: Vec<(f64, f64)> = Vec::new();
     // A runner line handed to the pool: (time, binary). Normally the pool
     // prints its own header later. When the hand-off fails the runner execs
@@ -887,6 +889,11 @@ pub fn build(
                 keep_slowest(&mut tests.slowest);
             }
         } else if let Some((p, f, ig, fo, secs)) = parse_test_result(text) {
+            results.push((
+                current.as_ref().map(|b| b.name.clone()),
+                p + f + ig + fo,
+                fo,
+            ));
             tests.passed += p;
             tests.failed += f;
             tests.ignored += ig;
@@ -908,6 +915,22 @@ pub fn build(
         }
     }
     close(current.take(), end, &mut tests);
+    // A test that reruns its own binary as a child prints libtest's counts
+    // for one test with the rest "filtered out". When an unfiltered result
+    // of the same size exists, those tests ran there: nothing was filtered.
+    let complete: Vec<u64> = results.iter().filter(|r| r.2 == 0).map(|r| r.1).collect();
+    for (name, total, fo) in &results {
+        if *fo > 0 && complete.contains(total) {
+            tests.filtered_out -= fo;
+            if let Some(b) = tests
+                .binaries
+                .iter_mut()
+                .find(|b| Some(&b.name) == name.as_ref())
+            {
+                b.filtered_out = b.filtered_out.saturating_sub(*fo);
+            }
+        }
+    }
     test_spans.extend(orphan_spans);
     keep_slowest(&mut tests.slowest);
 
@@ -2243,6 +2266,7 @@ mod tests {
             &[],
         );
         assert_eq!(s.tests.passed, 824);
+        assert_eq!(s.tests.filtered_out, 0, "a nested rerun filters nothing");
         assert!(s.phases.test_run > 4.8, "{:?}", s.phases);
         assert!(s.phases.tail < 0.1, "{:?}", s.phases);
     }
