@@ -151,11 +151,11 @@ work behind opt-in flags, canaries that never graduate, or later releases.
   not a reason to delay.
 - The limits still hold: never destroy user data and never weaken the
   security invariants in `~/justrust-cloud/AGENTS.md`.
-- Compiler changes ship the same way, by hand and often. There is no
-  automated nightly pipeline, on purpose. When a useful compiler change lands,
-  build a candidate and promote it in that session with
-  `~/justrust-cloud/tools/promote-toolchain.py`. Do not let hosted fall behind
-  `stable`.
+- Compiler changes ship the same way, by hand and very often. This frequent
+  manual promotion is how we iterate on the compiler: change it, build a
+  candidate, promote it with `~/justrust-cloud/tools/promote-toolchain.py`,
+  measure on prod, repeat. There is no automated nightly pipeline, on
+  purpose. Do not let hosted fall behind `stable`.
 
 ## Git workflow
 
