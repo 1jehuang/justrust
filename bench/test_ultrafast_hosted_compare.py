@@ -53,9 +53,11 @@ class HostedTests(unittest.TestCase):
         self.calls.append(dict(rep=int(rep), stack=stack, phase=phase, cmd=cmd,
                                cwd=cwd, env=dict(env), contents=(cwd / 'src/summary.rs').read_bytes()))
         status = 0
-        if phase == 'version':
-            text = ('jr-engine experimental 0.1 (Blaze-derived origin abc; build resident-v1-' +
-                    'a' * 64 + ')\n') if stack == 'engine' else 'cargo 1.93.0-nightly\n'
+        if phase in ('version', 'version-after'):
+            text = {'upstream': compare.UPSTREAM_VERSION + '\n',
+                    'engine': 'jr-engine experimental 0.1 (Blaze-derived origin abc; build resident-v1-' +
+                              'a' * 64 + ')\n',
+                    'stock': 'cargo 1.93.0-nightly\n'}[stack]
         elif phase == 'rustc-version':
             text = 'rustc 1.93.0-nightly (mock 2026-10-26)\nrelease: 1.93.0-nightly\n'
         elif phase.startswith('status-'):
@@ -90,6 +92,95 @@ class HostedTests(unittest.TestCase):
 
     def records(self):
         return json.loads((self.args.output / 'records.json').read_text())
+
+    def enable_upstream(self):
+        self.args.upstream = self.root / 'official'
+        self.args.upstream.write_bytes(b'\x7fELFofficial')
+        self.args.upstream.chmod(0o700)
+
+    def test_optional_upstream_three_matched_isolated_arms(self):
+        self.enable_upstream()
+        self.assertEqual(self.run_harness(), 0)
+        self.assertEqual(self.metadata()['stacks'], ['stock', 'engine', 'upstream'])
+        self.assertEqual(len(self.metadata()['restored_copies']), 15)
+        for rep in range(5):
+            for phase in compare.PHASES + (('full-library',) if rep == 0 else ()):
+                calls = [c for c in self.calls if c['rep'] == rep and c['phase'] == phase]
+                self.assertEqual([c['stack'] for c in calls],
+                                 compare.runtime.order(['stock', 'engine', 'upstream'], rep))
+                self.assertEqual(len({c['contents'] for c in calls}), 1)
+                for key in ('BLAZE_HOME', 'BLAZE_CACHE', 'RA_JIT_HOME', 'RA_JIT_CACHE',
+                            'CARGO_HOME', 'CARGO_TARGET_DIR', 'RUSTUP_HOME'):
+                    self.assertEqual(len({c['env'][key] for c in calls}), 3)
+                upstream = next(c for c in calls if c['stack'] == 'upstream')
+                self.assertEqual(upstream['cmd'][:3], [str(self.args.upstream), 'cargo', 'test'])
+        upstream_calls = [c for c in self.calls if c['stack'] == 'upstream']
+        for phase in ('version', 'version-after', 'stop', 'cleanup'):
+            self.assertEqual(sum(c['phase'] == phase for c in upstream_calls), 5)
+        self.assertEqual(sum(r['phase'] in compare.PHASES for r in self.records()), 105)
+        summary = json.loads((self.args.output / 'summary.json').read_text())
+        self.assertEqual(set(summary['medians_seconds']), {'stock', 'engine', 'upstream'})
+
+    def test_upstream_wrong_version_fails_closed(self):
+        self.enable_upstream()
+        self.fault = lambda s, p, r, t, x: ('blaze 0.20261027.0 (wrong)\n', x) \
+            if s == 'upstream' and p == 'version' else None
+        self.assertEqual(self.run_harness(), 1)
+
+    def test_upstream_changed_version_fails_closed(self):
+        self.enable_upstream()
+        self.fault = lambda s, p, r, t, x: ('blaze changed\n', x) \
+            if s == 'upstream' and p == 'version-after' else None
+        self.assertEqual(self.run_harness(), 1)
+
+    def test_upstream_full_parity_mismatch_fails_closed(self):
+        self.enable_upstream()
+        self.fault = lambda s, p, r, t, x: (t.replace('other::test_000', 'other::wrong'), x) \
+            if s == 'upstream' and p == 'full-library' else None
+        self.assertEqual(self.run_harness(), 1)
+        self.assertFalse(self.metadata()['full_library_parity'])
+
+    def test_upstream_cleanup_failure_fails_closed(self):
+        self.enable_upstream()
+        self.fault = lambda s, p, r, t, x: (t, 1) \
+            if s == 'upstream' and p == 'cleanup' else None
+        self.assertEqual(self.run_harness(), 1)
+        self.assertTrue(self.metadata()['cleanup_errors'])
+
+    def test_upstream_wrapper_is_rejected_before_invocation(self):
+        self.enable_upstream()
+        self.args.upstream.write_bytes(b'#!/bin/sh\n')
+        with self.assertRaisesRegex(ValueError, 'upstream.*ELF'):
+            self.run_harness()
+        self.assertFalse(self.calls)
+
+    def test_upstream_identity_contains_exact_sha_and_expected_version(self):
+        self.enable_upstream()
+        with patch.object(compare.shared, 'toolchain_identity', return_value={}):
+            identity = compare.identities(self.args)['upstream']
+        self.assertEqual(identity['sha256'], compare.runtime.base.digest(self.args.upstream))
+        self.assertEqual(identity['required_version'], 'blaze 0.20261027.0 (49ca152)')
+
+    def test_upstream_sha_mutation_excludes_all_medians(self):
+        self.enable_upstream()
+        with patch.object(compare.shared, 'toolchain_identity', return_value={}):
+            before = compare.identities(self.args)
+            self.args.upstream.write_bytes(b'\x7fELFchanged')
+            after = compare.identities(self.args)
+        self.identity_side_effect = [before, after]
+        self.assertEqual(self.run_harness(), 1)
+        self.assertFalse(self.metadata()['unchanged'])
+        self.assertEqual(json.loads((self.args.output / 'summary.json').read_text())['medians_seconds'], {})
+
+    def test_upstream_interruption_restores_and_cleans_both_namespaces(self):
+        self.enable_upstream()
+        self.fault = lambda s, p, r, t, x: KeyboardInterrupt() \
+            if s == 'upstream' and p == 'edit' else None
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_harness()
+        self.assertTrue(self.metadata()['unchanged'])
+        self.assertEqual({c['stack'] for c in self.calls if c['phase'] == 'cleanup'},
+                         {'engine', 'upstream'})
 
     def metadata(self):
         return json.loads((self.args.output / 'metadata.json').read_text())

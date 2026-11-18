@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Actual host-only pinned Cargo versus Blaze-derived jr-engine diagnostic.
+"""Host-only pinned Cargo versus Blaze-derived jr-engine diagnostic.
 
 No Rust commands run on import. Requires an explicit execution acknowledgement.
+Optional --upstream adds the official stable Blaze ELF as a third matched arm.
 Cold means fresh private compiler/target stores, NOT a flushed OS page cache.
 Results are descriptive for this fixture, not a general speed or compatibility claim.
 """
@@ -20,6 +21,7 @@ import resident_tier_compare as tier
 
 runtime = shared.runtime
 STACKS = ['stock', 'engine']
+UPSTREAM_VERSION = 'blaze 0.20261027.0 (49ca152)'
 PHASES = ('cold', 'warm-unchanged', 'edit', 'type-error', 'type-recovery',
           'assert-failure', 'assert-recovery')
 
@@ -75,8 +77,24 @@ def inputs(original, nonce):
 
 
 def identities(args):
-    return {'engine': {'path': str(args.engine), 'sha256': runtime.base.digest(args.engine)},
-            'toolchain': shared.toolchain_identity(args.toolchain)}
+    result = {'engine': {'path': str(args.engine), 'sha256': runtime.base.digest(args.engine)},
+              'toolchain': shared.toolchain_identity(args.toolchain)}
+    if getattr(args, 'upstream', None):
+        result['upstream'] = {'path': str(args.upstream),
+                              'sha256': runtime.base.digest(args.upstream),
+                              'required_version': UPSTREAM_VERSION}
+    return result
+
+
+def tool_for(stack, args):
+    return (args.engine if stack == 'engine' else args.upstream if stack == 'upstream'
+            else args.toolchain / 'bin/cargo')
+
+
+def test_command(stack, args, arguments):
+    return shared.command(tool_for(stack, args),
+                          'reference' if stack == 'upstream' else stack,
+                          arguments=arguments)
 
 
 def environment(root, stack, args):
@@ -101,9 +119,14 @@ def execute(args):
             or args.source.is_relative_to(args.output) or len(os.fsencode(args.output)) > 50):
         raise ValueError('output must be fresh, disjoint from source, and <=50 path bytes')
     shared.pinned_source(args.source)
-    with args.engine.open('rb') as stream:
-        if stream.read(4) != b'\x7fELF' or not os.access(args.engine, os.X_OK):
-            raise ValueError('engine must be an existing executable ELF, not a wrapper')
+    stacks = STACKS + (['upstream'] if getattr(args, 'upstream', None) else [])
+    for name in ('engine', 'upstream'):
+        tool = getattr(args, name, None)
+        if tool is None:
+            continue
+        with tool.open('rb') as stream:
+            if not tool.is_absolute() or stream.read(4) != b'\x7fELF' or not os.access(tool, os.X_OK):
+                raise ValueError(name + ' must be an absolute executable ELF, not a wrapper')
     identity_before = identities(args)  # Read-only hashes, never install a toolchain.
     args.output.mkdir(mode=0o700, parents=True)
     original = (args.source / 'src/summary.rs').read_bytes()
@@ -113,7 +136,7 @@ def execute(args):
                     host_label=args.host_label, hostname=platform.node(),
                     cpuinfo=Path('/proc/cpuinfo').read_text(),
                     meminfo=Path('/proc/meminfo').read_text(), source_before=before,
-                    identities_before=identity_before, environments={},
+                    identities_before=identity_before, environments={}, stacks=stacks,
                     scope='Host-only pinned filtered tests. No universal speed claim.',
                     cold_policy='Fresh private target and engine stores per replicate; OS page cache not flushed.',
                     full_library_policy='required' if not args.skip_full_library else 'explicitly skipped; not correctness-certified',
@@ -154,7 +177,7 @@ def execute(args):
         for rep in range(args.samples):
             nonce = (uuid.uuid4().int & ((1 << 63) - 1)) + 1
             contents = inputs(original, nonce)
-            for stack in runtime.order(STACKS, rep):
+            for stack in runtime.order(stacks, rep):
                 root = args.output / str(rep) / stack[0]
                 root.mkdir(mode=0o700, parents=True)
                 source = root / 'src'
@@ -172,23 +195,25 @@ def execute(args):
                 metadata['environments'][f'{rep}-{stack}'] = {
                     k: v for k, v in env.items() if k.startswith(
                         ('BLAZE_', 'RA_JIT_', 'JR_ENGINE_', 'CARGO_', 'RUST', 'XDG_')) or k == 'PATH'}
-                tool = args.engine if stack == 'engine' else args.toolchain / 'bin/cargo'
-                row, text = invoke(stack, rep, 'version', [str(tool), '-V'], env, source)
+                tool = tool_for(stack, args)
+                row, text = invoke(stack, rep, 'version', [str(tool), '--version'], env, source)
+                row['version_text'] = text
                 row['accepted'] = runtime.base.succeeded(row) and bool(re.search(
-                    r'^jr-engine experimental .*build resident-v1-[0-9a-f]{64}\)' if stack == 'engine' else r'^cargo ', text, re.M))
+                    r'^jr-engine experimental .*build resident-v1-[0-9a-f]{64}\)' if stack == 'engine'
+                    else '^' + re.escape(UPSTREAM_VERSION) + r'$' if stack == 'upstream'
+                    else r'^cargo ', text, re.M))
                 if stack == 'stock':
                     rust, version = invoke(stack, rep, 'rustc-version',
                                            [str(args.toolchain / 'bin/rustc'), '-vV'], env, source)
                     rust['accepted'] = runtime.base.succeeded(rust) and runtime.nightly_version(version)
             # Phase-major rotation gives matched input bytes and alternates the first stack.
             for phase in PHASES + (() if args.skip_full_library or rep != 0 else ('full-library',)):
-                for stack in runtime.order(STACKS, rep):
+                for stack in runtime.order(stacks, rep):
                     source, env = copies[(rep, stack)], envs[(rep, stack)]
                     (source / 'src/summary.rs').write_bytes(contents[phase])
-                    tool = args.engine if stack == 'engine' else args.toolchain / 'bin/cargo'
                     arguments = (['--lib', '--', '--test-threads=1', '--nocapture']
                                  if phase == 'full-library' else shared.FILTER)
-                    row, text = invoke(stack, rep, phase, [str(tool), 'test'] + arguments, env, source)
+                    row, text = invoke(stack, rep, phase, test_command(stack, args, arguments), env, source)
                     marker = f'JR_RUNTIME_EXECUTED_{phase_nonce(nonce, phase)}'
                     row['expected_marker'] = marker
                     row['accepted'] = accepted(phase, row, text, marker)
@@ -198,23 +223,33 @@ def execute(args):
                     if stack == 'engine':
                         observe(rep, env, source)
             # Stop only the namespace created by this replicate, never global servers.
-            row, _ = invoke('engine', rep, 'stop', [str(args.engine), 'stop'],
-                             envs[(rep, 'engine')], copies[(rep, 'engine')])
-            row['accepted'] = runtime.base.succeeded(row)
-            save()
+            for stack in stacks:
+                if stack == 'stock':
+                    continue
+                row, text = invoke(stack, rep, 'version-after',
+                                 [str(tool_for(stack, args)), '--version'],
+                                 envs[(rep, stack)], copies[(rep, stack)])
+                initial = next(r for r in rows if r['stack'] == stack and
+                               r['replicate'] == rep and r['phase'] == 'version')
+                row['version_text'] = text
+                row['accepted'] = runtime.base.succeeded(row) and text == initial['version_text']
+                row, _ = invoke(stack, rep, 'stop', [str(tool_for(stack, args)), 'stop'],
+                                 envs[(rep, stack)], copies[(rep, stack)])
+                row['accepted'] = runtime.base.succeeded(row)
+                save()
     except BaseException as exc:
         metadata['error'] = repr(exc)
         raise
     finally:
         cleanup_errors = []
         for (rep, stack), source in copies.items():
-            if stack == 'engine' and (rep, stack) in envs:
+            if stack != 'stock' and (rep, stack) in envs:
                 try:
-                    stop, _ = invoke(stack, rep, 'cleanup', [str(args.engine), 'stop'],
+                    stop, _ = invoke(stack, rep, 'cleanup', [str(tool_for(stack, args)), 'stop'],
                                      envs[(rep, stack)], source)
                     stop['accepted'] = runtime.base.succeeded(stop)
                     if not stop['accepted']:
-                        cleanup_errors.append(f'{rep}: engine stop failed')
+                        cleanup_errors.append(f'{rep}: {stack} stop failed')
                 except Exception as exc:
                     cleanup_errors.append(repr(exc))
             try:
@@ -233,18 +268,18 @@ def execute(args):
                 all(metadata['restored_copies'].values()))
         except (OSError, ValueError) as exc:
             metadata.update(identity_error=repr(exc), unchanged=False)
-        gate = (not args.skip_full_library and len(full_results) == 2 and
+        gate = (not args.skip_full_library and len(full_results) == len(stacks) and
                 full_results['stock'] is not None and
-                full_results['stock'] == full_results['engine'] and
+                all(full_results['stock'] == full_results[s] for s in stacks) and
                 all(r.get('accepted') for r in rows if r['phase'] == 'full-library'))
         valid = (metadata['unchanged'] and not cleanup_errors and 'error' not in metadata
                  and all(r.get('accepted', False) for r in rows if not r['phase'].startswith('status-'))
-                 and len([r for r in rows if r['phase'] in PHASES]) == args.samples * 2 * len(PHASES))
+                 and len([r for r in rows if r['phase'] in PHASES]) == args.samples * len(stacks) * len(PHASES))
         metadata['full_library_parity'] = gate
         metadata['status'] = 'passed' if valid and gate else 'failed/incomplete'
         medians = {}
         if valid and gate:
-            for stack in STACKS:
+            for stack in stacks:
                 medians[stack] = {phase: statistics.median(
                     r['elapsed_seconds'] for r in rows if r['stack'] == stack and r['phase'] == phase)
                     for phase in PHASES}
@@ -259,6 +294,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('engine', 'source', 'output', 'toolchain'):
         parser.add_argument('--' + name, required=True, type=shared.absolute)
+    parser.add_argument('--upstream', type=shared.absolute,
+                        help='Optional official stable Blaze 0.20261027.0 absolute ELF path')
     parser.add_argument('--host-label', required=True, help='Dedicated host identity/operator label')
     parser.add_argument('--execute-host-workloads', action='store_true')
     parser.add_argument('--samples', type=int, default=5)
