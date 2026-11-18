@@ -14,6 +14,9 @@ import stat
 import statistics
 import sys
 import time
+import uuid
+
+import stable_resident_dogfood as dogfood
 
 import stable_resident as native
 from stable_resident_dogfood import upload
@@ -121,11 +124,17 @@ def order(rep, index):
 
 def validate(row):
     reference = native.observable(row['modes']['fresh']['compile'])
-    if reference['status'] != (1 if row['expected_stdout'] is None else 0):
+    wanted_status = 1 if row.get('expectation') == 'compile-fail' else (
+        0 if 'expectation' in row else (1 if row['expected_stdout'] is None else 0))
+    if reference['status'] != wanted_status:
         raise AssertionError('Unexpected fresh compiler result: ' + repr(reference))
     for mode, result in row['modes'].items():
         if native.observable(result['compile']) != reference:
             raise AssertionError('Exact status/diagnostics differ for ' + mode)
+        if 'expectation' in row:
+            if wanted_status == 0:
+                result['named_statuses'] = dogfood.statuses(result['runtime'], result['nonce'], row['expectation'])
+            continue
         if row['expected_stdout'] is not None:
             expected = dict(status=0, stdout_b64=native.encoded(row['expected_stdout'].encode()), stderr_b64='')
             if native.observable(result['runtime']) != expected:
@@ -176,15 +185,19 @@ def hosted_identity(marker):
 
 
 def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=False,
-            hosted_marker=Path('/run/pool/share')):
+            hosted_marker=Path('/run/pool/share'), source=None):
     if not hosted:
         raise ValueError('Native executions are hosted-only. Run on the hosted guest with hosted=True')
     if repetitions < 1 or items < 1 or timeout <= 0:
         raise ValueError('Positive repetitions, items and timeout required')
     host = hosted_identity(hosted_marker)
     compiler, root = Path(compiler).resolve(), Path(root).resolve()
-    workload = [row for row in native.frontend_cases(items)
-                if row[0] not in ('delete-incremental', 'after-delete', 'corrupt-incremental', 'after-corrupt')]
+    source_path = Path(source).resolve() if source is not None else None
+    original = source_path.read_bytes() if source_path else None
+    workload = (dogfood.variants(original.decode('utf-8'), frontend=True) if source_path else
+                [row for row in native.frontend_cases(items)
+                 if row[0] not in ('delete-incremental', 'after-delete', 'corrupt-incremental', 'after-corrupt')])
+    work = root / 'private-workload' if source_path else root
     report = dict(schema=1, verdict='incomplete', scope='hosted-native-encoded-frontend-archive-tiers',
                   retention_scope='Encoded query archives and dependency graphs, rehydrated each request. '
                   'Not persistent typed heaps or retained GlobalCtxt.',
@@ -194,6 +207,18 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
                   modes=list(MODES), observations=[], sessions=[],
                   workload_sha256=hashlib.sha256(json.dumps(workload).encode()).hexdigest())
     try:
+        if source_path:
+            work.mkdir(mode=0o700)
+            (work / 'wrapper.rs').write_text(dogfood.WRAPPER)
+            (root / 'source-original.rs').write_bytes(original)
+            report.update(workload_kind='shipping-remote_sync_queue-module', source_path=str(source_path),
+                          source_sha256_before=hashlib.sha256(original).hexdigest(),
+                          original_tests=list(dogfood.ORIGINAL_TESTS), added_test=dogfood.PROBE,
+                          wrapper_sha256=native.digest(work / 'wrapper.rs'))
+            if native.digest(source_path) != report['source_sha256_before']:
+                raise AssertionError('Source changed while making private backup')
+        else:
+            report['workload_kind'] = 'generated-frontend-fixture'
         report['identity_before'] = native.identity(compiler)
         for rep in range(repetitions):
             repdir = root / f'repetition-{rep}'
@@ -204,7 +229,7 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
                 cache.mkdir(mode=0o700)
             try:
                 for mode in MODES[1:]:
-                    workers[mode] = native.Resident(compiler, caches[mode], root, False, timeout,
+                    workers[mode] = native.Resident(compiler, caches[mode], work, False, timeout,
                                                     frontend=mode != 'control')
                     report['sessions'].append(dict(mode=mode, repetition=rep,
                         pid=workers[mode].process.pid, command=workers[mode].command,
@@ -213,16 +238,19 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
                     row = dict(repetition=rep, name=name, source=source,
                                source_sha256=hashlib.sha256(source.encode()).hexdigest(),
                                expected_stdout=expected, order=order(rep, index), modes={})
+                    if source_path:
+                        row['expectation'] = expected
                     report['observations'].append(row)
                     for mode in row['order']:
-                        (root / 'fixture.rs').write_text(source)
-                        binary = root / 'fixture'
+                        (work / ('remote_sync_queue.rs' if source_path else 'fixture.rs')).write_text(source)
+                        binary = work / ('tests' if source_path else 'fixture')
                         binary.unlink(missing_ok=True)
-                        argv = native.arguments(root, caches[mode])
+                        argv = (dogfood.arguments(work, caches[mode]) if source_path
+                                else native.arguments(work, caches[mode]))
                         result = row['modes'][mode] = {}
                         previous = {}
                         if mode == 'fresh':
-                            result['compile'] = native.run([compiler, *argv], timeout, cwd=root,
+                            result['compile'] = native.run([compiler, *argv], timeout, cwd=work,
                                                             env=native.compiler_env(False, False))
                         else:
                             worker = workers[mode]
@@ -246,7 +274,14 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
                                 green_loads(previous, worker.frontend_counters)
                         if result['compile']['status'] == 0:
                             result['artifact_sha256'] = native.digest(binary)
-                            result['runtime'] = native.run([binary], timeout)
+                            if source_path:
+                                result['nonce'] = uuid.uuid4().hex
+                                env = native.compiler_env()
+                                env[dogfood.NONCE_KEY] = result['nonce']
+                                result['runtime'] = native.run([binary, '--nocapture', '--test-threads=1',
+                                                               '--color=never'], timeout, cwd=work, env=env)
+                            else:
+                                result['runtime'] = native.run([binary], timeout)
                     validate(row)
                 for mode in ('frontend-hot', 'frontend-compressed'):
                     native.validate_frontend_acceptance(workers['control'].frontend_counters,
@@ -266,6 +301,10 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
         report['identity_after'] = native.identity(compiler)
         if report['identity_before'] != report['identity_after']:
             raise AssertionError('Compiler identity changed')
+        if source_path:
+            report['source_sha256_after'] = native.digest(source_path)
+            if report['source_sha256_after'] != report['source_sha256_before']:
+                raise AssertionError('Original shipping source changed during capture')
         report['summary'] = summarize(report['observations'])
         report['summary_by_case'] = {name: summarize([row for row in report['observations']
                                                      if row['name'] == name])
@@ -277,6 +316,14 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
         raise
     finally:
         # Transcript paths remain private and every raw byte is embedded in the receipt.
+        if source_path:
+            try:
+                report['source_sha256_after'] = native.digest(source_path)
+                report['source_unchanged'] = report.get('source_sha256_before') == report['source_sha256_after']
+                if not report['source_unchanged']:
+                    report.update(verdict='failed', source_error='Original shipping source changed')
+            except OSError as error:
+                report.update(verdict='failed', source_unchanged=False, source_error=str(error))
         report['raw_streams'] = {str(path.relative_to(root)): native.encoded(path.read_bytes())
                                  for path in sorted(root.rglob('resident.*')) if path.is_file()}
         (root / 'receipt.json').write_text(json.dumps(report, indent=2) + '\n')
@@ -285,6 +332,7 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler', type=Path, required=True)
+    parser.add_argument('--source', type=Path, help='Real shipping remote_sync_queue.rs, copied privately only')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--hosted', action='store_true', help='Execute on guest with existing root-owned /run/pool/share')
     parser.add_argument('--hosted-marker', type=Path,
@@ -299,7 +347,7 @@ def main():
     args.output.mkdir(mode=0o700, parents=True, exist_ok=False)
     try:
         report = capture(args.compiler, args.output, args.repetitions, args.items, args.timeout,
-                         hosted=True, hosted_marker=args.hosted_marker)
+                         hosted=True, hosted_marker=args.hosted_marker, source=args.source)
         print(json.dumps(dict(verdict=report['verdict'], summary=report['summary']), indent=2))
     finally:
         upload(args.output.resolve())

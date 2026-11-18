@@ -192,6 +192,95 @@ class TierTests(unittest.TestCase):
                 tiers.capture('/mock', '/output', hosted=True)
             identity.assert_not_called()
 
+    def test_mock_shipping_module_route(self):
+        original = tiers.dogfood.DEFAULT_SOURCE.read_bytes()
+        matrix = tiers.dogfood.variants(original.decode(), frontend=True)
+        expectations = {source: expectation for _, source, expectation in matrix}
+        clock = [0.0]
+        workers = []
+        def compile_result(work):
+            expectation = expectations[(work / 'remote_sync_queue.rs').read_text()]
+            (work / 'tests').write_bytes(b'mock-test-artifact')
+            clock[0] += .01
+            return dict(status=1 if expectation == 'compile-fail' else 0,
+                        stdout_b64='', stderr_b64='ZXJyb3I=' if expectation == 'compile-fail' else '',
+                        elapsed_seconds=.01)
+        class Worker:
+            def __init__(self, compiler, cache, root, values, timeout, frontend):
+                self.root, self.frontend = root, frontend
+                self.process = SimpleNamespace(pid=42)
+                self.command = ['pure-python-mock']
+                self.counters = {'resident_hits': 0}
+                self.frontend_counters = counters(0)
+                self.closed = False
+                workers.append(self)
+            def compile(self, argv):
+                if self.frontend:
+                    self.frontend_counters = {key: value + 1 for key, value in self.frontend_counters.items()}
+                return compile_result(self.root)
+            def close(self):
+                self.closed = True
+        def run(argv, *args, **kwargs):
+            work = Path(kwargs['cwd'])
+            if '--test' in argv:
+                return compile_result(work)
+            expectation = expectations[(work / 'remote_sync_queue.rs').read_text()]
+            nonce = kwargs['env'][tiers.dogfood.NONCE_KEY]
+            names = list(tiers.dogfood.ORIGINAL_TESTS) + [tiers.dogfood.PROBE]
+            failed = int(expectation == 'test-fail')
+            statuses = {name: ('FAILED' if failed and name == names[2] else 'ok') for name in names}
+            stdout = '\n'.join(f'test {name} ... {status}' for name, status in statuses.items())
+            stdout += f'\ntest result: {"FAILED" if failed else "ok"}. {len(names) - failed} passed; {failed} failed; 0 ignored; 0 measured; 0 filtered out;\n'
+            clock[0] += 100
+            return dict(status=101 if failed else 0, stdout_b64=tiers.native.encoded(stdout.encode()),
+                        stderr_b64=tiers.native.encoded(f'JR_DOGFOOD_NONCE={nonce}\n'.encode()), elapsed_seconds=100)
+        def control(worker, tier):
+            return dict(elapsed_seconds=.001, response={'memory': owned(tier) if worker.frontend else owned('cold')})
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(tiers, 'hosted_identity', return_value={'mock': True}), \
+                patch.object(tiers.native, 'identity', return_value={'mock': True}), \
+                patch.object(tiers.native, 'Resident', Worker), patch.object(tiers.native, 'run', side_effect=run), \
+                patch.object(tiers, 'control', side_effect=control), \
+                patch.object(tiers.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(tiers, 'memory', return_value=dict(rss_kib=8, pss_kib=6, private_kib=5, swap_kib=0)):
+            root = Path(directory) / 'evidence'
+            root.mkdir()
+            source = Path(directory) / 'original-module.rs'
+            source.write_bytes(original)
+            report = tiers.capture('/pure-mock', root, repetitions=1, source=source, hosted=True)
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual((root / 'source-original.rs').read_bytes(), original)
+            self.assertEqual((root / 'private-workload/wrapper.rs').read_text(), tiers.dogfood.WRAPPER)
+            self.assertTrue(report['source_unchanged'])
+            self.assertTrue(all(worker.closed for worker in workers))
+            nonces = []
+            for row in report['observations']:
+                for mode, result in row['modes'].items():
+                    if mode != 'fresh':
+                        self.assertLess(result['wake_wall_seconds'], .011)
+                    if result['compile']['status'] == 0:
+                        self.assertEqual(len(result['named_statuses']), len(tiers.dogfood.ORIGINAL_TESTS) + 1)
+                        nonces.append(result['nonce'])
+            self.assertEqual(len(nonces), len(set(nonces)))
+            row = next(row for row in report['observations'] if row['name'] == 'unchanged')
+            row['modes']['control']['compile']['stderr_b64'] = 'ZGlmZmVyZW50'
+            with self.assertRaises(AssertionError):
+                tiers.validate(row)
+            row['modes']['control']['compile']['stderr_b64'] = ''
+            row['modes']['control']['compile']['status'] = 1
+            with self.assertRaises(AssertionError):
+                tiers.validate(row)
+            row['modes']['control']['compile']['status'] = 0
+            runtime = row['modes']['control']['runtime']
+            saved_stdout = runtime['stdout_b64']
+            runtime['stdout_b64'] = tiers.native.encoded(b'test missing ... ok\n')
+            with self.assertRaises(AssertionError):
+                tiers.validate(row)
+            runtime['stdout_b64'] = saved_stdout
+            row['modes']['control']['nonce'] = 'stale'
+            with self.assertRaises(AssertionError):
+                tiers.validate(row)
+
     def test_failure_keeps_receipt(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(tiers, 'hosted_identity', return_value={'mock': True}), patch.object(tiers.native, 'identity', side_effect=RuntimeError('mock failure')):
             with self.assertRaises(RuntimeError):
