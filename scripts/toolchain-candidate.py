@@ -31,6 +31,16 @@ def validate_source(root, revision):
         raise ValueError("refusing dirty relevant tracked source:\n" + dirty)
 
 
+def validate_snapshot_source(root, revision):
+    # The build reads only the frozen git-archive snapshot, so commits that
+    # land on stable while it runs (other agents) cannot change its inputs.
+    # Require only that the revision is still part of stable's history.
+    if git(root, "symbolic-ref", "--short", "HEAD") != "stable":
+        raise ValueError("candidate builds require the stable branch")
+    if subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", revision, "HEAD"]).returncode:
+        raise ValueError("source revision is no longer an ancestor of stable HEAD")
+
+
 def make_plan(root, revision, output):
     root = Path(root).resolve()
     validate_source(root, revision)
@@ -89,11 +99,11 @@ def execute(plan):
         # Only the private snapshot changes. Never rewrite live tracked metadata.
         (snapshot / "toolchain/rustc/git-commit-info").write_text(plan["source_metadata"] + "\n")
         for command in plan["commands"]:
-            validate_source(root, plan["source_revision"])
+            validate_snapshot_source(root, plan["source_revision"])
             env = dict(os.environ, **command["env"], CI="1", GIT_TERMINAL_PROMPT="0")
             subprocess.run(command["argv"], cwd=command["cwd"], env=env,
                            stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr, check=True)
-        validate_source(root, plan["source_revision"])
+        validate_snapshot_source(root, plan["source_revision"])
         for artifact in (Path(plan["artifacts"]["compiler_sysroot"]) / "bin/rustc",
                          Path(plan["artifacts"]["jr_cargo"])):
             if not artifact.is_file() or not os.access(artifact, os.X_OK):
