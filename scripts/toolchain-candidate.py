@@ -88,7 +88,8 @@ def make_plan(root, revision, output, optimize="none"):
         "commands": compiler_commands(snapshot, optimize) + [
             {"argv": ["bash", "toolchain/cargo/build-jr.sh", "nightly-2026-10-08"],
              "cwd": str(snapshot), "env": {"JUSTRUST_REMOTE": "off", "CARGO_TARGET_DIR": str(target),
-                                       "JR_CARGO_FEATURES": "all-static"}},
+                                       "JR_CARGO_FEATURES": "all-static",
+                                       "JUSTRUST_LOCAL_REASON": "release packaging needs the installable local jr-cargo binary"}},
         ],
         "artifacts": {"compiler_sysroot": str(snapshot / "toolchain/rustc/build/jr" / ("pgo-bolt" if optimize == "pgo-bolt" else "release")),
                       "jr_cargo": str(target / "release/cargo")},
