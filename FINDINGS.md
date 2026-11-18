@@ -10213,3 +10213,23 @@ diagnostics and exit status. Recorded workload IDs:
 This is correctness/interoperability evidence against the deployed supervisor,
 not an end-to-end timing comparison. No published client or cloud deployment
 was replaced for this optimization.
+
+## 2026-11-18: hosted default compiler is now jr-3e0f2d191587 (toolchain v0.1.2)
+
+Hosted and local had been stuck on `jr-ac20de5e7921` (Oct 11) because nothing
+released a compiler after the weekly rebase policy was dropped. That build has
+no cross-crate cutoff and its proc-macro cache is off.
+
+- New build `jr-3e0f2d191587ef643cf715108034403ebd526178`: PGO+BOLT with
+  cross-crate cutoff. Deep body edit downstream rebuild: 5.96s with cutoff vs
+  11.48s without (same build, cutoff toggled).
+- Promoted with `tools/promote-toolchain.py` (cloud `0fa97ed`, control 0.1.20).
+  `GET /v1/toolchain/current` answers the new id. Default hosted smoke
+  `20261118-013931886-1666039` ran on it with native phase profiling.
+- Promotion fixes found on the way: urllib's default User-Agent gets
+  Cloudflare 1010 (403). The client's stale-while-revalidate pin cache made the
+  first post-activation smoke use the old compiler, so the tool now clears it.
+- `tests/toolchain_slots.rs` buildd orphan test failed only on hosted: the
+  hosted test runner is itself a buildd child, and `JUSTRUST_BUILDD_CHILD`
+  leaked into the fixture client. Fixed in `c381fd6a7`.
+- Rollback: `jr-ac20de5e7921` stays published. Repromote it with the same tool.
