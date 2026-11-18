@@ -35,6 +35,7 @@ use crate::lexer::StripTokens;
 pub mod lexer;
 
 pub mod disk_ast;
+mod disk_ast_gallery;
 pub mod resident;
 pub mod resident_ast;
 mod resident_ast_eligibility;
@@ -238,13 +239,26 @@ fn new_parser_from_source_file(
     source_file: Arc<SourceFile>,
     strip_tokens: StripTokens,
 ) -> Result<Parser<'_>, Vec<Diag<'_>>> {
+    new_parser_from_source_file_with_gallery(psess, source_file, strip_tokens, false)
+        .map(|(parser, _)| parser)
+}
+
+fn new_parser_from_source_file_with_gallery(
+    psess: &ParseSess,
+    source_file: Arc<SourceFile>,
+    strip_tokens: StripTokens,
+    capture_gallery: bool,
+) -> Result<(Parser<'_>, Option<disk_ast_gallery::Gallery>), Vec<Diag<'_>>> {
     let end_pos = source_file.end_position();
-    let stream = source_file_to_stream(psess, source_file, None, strip_tokens)?;
+    let stream = source_file_to_stream(psess, source_file.clone(), None, strip_tokens)?;
+    let gallery = capture_gallery
+        .then(|| disk_ast_gallery::Gallery::capture(&source_file, &stream))
+        .flatten();
     let mut parser = Parser::new(psess, stream, None);
     if parser.token == token::Eof {
         parser.token.span = Span::new(end_pos, end_pos, parser.token.span.ctxt(), None);
     }
-    Ok(parser)
+    Ok((parser, gallery))
 }
 
 /// Given a source string, produces a sequence of token trees.

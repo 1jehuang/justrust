@@ -143,8 +143,25 @@ fn parse_source_file<'a>(
     let strip_mode = strip_key(&strip);
     let phases = crate::disk_ast::Phases::new();
     let source_bytes = source.src.as_ref().map_or(0, |s| s.len());
-    let mut parser = match phases.measure("lex_parser", source_bytes, || {
-        crate::new_parser_from_source_file(psess, source.clone(), strip)
+    let memory_enabled = enabled();
+    let disk_enabled = crate::disk_ast::enabled();
+    let initially_admissible = (memory_enabled || disk_enabled)
+        && phases
+            .measure("source_admission", source_bytes, || source_eligible(&source) && clean(psess));
+    // Publication proved clean effects for these exact source/build bytes.
+    // No lexical effects are replayed until the complete record is validated.
+    if disk_enabled && initially_admissible {
+        if let Some(krate) = crate::disk_ast::load(psess, &source, strip_mode) {
+            return Ok(krate);
+        }
+    }
+    let (mut parser, lexical_gallery) = match phases.measure("lex_parser", source_bytes, || {
+        crate::new_parser_from_source_file_with_gallery(
+            psess,
+            source.clone(),
+            strip,
+            disk_enabled && initially_admissible,
+        )
     }) {
         Ok(parser) => parser,
         Err(errors) => {
@@ -153,18 +170,10 @@ fn parse_source_file<'a>(
             crate::unwrap_or_emit_fatal(Err(errors))
         }
     };
-    let memory_enabled = enabled();
-    let disk_enabled = crate::disk_ast::enabled();
     if !memory_enabled && !disk_enabled {
         return parser.parse_crate_mod();
     }
-    let admissible = phases
-        .measure("source_admission", source_bytes, || source_eligible(&source) && clean(psess));
-    if admissible && disk_enabled {
-        if let Some(krate) = crate::disk_ast::load(psess, &source, strip_mode) {
-            return Ok(krate);
-        }
-    }
+    let admissible = initially_admissible && clean(psess);
     if admissible && memory_enabled {
         let found = CACHE.with(|slot| {
             let mut slot = slot.borrow_mut();
@@ -209,8 +218,8 @@ fn parse_source_file<'a>(
         reject();
         return result;
     };
-    if disk_enabled {
-        crate::disk_ast::store(psess, &source, strip_mode, krate);
+    if disk_enabled && let Some(gallery) = &lexical_gallery {
+        crate::disk_ast::store(psess, &source, strip_mode, krate, gallery);
     }
     if !memory_enabled {
         return result;

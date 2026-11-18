@@ -35,7 +35,7 @@ use rustc_span::{
 use crate::resident_ast_eligibility::{Limits, inspect};
 
 const MAGIC: &[u8; 16] = b"JRDISKAST0000001";
-const SCHEMA: u32 = 1;
+const SCHEMA: u32 = 2;
 const HEADER: usize = 16 + 4 + 32 + 8 + 32;
 const MAX_PAYLOAD: usize = 8 * 1024 * 1024;
 const MAX_SOURCE: usize = 256 * 1024;
@@ -277,13 +277,23 @@ pub fn load(psess: &ParseSess, source: &SourceFile, strip: u8) -> Option<ast::Cr
             .map_err(|_| ())?;
         let payload =
             phases.measure("envelope", bytes.len(), || open_envelope(&bytes, &key)).ok_or(())?;
-        let krate = phases.measure("decode", payload.len(), || decode(payload, source)).ok_or(())?;
+        let (krate, gallery) = phases
+            .measure("decode", payload.len(), || {
+                let len =
+                    usize::try_from(u64::from_le_bytes(payload.get(..8)?.try_into().ok()?)).ok()?;
+                let split = 8usize.checked_add(len)?;
+                let gallery =
+                    crate::disk_ast_gallery::Gallery::decode(payload.get(8..split)?, source)?;
+                Some((decode(payload.get(split..)?, source)?, gallery))
+            })
+            .ok_or(())?;
         // Recheck the admitted subset after decoding. Every span was checked
         // directly by CheckedDecoder, without re-encoding the entire AST.
         // This does not make malicious, owner-authored ASTs a supported input.
         if phases.measure("admit", payload.len(), || inspect(&krate, Limits::default())).is_err() {
             return Err(());
         }
+        phases.measure("gallery_replay", payload.len(), || gallery.apply(psess));
         Ok(Some(krate))
     })();
     match result {
@@ -304,7 +314,13 @@ pub fn load(psess: &ParseSess, source: &SourceFile, strip: u8) -> Option<ast::Cr
 
 /// Store only a successfully parsed, effect-free AST admitted by the caller.
 /// Internal admission is defense in depth, not a replacement for those checks.
-pub fn store(psess: &ParseSess, source: &SourceFile, strip: u8, krate: &ast::Crate) {
+pub(crate) fn store(
+    psess: &ParseSess,
+    source: &SourceFile,
+    strip: u8,
+    krate: &ast::Crate,
+    gallery: &crate::disk_ast_gallery::Gallery,
+) {
     if !enabled() {
         return;
     }
@@ -316,7 +332,13 @@ pub fn store(psess: &ParseSess, source: &SourceFile, strip: u8, krate: &ast::Cra
         let key = key(psess, source, strip)?;
         let payload =
             phases.measure("store_encode", source.src.as_ref().map_or(0, |s| s.len()), || {
-                encode(krate, source)
+                let ast = encode(krate, source)?;
+                let effects = gallery.encode();
+                let mut payload = Vec::with_capacity(8 + effects.len() + ast.len());
+                payload.extend_from_slice(&(effects.len() as u64).to_le_bytes());
+                payload.extend_from_slice(&effects);
+                payload.extend_from_slice(&ast);
+                Some(payload)
             })?;
         let bytes = envelope(&key, &payload)?;
         let dir = PrivateDir::open(directory()?).ok()?;
