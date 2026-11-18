@@ -27,6 +27,8 @@ class SnapshotTests(unittest.TestCase):
         info = snapshot.provenance()
         self.assertIn('kernel', info)
         self.assertIn('hostname', info)
+        if hasattr(snapshot.os, 'sched_getaffinity'):
+            self.assertEqual(info['cpu_affinity'], sorted(snapshot.os.sched_getaffinity(0)))
         self.assertEqual(len(info['harness_sources']), 3)
         self.assertTrue(all(len(row['sha256']) == 64 for row in info['harness_sources']))
 

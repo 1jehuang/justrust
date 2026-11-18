@@ -39,6 +39,8 @@ def provenance():
                 python=sys.version, executable=sys.executable, uid=os.getuid(),
                 invocation=[sys.executable, *sys.argv], captured_unix_seconds=time.time(),
                 logical_cpus=os.cpu_count())
+    if hasattr(os, 'sched_getaffinity'):
+        info['cpu_affinity'] = sorted(os.sched_getaffinity(0))
     for key, filename in (('cpuinfo', '/proc/cpuinfo'), ('meminfo', '/proc/meminfo'),
                           ('boot_id', '/proc/sys/kernel/random/boot_id')):
         try:
