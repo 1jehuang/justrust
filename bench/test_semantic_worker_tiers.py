@@ -11,6 +11,15 @@ from unittest.mock import patch
 import semantic_worker_tiers as tiers
 
 
+def owned(tier='hot'):
+    value = dict.fromkeys(tiers.OWNER_FIELDS, 0)
+    if tier == 'hot':
+        value.update(graph_bytes=10, archive_bytes=100, hot_bytes=100, hot_entries=1)
+    elif tier == 'compressed':
+        value.update(archive_bytes=40, compressed_bytes=40, compressed_entries=1)
+    return value
+
+
 def counters(value):
     return dict.fromkeys(tiers.native.FRONTEND_COUNTERS + tiers.native.FRONTEND_OPTIONAL, value)
 
@@ -45,7 +54,7 @@ class TierTests(unittest.TestCase):
             selector=SimpleNamespace(select=lambda timeout: [True]), response_fd=99)
 
     def test_control_shared_sequence_and_transcript(self):
-        response = dict(id=9, pid=42, status=0, tier='compressed', memory={'archive_bytes': 12})
+        response = dict(id=9, pid=42, status=0, tier='compressed', memory=owned('compressed'))
         worker = self.worker(json.dumps(response).encode() + b'\nnext')
         with patch.object(tiers, 'memory', return_value={'rss_kib': 80}):
             record = tiers.control(worker, 'compressed')
@@ -66,7 +75,7 @@ class TierTests(unittest.TestCase):
 
     def test_control_reads_fragmented_response(self):
         worker = self.worker(b'')
-        chunks = [b'{"id":9,"pid":42,"status":0,', b'"tier":"cold","memory":{}}\n']
+        chunks = [json.dumps(dict(id=9, pid=42, status=0, tier='cold', memory=owned('cold'))).encode(), b'\n']
         with patch.object(tiers, 'memory', return_value={}), patch.object(tiers.os, 'read', side_effect=chunks):
             self.assertEqual(tiers.control(worker, 'cold')['response']['tier'], 'cold')
 
@@ -128,12 +137,15 @@ class TierTests(unittest.TestCase):
                 (Path(argv[1]).parent / 'fixture').write_bytes(b'mock')
                 return observable(expected)
             return dict(status=0, stdout_b64=tiers.native.encoded(current['expected'].encode()), stderr_b64='')
+        def control(worker, tier):
+            return dict(elapsed_seconds=.001, response={'memory': owned(tier) if worker.frontend else owned('cold')})
         with tempfile.TemporaryDirectory() as directory, \
+                patch.object(tiers, 'hosted_identity', return_value={'mock': True}), \
                 patch.object(tiers.native, 'Resident', Worker), \
                 patch.object(tiers.native, 'identity', return_value={'mock': True}), \
                 patch.object(tiers.native, 'run', side_effect=run), \
                 patch.object(tiers, 'memory', return_value=dict(rss_kib=4, pss_kib=3, private_kib=2, swap_kib=0)), \
-                patch.object(tiers, 'control', return_value=dict(elapsed_seconds=.001)):
+                patch.object(tiers, 'control', side_effect=control):
             report = tiers.capture('/mock-only', directory, 1, 2, hosted=True)
             self.assertEqual(report['verdict'], 'passed')
             names = [row['name'] for row in report['observations']]
@@ -143,8 +155,40 @@ class TierTests(unittest.TestCase):
             self.assertTrue(all(worker.closed for worker in workers))
             self.assertTrue((Path(directory) / 'receipt.json').exists())
 
+    def test_owner_schema_and_actual_tiers(self):
+        tiers.tier_gate('compressed', owned(), owned('compressed'))
+        tiers.tier_gate('cold', owned(), owned('cold'))
+        for key in tiers.OWNER_FIELDS:
+            for invalid in (None, True, -1, '0', 1.0):
+                value = owned()
+                value[key] = invalid
+                with self.subTest(key=key, invalid=invalid), self.assertRaises(AssertionError):
+                    tiers.owner_memory(value)
+        for tier, after in [('compressed', owned()), ('compressed', owned('cold')), ('cold', owned('compressed'))]:
+            with self.subTest(tier=tier, after=after), self.assertRaises(AssertionError):
+                tiers.tier_gate(tier, owned(), after)
+
+    def test_hosted_marker_validation(self):
+        marker = Path('/share/mock-hosted-marker')
+        metadata = SimpleNamespace(st_uid=0, st_mode=0o100644)
+        with patch.object(Path, 'lstat', return_value=metadata), \
+                patch.object(Path, 'read_text', return_value='justrust-hosted-semantic-worker-tiers-v1\n'), \
+                patch.object(tiers.native, 'digest', return_value='mock'):
+            self.assertEqual(tiers.hosted_identity(marker)['uid'], 0)
+            for uid, mode in ((1000, 0o100644), (0, 0o100666), (0, 0o120644)):
+                metadata.st_uid, metadata.st_mode = uid, mode
+                with self.assertRaises(ValueError):
+                    tiers.hosted_identity(marker)
+        with self.assertRaises(ValueError):
+            tiers.hosted_identity('/tmp/not-hosted')
+        with patch.object(tiers.native, 'identity') as identity, \
+                patch.object(tiers, 'hosted_identity', side_effect=ValueError('missing marker')):
+            with self.assertRaises(ValueError):
+                tiers.capture('/mock', '/output', hosted=True)
+            identity.assert_not_called()
+
     def test_failure_keeps_receipt(self):
-        with tempfile.TemporaryDirectory() as directory, patch.object(tiers.native, 'identity', side_effect=RuntimeError('mock failure')):
+        with tempfile.TemporaryDirectory() as directory, patch.object(tiers, 'hosted_identity', return_value={'mock': True}), patch.object(tiers.native, 'identity', side_effect=RuntimeError('mock failure')):
             with self.assertRaises(RuntimeError):
                 tiers.capture('/mock', directory, hosted=True)
             report = json.loads((Path(directory) / 'receipt.json').read_text())

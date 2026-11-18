@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import stat
 import statistics
 import sys
 import time
@@ -17,6 +18,8 @@ import time
 import stable_resident as native
 from stable_resident_dogfood import upload
 
+OWNER_FIELDS = ('graph_bytes', 'archive_bytes', 'hot_entries', 'hot_bytes',
+                'compressed_entries', 'compressed_bytes', 'pinned_entries')
 TIERS = ('hot', 'compressed', 'cold')
 MODES = ('fresh', 'control', 'frontend-hot', 'frontend-compressed', 'frontend-cold')
 
@@ -38,6 +41,35 @@ def memory(pid, proc=Path('/proc')):
     result['private_kib'] = sum(result.get(key, 0) for key in
                                 ('private_clean_kib', 'private_dirty_kib', 'private_hugetlb_kib'))
     return result
+
+
+def owner_memory(value):
+    if not isinstance(value, dict):
+        raise AssertionError('Missing owner memory')
+    for key in OWNER_FIELDS:
+        if type(value.get(key)) is not int or value[key] < 0:
+            raise AssertionError('Invalid owner memory field: ' + key)
+    if value['archive_bytes'] != value['hot_bytes'] + value['compressed_bytes']:
+        raise AssertionError('Archive owner byte accounting mismatch')
+    if value['pinned_entries'] != 0:
+        raise AssertionError('Idle worker retains pinned archive entries')
+    return value
+
+
+def tier_gate(tier, before, after, frontend=True):
+    before, after = owner_memory(before), owner_memory(after)
+    if not frontend:
+        if any(after.values()):
+            raise AssertionError('Frontend-off control retains owner memory')
+        return
+    if tier == 'compressed' and before['archive_bytes'] > 0:
+        if (after['compressed_entries'] <= 0 or after['compressed_bytes'] <= 0
+                or after['archive_bytes'] >= before['archive_bytes']
+                or after['graph_bytes'] != 0):
+            raise AssertionError('Compressed tier did not actually reduce archive owner bytes')
+    elif tier == 'cold':
+        if any(after.values()):
+            raise AssertionError('Cold tier did not release all archive/graph ownership')
 
 
 def control(worker, tier):
@@ -74,6 +106,7 @@ def control(worker, tier):
             or type(response.get('status')) is not int or response['status'] != 0
             or response.get('tier') != tier or not isinstance(response.get('memory'), dict)):
         raise AssertionError('Invalid tier acknowledgement: ' + repr(response))
+    owner_memory(response['memory'])
     return record
 
 
@@ -124,11 +157,30 @@ def summarize(rows):
     return result
 
 
-def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=False):
+def hosted_identity(marker):
+    """Require operator provisioning on the hosted guest, not a CLI attestation alone."""
+    marker = Path(marker)
+    if (not marker.is_absolute() or not marker.is_relative_to('/share')
+            or not marker.resolve().is_relative_to('/share')):
+        raise ValueError('Hosted marker must be an absolute /share path')
+    metadata = marker.lstat()
+    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0
+            or metadata.st_mode & 0o022):
+        raise ValueError('Hosted marker must be a root-owned non-group/world-writable regular file')
+    content = marker.read_text().strip()
+    if content != 'justrust-hosted-semantic-worker-tiers-v1':
+        raise ValueError('Invalid hosted marker content')
+    return dict(marker=str(marker), uid=metadata.st_uid, mode=oct(stat.S_IMODE(metadata.st_mode)),
+                sha256=native.digest(marker), hostname=socket.gethostname())
+
+
+def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=False,
+            hosted_marker=Path('/share/justrust-hosted-semantic-worker-tiers.marker')):
     if not hosted:
         raise ValueError('Native executions are hosted-only. Run on the hosted guest with hosted=True')
     if repetitions < 1 or items < 1 or timeout <= 0:
         raise ValueError('Positive repetitions, items and timeout required')
+    host = hosted_identity(hosted_marker)
     compiler, root = Path(compiler).resolve(), Path(root).resolve()
     workload = [row for row in native.frontend_cases(items)
                 if row[0] not in ('delete-incremental', 'after-delete', 'corrupt-incremental', 'after-corrupt')]
@@ -136,7 +188,7 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
                   retention_scope='Encoded query archives and dependency graphs, rehydrated each request. '
                   'Not persistent typed heaps or retained GlobalCtxt.',
                   memory_note='Live Linux smaps_rollup KiB between requests. Not per-request peaks.',
-                  host=dict(hostname=socket.gethostname(), platform=sys.platform),
+                  host=dict(**host, platform=sys.platform),
                   inputs=dict(repetitions=repetitions, items=items, timeout=timeout),
                   modes=list(MODES), observations=[], sessions=[],
                   workload_sha256=hashlib.sha256(json.dumps(workload).encode()).hexdigest())
@@ -176,8 +228,12 @@ def capture(compiler, root, repetitions=10, items=64, timeout=180, *, hosted=Fal
                             previous = dict(worker.frontend_counters or {})
                             # Warm first, then measure the requested state while still alive.
                             if index:
-                                result['transition'] = control(worker, 'hot' if mode == 'control'
-                                                               else mode.split('-', 1)[1])
+                                result['hot_owner'] = control(worker, 'hot')
+                                tier = 'hot' if mode == 'control' else mode.split('-', 1)[1]
+                                result['transition'] = (result['hot_owner'] if tier == 'hot'
+                                                        else control(worker, tier))
+                                tier_gate(tier, result['hot_owner']['response']['memory'],
+                                          result['transition']['response']['memory'], mode != 'control')
                             result['idle_memory'] = memory(worker.process.pid)
                             start = time.monotonic()
                             result['compile'] = worker.compile(argv)
@@ -229,7 +285,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--hosted', action='store_true', help='Attest execution on authenticated hosted guest')
+    parser.add_argument('--hosted', action='store_true', help='Execute on guest with root-owned /share marker')
+    parser.add_argument('--hosted-marker', type=Path,
+                        default=Path('/share/justrust-hosted-semantic-worker-tiers.marker'))
     parser.add_argument('-n', '--repetitions', type=int, default=10)
     parser.add_argument('--items', type=int, default=64)
     parser.add_argument('--timeout', type=float, default=180)
@@ -239,7 +297,8 @@ def main():
     os.umask(0o077)
     args.output.mkdir(mode=0o700, parents=True, exist_ok=False)
     try:
-        report = capture(args.compiler, args.output, args.repetitions, args.items, args.timeout, hosted=True)
+        report = capture(args.compiler, args.output, args.repetitions, args.items, args.timeout,
+                         hosted=True, hosted_marker=args.hosted_marker)
         print(json.dumps(dict(verdict=report['verdict'], summary=report['summary']), indent=2))
     finally:
         upload(args.output.resolve())
