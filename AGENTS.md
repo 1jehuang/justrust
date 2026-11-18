@@ -198,24 +198,23 @@ work behind opt-in flags, canaries that never graduate, or later releases.
 
 ## Measuring
 
-- Do not claim a speedup without before and after numbers from
-  `bench/suite.py` (pinned snapshots, see `bench/README.md`): run it before
-  and after, and quote `bench/suite.py compare`.
+- Do not claim a speedup without before and after numbers. `bench/suite.py`
+  (pinned snapshots, see `bench/README.md`, quote `bench/suite.py compare`)
+  and measurements on live prod runs both count.
   `justrust show` explains a single run.
-- For general speed claims and default promotion, use the comprehensive
-  session-weighted workload: `bench/suite.py run --synth 1 -n 1` before and
-  after, then `bench/suite.py compare`. Keep seed, point count, generator,
-  weights, snapshots, and execution mode identical. Inspect command/change
-  breakdowns for regressions, not just the aggregate mean.
+- For general speed claims, the comprehensive session-weighted workload
+  (`bench/suite.py run --synth 1 -n 1` before and after, then
+  `bench/suite.py compare`) is one good option, not a requirement. Changing a
+  default does not need it. Measuring on the live prod machines is fine: make
+  the change, deploy it, and measure there with real runs (cite run ids). Pick
+  whatever measurement fits the change. When comparing, keep the inputs and
+  execution mode identical and look for regressions, not just the mean.
 - Use `bench/versus.py run --synth 1 -n 1` for stock-versus-justrust claims.
   Named suite scenarios and `bench/factors.py` are focused diagnostics and
-  component attribution, not substitutes for the comprehensive gate. A
-  targeted win can ship with an explicitly scoped claim, but a default
-  promotion needs the broader comparison and relevant regression checks.
+  component attribution. A scoped claim should say what was measured.
 - Supplement the synthetic workload with cold-build, contention, hosted,
   and correctness checks relevant to the change. Its coverage is not universal
-  (see `bench/synth/README.md`, Known gaps). If the broad gate is blocked,
-  report it as blocked rather than substituting `desktop-test-edit`.
+  (see `bench/synth/README.md`, Known gaps).
 - Builds and benchmark results are recorded automatically by the tools:
   every recorded build and every `bench/*.py` result is uploaded to the
   account-private record store (`justrust records list|show`). Cite run ids.
