@@ -91,7 +91,16 @@ def wait_for_publication(tag, sha, timeout, poll, production, clock=time.monoton
     triple = production.target()
     while True:
         # Recheck tag identity throughout the wait, not just before publication.
-        if remote_tag(tag) != sha:
+        try:
+            observed = remote_tag(tag)
+        except subprocess.CalledProcessError as error:
+            remaining = deadline - clock()
+            if remaining <= 0:
+                raise TimeoutError("could not verify remote release tag before publication deadline") from error
+            print("Remote tag lookup unavailable; retrying without activating.", flush=True)
+            sleep(min(poll, remaining))
+            continue
+        if observed != sha:
             raise ValueError("release tag moved or disappeared while waiting")
         try:
             production.release_info(tag, triple)

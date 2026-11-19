@@ -113,6 +113,16 @@ class ReleaseClientTests(unittest.TestCase):
                 release.wait_for_publication(VERSION, SHA, 10, 1, production)
             production.release_info.assert_not_called()
 
+    def test_transient_tag_lookup_requires_successful_reverification(self):
+        production = SimpleNamespace(target=lambda: "triple", release_info=mock.Mock())
+        error = release.subprocess.CalledProcessError(128, "git")
+        with mock.patch.object(release, "remote_tag", side_effect=[error, SHA]), mock.patch.object(release, "release_runs") as runs:
+            sleep = mock.Mock(side_effect=lambda _: production.release_info.assert_not_called())
+            release.wait_for_publication(VERSION, SHA, 10, 1, production, clock=lambda: 0, sleep=sleep)
+            sleep.assert_called_once_with(1)
+            runs.assert_not_called()
+            production.release_info.assert_called_once_with(VERSION, "triple")
+
     def test_dry_run_has_no_tag_or_activation_side_effects(self):
         with mock.patch.object(release, "candidate", return_value=SHA), \
                 mock.patch.object(release, "ensure_tag") as tag, \
