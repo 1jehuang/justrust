@@ -845,22 +845,35 @@ fn selected_lines(state: &State, width: usize) -> Vec<Line<'static>> {
             .filter(|(_, secs)| *secs > 0.0)
             .collect();
         parts.sort_by(|a, b| b.1.total_cmp(&a.1));
-        let text = parts
-            .iter()
-            .map(|(name, secs)| {
-                format!(
-                    "{name} {} ({:.0}%)",
-                    crate::status::dur(*secs),
-                    if total > 0.0 {
-                        secs / total * 100.0
-                    } else {
-                        0.0
-                    }
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(" · ");
-        lines.push(detail("Timing", vec![span(text, VALUE)], width));
+        let entries = parts.iter().map(|(name, secs)| {
+            format!(
+                "{name} {} ({:.0}%)",
+                crate::status::dur(*secs),
+                if total > 0.0 {
+                    secs / total * 100.0
+                } else {
+                    0.0
+                }
+            )
+        });
+        let mut key = "Timing";
+        let mut row = String::new();
+        for entry in entries {
+            if !row.is_empty() {
+                if 9 + row.width() + 3 + entry.width() > width {
+                    lines.push(detail(
+                        key,
+                        vec![span(std::mem::take(&mut row), VALUE)],
+                        width,
+                    ));
+                    key = "";
+                } else {
+                    row.push_str(" · ");
+                }
+            }
+            row.push_str(&entry);
+        }
+        lines.push(detail(key, vec![span(row, VALUE)], width));
     } else {
         lines.push(detail(
             "Timing",
@@ -1732,6 +1745,9 @@ mod tests {
             text.find("Selected run").unwrap() < text.find("─ Runs").unwrap(),
             "{text}"
         );
+        let wrapped = selected_lines(&state, 36);
+        assert_eq!(wrapped[3].to_string(), "Timing   compiling 8.0s (80%)");
+        assert_eq!(wrapped[4].to_string(), "         running tests 2.0s (20%)");
         state.selected = 1;
         let lines = selected_lines(&state, 120);
         let text: String = lines
