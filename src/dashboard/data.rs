@@ -42,8 +42,23 @@ pub(crate) const BUCKETS: usize = 9;
 /// Seconds per [`Bucket`], indexed by `Bucket as usize`. Sums to the wait.
 pub(crate) type Times = [f64; BUCKETS];
 
-/// Parsed timings by run ID. A finished run's summary never changes, so each
-/// is read once. `None` records a summary that could not be read.
+/// Positive profiles are immutable. For other rows, throttle filesystem probes
+/// and remember successful reads, including empty or malformed ledgers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Ledger {
+    #[default]
+    Unknown,
+    Complete,
+    Probe(std::time::Instant, Option<(u64, std::time::SystemTime)>),
+}
+
+pub(crate) fn cached_ledger(row: &RunRow) -> Ledger {
+    if row.compile.is_some() || row.reuse.is_some() || row.opt_level.is_some() {
+        Ledger::Complete
+    } else {
+        Ledger::Unknown
+    }
+}
 pub(crate) type TimeCache = std::collections::HashMap<
     String,
     (
@@ -53,6 +68,7 @@ pub(crate) type TimeCache = std::collections::HashMap<
         Option<Timeline>,
         Option<String>,
         Option<String>,
+        Ledger,
     ),
 >;
 
@@ -615,7 +631,9 @@ pub(crate) fn local_snapshot(
     match rows {
         Ok(mut rows) => {
             for row in &mut rows {
-                if let Some((time, compile, reuse, timeline, opt, toolchain)) = cache.get(&row.id) {
+                if let Some((time, compile, reuse, timeline, opt, toolchain, _)) =
+                    cache.get(&row.id)
+                {
                     row.time = *time;
                     row.compile = *compile;
                     row.reuse = *reuse;
@@ -656,25 +674,63 @@ pub(crate) fn local_snapshot(
 }
 
 fn enrich_rows(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path) {
-    let missing = rows
+    enrich_rows_at(rows, cache, dir, std::time::Instant::now());
+}
+
+fn enrich_rows_at(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path, now: std::time::Instant) {
+    let mut ledgers: Vec<_> = rows
         .iter()
-        .filter(|row| !cache.contains_key(&row.id))
-        .count();
+        .map(|r| cache.get(&r.id).map_or(Ledger::Unknown, |v| v.6))
+        .collect();
+    let due = |state: &Ledger| match state {
+        Ledger::Unknown => true,
+        Ledger::Probe(next, _) => *next <= now,
+        Ledger::Complete => false,
+    };
+    let missing = ledgers.iter().filter(|s| due(s)).count();
     if missing > 0 {
         let workers = std::thread::available_parallelism()
             .map_or(1, usize::from)
             .min(4)
             .min(missing);
         let chunk = rows.len().div_ceil(workers).max(1);
-        let known = &*cache;
         std::thread::scope(|scope| {
-            for rows in rows.chunks_mut(chunk) {
+            for (rows, states) in rows.chunks_mut(chunk).zip(ledgers.chunks_mut(chunk)) {
                 scope.spawn(move || {
-                    for row in rows {
-                        if known.contains_key(&row.id) {
+                    for (row, state) in rows.iter_mut().zip(states) {
+                        if !due(state) {
                             continue;
                         }
                         let run = dir.join(&row.id);
+                        let path = run.join("units.jsonl");
+                        let metadata = std::fs::metadata(&path).ok();
+                        let stamp = metadata
+                            .as_ref()
+                            .and_then(|m| m.modified().ok().map(|mtime| (m.len(), mtime)));
+                        let previous = *state;
+                        let next = now + std::time::Duration::from_secs(10);
+                        *state = Ledger::Probe(next, stamp);
+                        if let Ledger::Probe(_, old) = previous
+                            && old == stamp
+                            && (old.is_some() || metadata.is_none())
+                        {
+                            continue;
+                        }
+                        let oversized = metadata.is_some_and(|m| m.len() > SUMMARY_BYTES);
+                        let units = if oversized {
+                            None
+                        } else {
+                            read_summary(&path).ok()
+                        };
+                        if units.is_none() {
+                            if !oversized {
+                                *state = Ledger::Probe(next, None);
+                            }
+                            if previous != Ledger::Unknown {
+                                continue;
+                            }
+                        }
+                        let units = units.unwrap_or_default();
                         let summary = read_summary(&run.join("summary.json")).unwrap_or_default();
                         if let Ok(mut timing) = serde_json::from_slice::<Timing>(&summary) {
                             if row.toolchain_version.is_none() {
@@ -686,17 +742,25 @@ fn enrich_rows(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path) {
                             }
                             row.time = measured_times(timing);
                         }
-                        let units = read_summary(&run.join("units.jsonl")).unwrap_or_default();
-                        (row.compile, row.reuse, row.timeline, row.opt_level) =
+                        let (compile, reuse, timeline, opt) =
                             timeline_profiles(&summary, &units, row.place == "local", || {
                                 read_summary(&run.join("processes.json")).unwrap_or_default()
                             });
+                        row.compile = compile;
+                        row.reuse = reuse;
+                        row.opt_level = opt;
+                        if timeline.is_some() {
+                            row.timeline = timeline;
+                        }
+                        if cached_ledger(row) == Ledger::Complete {
+                            *state = Ledger::Complete;
+                        }
                     }
                 });
             }
         });
     }
-    for row in rows.iter() {
+    for (row, ledger) in rows.iter().zip(ledgers) {
         cache.insert(
             row.id.clone(),
             (
@@ -706,6 +770,7 @@ fn enrich_rows(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path) {
                 row.timeline.clone(),
                 row.opt_level.clone(),
                 row.toolchain_version.clone(),
+                ledger,
             ),
         );
     }
@@ -1578,9 +1643,20 @@ mod tests {
         let mut cache = TimeCache::from([
             (
                 "saved".into(),
-                (time, compile, None, None, Some("s".into()), None),
+                (
+                    time,
+                    compile,
+                    None,
+                    None,
+                    Some("s".into()),
+                    None,
+                    Ledger::Complete,
+                ),
             ),
-            ("expired".into(), (None, None, None, None, None, None)),
+            (
+                "expired".into(),
+                (None, None, None, None, None, None, Ledger::Unknown),
+            ),
         ]);
         enrich_rows(
             &mut rows,
@@ -1592,8 +1668,83 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(
             cache["saved"],
-            (time, compile, None, None, Some("s".into()), None)
+            (
+                time,
+                compile,
+                None,
+                None,
+                Some("s".into()),
+                None,
+                Ledger::Complete
+            )
         );
+    }
+
+    #[test]
+    fn delayed_ledger_recovers_after_restore_without_rereading_unchanged_files() {
+        use std::{
+            fs,
+            time::{Duration, Instant},
+        };
+        let dir = std::env::temp_dir().join(format!(
+            "jr-ledger-fixture-{}-{}",
+            std::process::id(),
+            crate::paths::now()
+        ));
+        let run = dir.join("saved");
+        fs::create_dir_all(&run).unwrap();
+        let units = run.join("units.jsonl");
+        let now = Instant::now();
+        let mut rows = [RunRow {
+            id: "saved".into(),
+            toolchain_version: Some("new".into()),
+            ..Default::default()
+        }];
+        let mut cache = TimeCache::from([(
+            "saved".into(),
+            (
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("old".into()),
+                cached_ledger(&rows[0]),
+            ),
+        )]);
+        let mut refresh = |second, rows: &mut [RunRow]| {
+            enrich_rows_at(rows, &mut cache, &dir, now + Duration::from_secs(second));
+            cache["saved"].6
+        };
+        assert!(matches!(refresh(0, &mut rows), Ledger::Probe(_, None)));
+        fs::write(&units, b"").unwrap();
+        assert!(matches!(refresh(2, &mut rows), Ledger::Probe(_, None)));
+        assert!(matches!(
+            refresh(10, &mut rows),
+            Ledger::Probe(_, Some((0, _)))
+        ));
+        fs::write(&units, b"invalid").unwrap();
+        fs::write(run.join("summary.json"), br#"{"toolchain":"old"}"#).unwrap();
+        assert!(matches!(
+            refresh(20, &mut rows),
+            Ledger::Probe(_, Some((7, _)))
+        ));
+        assert!(matches!(
+            refresh(30, &mut rows),
+            Ledger::Probe(_, Some((7, _)))
+        ));
+        fs::remove_file(&units).unwrap();
+        assert!(matches!(refresh(40, &mut rows), Ledger::Probe(_, None)));
+        // A directory at the ledger path has metadata but cannot be read as JSONL.
+        fs::create_dir(&units).unwrap();
+        assert!(matches!(refresh(50, &mut rows), Ledger::Probe(_, None)));
+        fs::remove_dir(&units).unwrap();
+        fs::write(&units, br#"{"crate_types":["lib"],"wall":2.0}"#).unwrap();
+        assert_eq!(refresh(60, &mut rows), Ledger::Complete);
+        assert!(rows[0].compile.is_some());
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(refresh(70, &mut rows), Ledger::Complete);
+        assert_eq!(rows[0].toolchain_version.as_deref(), Some("new"));
     }
 
     #[test]

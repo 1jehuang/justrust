@@ -711,6 +711,7 @@ pub(crate) fn run() -> Result<()> {
                     row.timeline.clone(),
                     row.opt_level.clone(),
                     row.toolchain_version.clone(),
+                    data::cached_ledger(row),
                 ),
             )
         })
@@ -1404,6 +1405,7 @@ fn full_dashboard_cached_data_latency_probe() {
                         row.timeline.clone(),
                         row.opt_level.clone(),
                         row.toolchain_version.clone(),
+                        data::cached_ledger(row),
                     ),
                 )
             })
