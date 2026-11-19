@@ -226,7 +226,10 @@ fn live_daemons(early: &Path) -> Vec<(PathBuf, SystemTime)> {
 /// A daemon holds `lock` for its lifetime. Probing it, unlike connecting to
 /// `sock`, does not count as a query and so leaves the idle clock alone.
 fn daemon_alive(dir: &Path) -> bool {
-    match std::fs::OpenOptions::new().write(true).open(dir.join("lock")) {
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .open(dir.join("lock"))
+    {
         Ok(f) => f.try_lock().is_err(),
         Err(_) => false,
     }
@@ -667,7 +670,10 @@ fn spawn_daemon(root: &Path, dir: &Path) -> Result<()> {
             .into_iter()
             .filter(|(d, _)| d != dir)
             .collect();
-        for victim in lru_victims(&live, daemon_cap(crate::procfs::meminfo().map(|m| m.total_mb))) {
+        for victim in lru_victims(
+            &live,
+            daemon_cap(crate::procfs::meminfo().map(|m| m.total_mb)),
+        ) {
             stop_daemon(&victim);
         }
     }
@@ -1793,7 +1799,9 @@ mod tests {
     #[test]
     fn lru_cap_stops_least_recently_queried_to_fit_one_more() {
         let t = |s| SystemTime::UNIX_EPOCH + Duration::from_secs(s);
-        let live: Vec<_> = (0..8).map(|i| (PathBuf::from(format!("/e/{i}")), t(i))).collect();
+        let live: Vec<_> = (0..8)
+            .map(|i| (PathBuf::from(format!("/e/{i}")), t(i)))
+            .collect();
         assert_eq!(lru_victims(&live, 8), vec![PathBuf::from("/e/0")]);
         assert!(lru_victims(&live[..7], 8).is_empty());
         assert_eq!(lru_victims(&live, 6).len(), 3);

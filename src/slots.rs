@@ -440,10 +440,10 @@ fn pick_compatible(
 ) -> (Option<Pick>, usize) {
     let mut busy = 0;
     let mut tried = vec![false; metas.len()];
-    if let Some(i) = metas
+    let owned = metas
         .iter()
-        .position(|m| m.as_ref().is_some_and(|m| m.owner == me))
-    {
+        .position(|m| m.as_ref().is_some_and(|m| m.owner == me));
+    if let Some(i) = owned.filter(|&i| compatible(i)) {
         tried[i] = true;
         if free(i) {
             return (Some(Pick::Sticky(i)), busy);
@@ -467,6 +467,15 @@ fn pick_compatible(
         tried[i] = true;
         if free(i) {
             return (Some(Pick::Warm(i)), busy);
+        }
+        busy += 1;
+    }
+    // Session ownership alone does not mean the previous package set is warm.
+    // Prefer exact matches above, but keep the sticky slot as the next choice.
+    if let Some(i) = owned.filter(|&i| !tried[i]) {
+        tried[i] = true;
+        if free(i) {
+            return (Some(Pick::Sticky(i)), busy);
         }
         busy += 1;
     }
@@ -1071,6 +1080,15 @@ fn snapshot_guard(profile: &Path) -> Option<(File, File)> {
     Some((native, legacy))
 }
 
+fn same_compile_request(a: &str, b: &str) -> bool {
+    // Idle-slot locality only. In-flight joins still require exact equality.
+    fn fields(key: &str) -> impl Iterator<Item = &str> {
+        key.split('\0')
+            .filter(|arg| *arg != "--no-run" && !arg.starts_with("--message-format="))
+    }
+    a == b || fields(a).eq(fields(b))
+}
+
 fn has_compatible_profile(
     root: &Path,
     profile: &Path,
@@ -1084,7 +1102,7 @@ fn has_compatible_profile(
             (meta.owner == owner
                 || (warm_reuse
                     && std::fs::read_to_string(root.join(format!("{n}.req")))
-                        .is_ok_and(|request| request == key)))
+                        .is_ok_and(|request| same_compile_request(&request, key))))
                 && has_units(&root.join(n.to_string()).join(profile))
         })
     })
@@ -1274,7 +1292,7 @@ fn acquire_with_probe(args: &[OsString], probe: impl FnOnce(&Path) -> bool) -> O
             |i| {
                 warm_reuse
                     && std::fs::read_to_string(root.join(format!("{i}.req")))
-                        .is_ok_and(|k| k == key)
+                        .is_ok_and(|k| same_compile_request(&k, &key))
             },
             |i| {
                 locks[i] = try_lock(&root.join(format!("{i}.lock")));
@@ -1298,6 +1316,14 @@ fn acquire_with_probe(args: &[OsString], probe: impl FnOnce(&Path) -> bool) -> O
             _lock: None,
         });
     };
+    if !can_seed
+        && matches!(picked, Pick::New(_) | Pick::Reused(_))
+        && snapshot_guard(&shared_profile).is_some()
+    {
+        // The compatible slot may have been leased between the advisory check
+        // and selection. Don't start cold when shared Cargo is available.
+        return None;
+    }
     let (n, how) = match picked {
         Pick::Sticky(n) => (n, "sticky"),
         Pick::New(n) => (n, "new"),
@@ -2121,6 +2147,24 @@ mod tests {
     }
 
     #[test]
+    fn prediction_warms_foreground_slot_without_changing_join_identity() {
+        let run = request_key(&os(&["test", "-p", "voice", "--lib", "hotkey"]));
+        let prediction = request_key(&os(&[
+            "test",
+            "-p",
+            "voice",
+            "--lib",
+            "hotkey",
+            "--no-run",
+            "--message-format=json-render-diagnostics",
+        ]));
+        assert_ne!(run, prediction);
+        assert!(same_compile_request(&run, &prediction));
+        let other = request_key(&os(&["test", "-p", "voice", "--features", "test-support"]));
+        assert!(!same_compile_request(&run, &other));
+    }
+
+    #[test]
     fn warm_matching_slot_avoids_new_target_copy() {
         let metas = vec![meta("old", 10.0), None, None, None];
         assert_eq!(
@@ -2140,6 +2184,10 @@ mod tests {
         assert_eq!(
             pick_compatible(&metas, "a", |_| true, |_| true),
             (Some(Pick::Sticky(0)), 0)
+        );
+        assert_eq!(
+            pick_compatible(&metas, "a", |i| i == 1, |_| true),
+            (Some(Pick::Warm(1)), 0)
         );
         let mut probes = vec![0; metas.len()];
         assert_eq!(

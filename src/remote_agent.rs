@@ -1334,7 +1334,11 @@ mod tests {
         let opt_out = vec![("JUSTRUST_EARLY_EXIT".to_string(), "0".to_string())];
         assert!(hosted_early_env(&opt_out, None).is_empty());
         let mode = vec![("JUSTRUST_EARLY".to_string(), "1".to_string())];
-        assert!(!hosted_early_env(&mode, None).iter().any(|(k, _)| *k == "JUSTRUST_EARLY"));
+        assert!(
+            !hosted_early_env(&mode, None)
+                .iter()
+                .any(|(k, _)| *k == "JUSTRUST_EARLY")
+        );
     }
 
     fn hybrid_config() -> Vec<(String, String)> {

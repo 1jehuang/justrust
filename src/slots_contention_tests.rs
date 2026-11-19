@@ -192,7 +192,9 @@ fn real_acquire_without_reflinks_is_isolated_and_reuses_warm_state() {
     );
     assert!(!root.0.join("target/justrust-slots/.reflink-ok").exists());
 
-    // A busy slot still allocates a different isolated target, not shared.
+    // A busy slot with busy shared Cargo allocates a different isolated
+    // target. With shared idle, acquisition defers to the warm shared tree.
+    let _shared_busy = try_lock(&shared.join(".cargo-build-lock")).unwrap();
     let _lease = try_lock(&root.0.join("target/justrust-slots/0.lock")).unwrap();
     let parallel = run_acquisition_mode(&root.0, true, 2, true);
     assert_eq!(parallel["info"]["slot"], 1);
