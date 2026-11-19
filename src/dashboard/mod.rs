@@ -2,6 +2,8 @@
 //! Network and disk work stay off the terminal thread. Existing commands never enter it.
 mod cache;
 mod data;
+#[cfg(unix)]
+mod reload;
 mod view;
 
 use anyhow::{Result, bail};
@@ -13,7 +15,7 @@ use std::time::{Duration, Instant};
 
 /// Operation categories, matching the command axis of `bench/synth` so the
 /// dashboard and the benchmark workload describe a run the same way.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Kind {
     Check,
     Test,
@@ -73,7 +75,7 @@ impl Kind {
 }
 
 /// Where compilation ran. Records that do not say are in neither subset.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Place {
     #[default]
     Any,
@@ -113,7 +115,7 @@ impl Place {
 
 /// Which results to list. The "whose fault" choices use only the class the
 /// recorder stored, so an unclassified failure is in neither.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Outcome {
     #[default]
     Any,
@@ -571,6 +573,23 @@ fn versions_worker(
             }
             last = data::fetch_versions(&last, |versions| {
                 if scope == cache::scope() {
+                    // A failed refresh can retain an older live response for display.
+                    // Only a fresh service advertisement may advance the update timer.
+                    if versions.error.is_none()
+                        && !versions.cached
+                        && let Some(live) = &versions.live
+                        && live.auto_update
+                        && let Some(version) = live.release.as_deref()
+                        && crate::update::newer(version, crate::update::VERSION)
+                        && crate::update::disabled_reason().is_none()
+                    {
+                        crate::update::fleet_advertised(version);
+                        // Retry on a later refresh if another __bg held the lock or
+                        // a build deferred installation. Never download in the TUI.
+                        if crate::update::check_due() {
+                            crate::telemetry::maybe_spawn_background();
+                        }
+                    }
                     let _ = tx.send(Update::Versions(versions));
                 }
             });
@@ -669,6 +688,10 @@ pub(crate) fn run() -> Result<()> {
         ..Default::default()
     };
     let scope = cache::scope();
+    #[cfg(unix)]
+    let mut executable = reload::Watch::current();
+    #[cfg(unix)]
+    reload::resume(&mut state);
     restore_cached(&mut state, scope.as_deref());
     let (tx, updates) = mpsc::channel();
     let refresh = hosted_worker(tx.clone(), scope.clone());
@@ -714,6 +737,22 @@ pub(crate) fn run() -> Result<()> {
     let mut last_refresh = Instant::now();
     loop {
         apply_updates(&mut state, &updates);
+        // Don't interrupt a detail view, filter menu or partially typed search.
+        #[cfg(unix)]
+        if state.detail.is_none()
+            && !state.loading_detail
+            && !state.searching
+            && state.menu.is_none()
+            && let Some(path) = executable.as_mut().and_then(reload::Watch::replacement)
+        {
+            ratatui::restore();
+            let error = reload::restart(path, &state);
+            terminal = ratatui::try_init()?;
+            state.detail = Some(format!(
+                "Could not reload dashboard: {error}\nPress Esc to continue."
+            ));
+            executable = None;
+        }
         terminal.draw(|f| view::draw(f, &state))?;
         if !event::poll(Duration::from_millis(150))? {
             continue;
