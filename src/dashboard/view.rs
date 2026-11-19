@@ -782,6 +782,10 @@ fn reuse_lines(
         ));
     }
     if covered > 0 {
+        // Keep the metric rows anchored when the selected status comes and goes.
+        if lines.len() == 1 {
+            lines.push(Line::default());
+        }
         let metrics = |s: super::data::ReuseStats| {
             [
                 if s.cgu_total > 0 {
@@ -1297,8 +1301,12 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
     let measured = state.reuse_profile();
     let reuse = reuse_lines(state, card_width, measured);
     let reuse_h = reuse.len() as u16 + 2;
+    // Geometry belongs to the viewport, not the highlighted record. In
+    // particular a wrapped timeline must not push the Runs list down.
     let selected_h = if area.height >= 24 {
-        (selected.len() as u16 + 2).max(if beside { reuse_h } else { 0 })
+        (area.height / 4)
+            .clamp(8, 18)
+            .max(if beside { reuse_h } else { 0 })
     } else {
         0
     };
@@ -1725,6 +1733,28 @@ mod tests {
                 text.contains("Unclassified") && text.contains("─ Runs"),
                 "{text}"
             );
+        }
+        for (w, h) in [(80, 40), (109, 50), (110, 40), (140, 48)] {
+            let anchors = |state: &State| {
+                screen(state, w, h)
+                    .lines()
+                    .enumerate()
+                    .filter_map(|(i, row)| {
+                        (row.contains("─ Runs")
+                            || row.contains("Hosted compile reuse")
+                            || row.contains("Selected run")
+                            || row.contains("CGUs reused"))
+                        .then_some(i)
+                    })
+                    .collect::<Vec<_>>()
+            };
+            state.selected = 0;
+            let baseline = anchors(&state);
+            assert!(!baseline.is_empty());
+            for i in [1, 2] {
+                state.selected = i;
+                assert_eq!(baseline, anchors(&state), "{w}x{h}");
+            }
         }
         state.selected = 2;
         assert!(screen(&state, 100, 40).contains("Selected No recorded reuse ledger"));
