@@ -270,15 +270,13 @@ impl<'tcx> UsageMap<'tcx> {
         UsageMap { used_map: Default::default(), user_map: Default::default() }
     }
 
-    fn record_used<'a>(&mut self, user_item: MonoItem<'tcx>, used_items: &'a MonoItems<'tcx>)
-    where
-        'tcx: 'a,
-    {
-        for used_item in used_items.items() {
-            self.user_map.entry(used_item).or_default().push(user_item);
+    fn record_used(&mut self, user_item: MonoItem<'tcx>, used_items: &[Spanned<MonoItem<'tcx>>]) {
+        for used_item in used_items {
+            self.user_map.entry(used_item.node).or_default().push(user_item);
         }
 
-        assert!(self.used_map.insert(user_item, used_items.items().collect()).is_none());
+        let edges = used_items.iter().map(|item| item.node).collect();
+        assert!(self.used_map.insert(user_item, edges).is_none());
     }
 
     pub(crate) fn get_user_items(&self, item: MonoItem<'tcx>) -> &[MonoItem<'tcx>] {
@@ -315,18 +313,10 @@ impl<'tcx> MonoItems<'tcx> {
         Self { items: FxIndexMap::default() }
     }
 
-    fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
     fn push(&mut self, item: Spanned<MonoItem<'tcx>>) {
         // Insert only if the entry does not exist. A normal insert would stomp the first span that
         // got inserted.
         self.items.entry(item.node).or_insert(item.span);
-    }
-
-    fn items(&self) -> impl Iterator<Item = MonoItem<'tcx>> {
-        self.items.keys().cloned()
     }
 }
 
@@ -387,8 +377,7 @@ fn collect_items_rec<'tcx>(
     recursion_limit: Limit,
     mode: CollectionMode,
 ) {
-    let mut used_items = MonoItems::new();
-    let mut mentioned_items = MonoItems::new();
+    let (mut used_items, mut mentioned_items): (Vec<_>, Vec<_>);
     let recursion_depth_reset;
 
     // Post-monomorphization errors MVP
@@ -423,6 +412,7 @@ fn collect_items_rec<'tcx>(
         MonoItem::Static(def_id) => {
             recursion_depth_reset = None;
 
+            let mut gathered = MonoItems::new();
             // Statics always get evaluated (which is possible because they can't be generic), so for
             // `MentionedItems` collection there's nothing to do here.
             if mode == CollectionMode::UsedItems {
@@ -435,17 +425,17 @@ fn collect_items_rec<'tcx>(
                 // Nested statics have no type.
                 if !nested {
                     let ty = instance.ty(tcx, ty::TypingEnv::fully_monomorphized());
-                    visit_drop_use(tcx, ty, true, starting_item.span, &mut used_items);
+                    visit_drop_use(tcx, ty, true, starting_item.span, &mut gathered);
                 }
 
                 if let Ok(alloc) = tcx.eval_static_initializer(def_id) {
                     for &prov in alloc.inner().provenance().ptrs().values() {
-                        collect_alloc(tcx, prov.alloc_id(), &mut used_items);
+                        collect_alloc(tcx, prov.alloc_id(), &mut gathered);
                     }
                 }
 
                 if tcx.needs_thread_local_shim(def_id) {
-                    used_items.push(respan(
+                    gathered.push(respan(
                         starting_item.span,
                         MonoItem::Fn(Instance {
                             def: InstanceKind::Shim(ShimKind::ThreadLocal(def_id)),
@@ -455,6 +445,7 @@ fn collect_items_rec<'tcx>(
                 }
             }
 
+            (used_items, mentioned_items) = (gathered.into_iter().collect(), Vec::new());
             // mentioned_items stays empty since there's no codegen for statics. statics don't get
             // optimized, and if they did then the const-eval interpreter would have to worry about
             // mentioned_items.
@@ -488,8 +479,9 @@ fn collect_items_rec<'tcx>(
                     def_path_str,
                 });
             };
-            used_items.extend(used.into_iter().copied());
-            mentioned_items.extend(mentioned.into_iter().copied());
+            // The provider already deduplicated each list in first-span order.
+            // Rebuilding its index maps here would hash every outgoing edge again.
+            (used_items, mentioned_items) = (used.to_vec(), mentioned.to_vec());
         }
         MonoItem::GlobalAsm(item_id) => {
             assert!(
@@ -498,6 +490,7 @@ fn collect_items_rec<'tcx>(
             );
             recursion_depth_reset = None;
 
+            let mut gathered = MonoItems::new();
             let item = tcx.hir_item(item_id);
             if let hir::ItemKind::GlobalAsm { asm, .. } = item.kind {
                 for (op, op_sp) in asm.operands {
@@ -505,7 +498,7 @@ fn collect_items_rec<'tcx>(
                         hir::InlineAsmOperand::Const { anon_const } => {
                             match tcx.const_eval_poly(anon_const.def_id.to_def_id()) {
                                 Ok(val) => {
-                                    collect_const_value(tcx, val, &mut used_items);
+                                    collect_const_value(tcx, val, &mut gathered);
                                 }
                                 Err(ErrorHandled::TooGeneric(..)) => {
                                     span_bug!(*op_sp, "asm const cannot be resolved; too generic")
@@ -517,13 +510,13 @@ fn collect_items_rec<'tcx>(
                         }
                         hir::InlineAsmOperand::SymFn { expr } => {
                             let fn_ty = tcx.typeck(item_id.owner_id).expr_ty(expr);
-                            visit_fn_use(tcx, fn_ty, false, *op_sp, &mut used_items);
+                            visit_fn_use(tcx, fn_ty, false, *op_sp, &mut gathered);
                         }
                         hir::InlineAsmOperand::SymStatic { path: _, def_id } => {
                             let instance = Instance::mono(tcx, def_id);
                             if tcx.should_codegen_locally(instance) {
                                 trace!("collecting static {:?}", def_id);
-                                used_items.push(dummy_spanned(MonoItem::Static(def_id)));
+                                gathered.push(dummy_spanned(MonoItem::Static(def_id)));
                             }
                         }
                         hir::InlineAsmOperand::In { .. }
@@ -539,6 +532,7 @@ fn collect_items_rec<'tcx>(
                 span_bug!(item.span, "Mismatch between hir::Item type and MonoItem type")
             }
 
+            (used_items, mentioned_items) = (gathered.into_iter().collect(), Vec::new());
             // mention_items stays empty as nothing gets optimized here.
         }
     };
@@ -580,14 +574,13 @@ fn collect_items_rec<'tcx>(
         let mut visited = OnceCell::default();
         if mode == CollectionMode::UsedItems {
             used_items
-                .items
-                .retain(|k, _| visited.get_mut_or_init(|| state.visited.lock()).insert(*k));
+                .retain(|item| visited.get_mut_or_init(|| state.visited.lock()).insert(item.node));
         }
 
         let mut mentioned = OnceCell::default();
-        mentioned_items.items.retain(|k, _| {
-            !visited.get_or_init(|| state.visited.lock()).contains(k)
-                && mentioned.get_mut_or_init(|| state.mentioned.lock()).insert(*k)
+        mentioned_items.retain(|item| {
+            !visited.get_or_init(|| state.visited.lock()).contains(&item.node)
+                && mentioned.get_mut_or_init(|| state.mentioned.lock()).insert(item.node)
         });
     }
     if mode == CollectionMode::MentionedItems {
