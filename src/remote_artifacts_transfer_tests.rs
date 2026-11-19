@@ -474,6 +474,98 @@ fn metadata_only_rebuild_eliminates_legacy_delta_payload() {
 }
 
 #[test]
+fn selected_pipeline_preserves_order_modes_and_stops_on_broken_output() {
+    if !available() {
+        return;
+    }
+    let mut fixture = Fixture::new("selected-pipeline", &[]);
+    fixture.req.anchors = true;
+    fixture.req.have.clear();
+    fixture.req.test_run = Some("selected-pipeline".into());
+    let names = ["second", "first", "third"];
+    let mut state = 123456789u32;
+    let mut body: Vec<_> = (0..(1 << 18))
+        .flat_map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state.to_le_bytes()
+        })
+        .collect();
+    let manifest: Vec<_> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let path = fixture.remote.join(name);
+            body[i] ^= 1;
+            std::fs::write(&path, &body).unwrap();
+            crate::sys::set_mode(&path, 0o701 + i as u32).unwrap();
+            serde_json::json!({"executable":path})
+        })
+        .collect();
+    let transfer = |out: &mut dyn Write| {
+        serve_selected_dir(
+            &fixture.remote,
+            &fixture.req,
+            &fixture.sent,
+            out,
+            Some(manifest.clone()),
+        )
+    };
+    // A slice writer fails during the first incompressible file, potentially
+    // while the producer is waiting to hand over the next file.
+    let mut short = [0u8; 8192];
+    assert!(transfer(&mut &mut short[..]).is_err());
+    assert!(
+        !std::fs::read_dir(&fixture.sent).unwrap().any(|e| e
+            .unwrap()
+            .file_type()
+            .unwrap()
+            .is_dir())
+    );
+
+    let mut wire = Vec::new();
+    transfer(&mut wire).unwrap();
+    let frames = Fixture::decode(&wire);
+    assert_eq!(frames.len(), 6);
+    assert_eq!(
+        frames[1].0,
+        Frame::Selected {
+            artifacts: manifest
+        }
+    );
+    for (i, (frame, data)) in frames[2..5].iter().enumerate() {
+        let Frame::File {
+            name, mode, base, ..
+        } = frame
+        else {
+            panic!("expected file")
+        };
+        assert_eq!(name.as_str(), names[i]);
+        assert_eq!(*mode, 0o701 + i as u32);
+        assert_eq!(base.as_deref(), (i != 0).then_some(names[0]));
+        let payload = fixture.root.join("payload.zst");
+        std::fs::write(&payload, data).unwrap();
+        let mut decoder = Command::new("zstd");
+        decoder.args(["-qdc", "--long=31"]);
+        if let Some(base) = base {
+            decoder.arg(format!(
+                "--patch-from={}",
+                fixture.root.join(base).display()
+            ));
+        }
+        let output = decoder.arg(&payload).output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            output.stdout,
+            std::fs::read(fixture.remote.join(name)).unwrap()
+        );
+        std::fs::write(fixture.root.join(name), output.stdout).unwrap();
+    }
+    assert_eq!(frames[5].0, Frame::End);
+}
+
+#[test]
 fn selected_tests_reuse_exact_scoped_bases_across_slots() {
     if !available() {
         return;

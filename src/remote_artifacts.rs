@@ -561,9 +561,6 @@ fn serve_selected_dir(
         },
         &[],
     )?;
-    let have: BTreeMap<&str, &Have> = req.have.iter().map(|h| (h.name.as_str(), h)).collect();
-    // Files sent earlier in this stream: (name, size, host copy).
-    let mut streamed: Vec<(String, u64, PathBuf)> = Vec::new();
     let files = if let Some(artifacts) = selected {
         let files = artifacts
             .iter()
@@ -584,6 +581,71 @@ fn serve_selected_dir(
     } else {
         build_candidates(dir, &req.args)
     };
+    let multiple_tests = scratch.is_some() && files.len() > 1;
+    // stdout stays on this thread (StdoutLock is not Send). The producer can
+    // snapshot, hash and compress the next selected test while SSH drains the
+    // preceding frame. A rendezvous bounds lookahead to exactly one file.
+    let produce = move |emit: &mut dyn FnMut(Frame, std::fs::File) -> Result<()>| -> Result<()> {
+        produce_files(dir, req, sent_root, scratch, files, emit)
+    };
+    let mut send = |frame: Frame, mut data: std::fs::File| -> Result<()> {
+        let Frame::File { len, .. } = &frame else {
+            unreachable!()
+        };
+        write_frame(&mut out, &frame, &[])?;
+        if std::io::copy(&mut (&mut data).take(*len), &mut out)? != *len {
+            bail!("truncated compressed artifact on the build machine");
+        }
+        Ok(())
+    };
+    let mut produce = Some(produce);
+    if multiple_tests {
+        let pending = &mut produce;
+        std::thread::scope(|scope| -> Result<()> {
+            let (tx, rx) = std::sync::mpsc::sync_channel(0);
+            let Ok(encoder) = std::thread::Builder::new()
+                .name("artifact-encoder".into())
+                .spawn_scoped(scope, move || {
+                    let produce = pending.take().expect("single artifact producer");
+                    produce(&mut |frame, file| {
+                        tx.send((frame, file))
+                            .map_err(|_| anyhow::anyhow!("artifact stream closed"))
+                    })
+                })
+            else {
+                // No worker started: the same producer can still run inline.
+                return Ok(());
+            };
+            // Dropping the receiver on a write error releases any blocked send.
+            let written = rx
+                .into_iter()
+                .try_for_each(|(frame, file)| send(frame, file));
+            let encoded = encoder
+                .join()
+                .map_err(|_| anyhow::anyhow!("artifact encoder panicked"))?;
+            written.and(encoded)
+        })?;
+    }
+    if let Some(produce) = produce {
+        // In particular, mutable build bases still advance only after writing.
+        produce(&mut send)?;
+    }
+    write_frame(&mut out, &Frame::End, &[])?;
+    out.flush()?;
+    Ok(())
+}
+
+fn produce_files(
+    dir: &Path,
+    req: &Request,
+    sent_root: &Path,
+    scratch: Option<TestScratch>,
+    files: Vec<(String, std::fs::Metadata)>,
+    emit: &mut dyn FnMut(Frame, std::fs::File) -> Result<()>,
+) -> Result<()> {
+    let have: BTreeMap<&str, &Have> = req.have.iter().map(|h| (h.name.as_str(), h)).collect();
+    // Files sent earlier in this stream: (name, size, host copy).
+    let mut streamed: Vec<(String, u64, PathBuf)> = Vec::new();
     for (index, (name, m)) in files.into_iter().enumerate() {
         let rid = id_of(&m);
         let h = have.get(name.as_str()).copied();
@@ -656,7 +718,7 @@ fn serve_selected_dir(
         }
         let zst = scratch.as_ref().map_or_else(
             || sent_root.join(format!("{key}.zst")),
-            |s| s.0.join("payload.zst"),
+            |s| s.0.join(format!("payload-{index}.zst")),
         );
         let base = (!patch && req.anchors)
             .then(|| anchor(&streamed, m.len()))
@@ -709,21 +771,21 @@ fn serve_selected_dir(
         if !predicted && !encode(dense)? && (!dense || !encode(false)?) {
             bail!("zstd failed on {name}");
         }
-        let data = std::fs::read(&zst)?;
+        let data = std::fs::File::open(&zst)?;
+        let len = data.metadata()?.len();
         let _ = std::fs::remove_file(&zst);
-        write_frame(
-            &mut out,
-            &Frame::File {
+        emit(
+            Frame::File {
                 name: name.clone(),
                 id: rid.clone(),
                 mode: crate::sys::mode(&m, &path) & 0o7777,
                 size: m.len(),
                 patch,
                 prediction_v1: predicted,
-                len: data.len() as u64,
+                len,
                 base: base.map(|(n, _, _)| n.clone()),
             },
-            &data,
+            data,
         )?;
         if let Some(publication) = publication {
             // Cache publication is optional. Never overwrite a published inode.
@@ -735,8 +797,6 @@ fn serve_selected_dir(
         std::fs::write(&sent_id, &rid)?;
         streamed.push((name, m.len(), sent));
     }
-    write_frame(&mut out, &Frame::End, &[])?;
-    out.flush()?;
     Ok(())
 }
 
