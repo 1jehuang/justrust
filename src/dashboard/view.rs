@@ -883,6 +883,24 @@ fn reuse_lines(
             _ => "No recorded reuse ledger",
         };
         lines.push(detail("Selected", vec![span(why, DIM)], width));
+    } else if selected.is_some_and(|s| !s.measured()) {
+        lines.push(detail(
+            "Selected",
+            vec![span("No reuse metrics recorded", DIM)],
+            width,
+        ));
+    } else if selected.is_some_and(|s| !s.has_queries()) {
+        lines.push(detail(
+            "Selected",
+            vec![span("Queries not recorded", DIM)],
+            width,
+        ));
+    } else if selected.is_some_and(|s| !s.has_cgus()) {
+        lines.push(detail(
+            "Selected",
+            vec![span("CGUs not recorded", DIM)],
+            width,
+        ));
     } else if selected.is_some_and(|s| s.loaded == 0 && s.cgu_total > 0 && s.cgu_reused == 0) {
         lines.push(detail(
             "Selected",
@@ -896,17 +914,28 @@ fn reuse_lines(
             lines.push(Line::default());
         }
         let metrics = |s: super::data::ReuseStats| {
+            let query_secs = |v| {
+                if s.has_queries() {
+                    reuse_duration(v)
+                } else {
+                    "-".into()
+                }
+            };
             [
-                if s.cgu_total > 0 {
+                if s.has_cgus() {
                     format!("{}/{}", s.cgu_reused, s.cgu_total)
                 } else {
-                    "n/a".into()
+                    "-".into()
                 },
-                s.loaded.to_string(),
-                reuse_duration(s.same_secs),
-                reuse_duration(s.green_secs),
-                reuse_duration(s.changed_secs),
-                reuse_duration(s.unknown_secs),
+                if s.has_queries() {
+                    s.loaded.to_string()
+                } else {
+                    "-".into()
+                },
+                query_secs(s.same_secs),
+                query_secs(s.green_secs),
+                query_secs(s.changed_secs),
+                query_secs(s.unknown_secs),
             ]
         };
         let all = metrics(stats);
@@ -930,7 +959,7 @@ fn reuse_lines(
                 width,
             )
         };
-        lines.push(table_row("", "Listed", "Selected"));
+        lines.push(table_row("", "Observed", "Selected"));
         for (i, key) in labels.iter().enumerate() {
             if i == 2 {
                 lines.push(line("Recomputed query time", LABEL, width));
@@ -2049,6 +2078,80 @@ mod tests {
         }
         state.selected = 2;
         assert!(screen(&state, 100, 40).contains("Selected No recorded reuse ledger"));
+    }
+
+    #[test]
+    fn reuse_card_distinguishes_unmeasured_from_observed_zero() {
+        use super::super::data::ReuseStats;
+        let mut state = State::default();
+        let run = |start: f64, stats| RunRow {
+            id: start.to_string(),
+            start,
+            place: "hosted".into(),
+            reuse: Some(stats),
+            ..Default::default()
+        };
+        state.snapshot.runs = vec![
+            run(
+                3.,
+                ReuseStats {
+                    cgu_total: 9,
+                    ..Default::default()
+                },
+            ),
+            run(
+                2.,
+                ReuseStats {
+                    ledgers: 1,
+                    ..Default::default()
+                },
+            ),
+        ];
+        let card = |state: &State| {
+            reuse_lines(state, 64, state.reuse_profile())
+                .into_iter()
+                .map(|l| {
+                    l.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(card(&state).contains(&"Queries loaded - -".into()));
+        state.snapshot.runs.push(run(
+            1.,
+            ReuseStats {
+                query_observed: true,
+                changed_secs: 0.000_042,
+                ..Default::default()
+            },
+        ));
+        let text = card(&state);
+        for row in [
+            "Your runs: 2/3 hosted measured",
+            "Selected Queries not recorded",
+            "CGUs reused 0/9 0/9",
+            "Queries loaded 0 -",
+            "New/changed 42µs -",
+        ] {
+            assert!(text.iter().any(|l| l == row), "{text:?}");
+        }
+        state.selected = 1;
+        assert!(card(&state).contains(&"Selected No reuse metrics recorded".into()));
+        state.selected = 2;
+        let text = card(&state);
+        for row in [
+            "CGUs reused 0/9 -",
+            "Queries loaded 0 0",
+            "Same result 0s 0s",
+            "New/changed 42µs 42µs",
+        ] {
+            assert!(text.iter().any(|l| l == row), "{text:?}");
+        }
     }
 
     #[test]

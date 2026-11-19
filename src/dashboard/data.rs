@@ -79,13 +79,39 @@ pub(crate) struct ReuseStats {
     pub cgu_total: u64,
     pub loaded: u64,
     pub ledgers: u64,
+    #[serde(default)]
+    pub query_observed: bool,
+    #[serde(default)]
+    pub cgu_observed: bool,
     pub same_secs: f64,
     pub green_secs: f64,
     pub changed_secs: f64,
     pub unknown_secs: f64,
 }
 impl ReuseStats {
+    // Older account records lack coverage flags. Positive totals are evidence,
+    // but all-zero totals cannot distinguish a measured zero from no rows.
+    pub fn has_queries(self) -> bool {
+        self.query_observed
+            || self.loaded > 0
+            || [
+                self.same_secs,
+                self.green_secs,
+                self.changed_secs,
+                self.unknown_secs,
+            ]
+            .iter()
+            .any(|&v| v > 0.)
+    }
+    pub fn has_cgus(self) -> bool {
+        self.cgu_observed || self.cgu_total > 0
+    }
+    pub fn measured(self) -> bool {
+        self.has_queries() || self.has_cgus()
+    }
     pub fn merge(&mut self, o: Self) {
+        self.query_observed |= o.has_queries();
+        self.cgu_observed |= o.has_cgus();
         self.cgu_reused += o.cgu_reused;
         self.cgu_total += o.cgu_total;
         self.loaded += o.loaded;
@@ -102,11 +128,13 @@ impl ReuseStats {
         self.ledgers += 1;
         for r in rows {
             if r.query == "<cgu>" {
+                self.cgu_observed = true;
                 self.cgu_total += r.count;
                 if r.outcome == "loaded" {
                     self.cgu_reused += r.count;
                 }
             } else if !crate::reuse::is_evidence(r) && r.secs.is_finite() && r.secs >= 0. {
+                self.query_observed = true;
                 match crate::reuse::class(&r.outcome) {
                     crate::reuse::Class::Reused => self.loaded += r.count,
                     crate::reuse::Class::Avoidable if r.outcome == "green_recompute" => {
@@ -1389,6 +1417,8 @@ mod tests {
             stats.unwrap(),
             ReuseStats {
                 ledgers: 1,
+                query_observed: true,
+                cgu_observed: true,
                 cgu_reused: 255,
                 cgu_total: 256,
                 loaded: 17,
@@ -1399,6 +1429,35 @@ mod tests {
             }
         );
         assert!(unit_profiles(b"{\"wall\":1}").1.is_none());
+    }
+
+    #[test]
+    fn reuse_coverage_requires_rows_not_markers_or_credit_sidecars() {
+        let profile = |text| {
+            let mut stats = ReuseStats::default();
+            stats.observe(&crate::reuse::parse(text));
+            stats
+        };
+        let mut all = profile("first\t<session>\t0\t1\nloaded_avoided\tquery\t1\t1");
+        assert!(!all.measured());
+        let cgu = profile("new\t<cgu>\t0\t0");
+        assert!(cgu.has_cgus() && !cgu.has_queries());
+        all.merge(cgu);
+        let query = profile("new\tquery\t0\t1");
+        assert!(query.has_queries() && !query.has_cgus());
+        all.merge(query);
+        assert!(all.has_queries() && all.has_cgus());
+        let mut legacy = serde_json::json!(all);
+        let obj = legacy.as_object_mut().unwrap();
+        obj.remove("query_observed");
+        obj.remove("cgu_observed");
+        let read = |v| serde_json::from_value::<ReuseStats>(v).unwrap();
+        assert!(!read(legacy.clone()).measured());
+        legacy["cgu_total"] = 9.into();
+        let stats = read(legacy.clone());
+        assert!(stats.has_cgus() && !stats.has_queries());
+        legacy["changed_secs"] = 0.000_042.into();
+        assert!(read(legacy).has_queries());
     }
 
     #[test]

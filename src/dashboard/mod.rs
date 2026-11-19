@@ -251,7 +251,7 @@ const LOCAL_CACHE_SCOPE: &str = "00000000000000000000000000000000000000000000000
 /// Only completed display data is restored. Never restore active builds or
 /// mark a cached answer as connected, freshly checked, or authoritative.
 fn restore_cached(state: &mut State, scope: Option<&str>) {
-    if let Some(saved) = cache::load::<Vec<RunRow>>(LOCAL_CACHE_SCOPE, "local-v5") {
+    if let Some(saved) = cache::load::<Vec<RunRow>>(LOCAL_CACHE_SCOPE, "local-v6") {
         state.snapshot.runs = saved.data;
         state.local_cached = !state.snapshot.runs.is_empty();
     }
@@ -281,7 +281,7 @@ impl State {
         for row in self.rows() {
             if row.place == "hosted" {
                 total += 1;
-                if let Some(r) = row.reuse {
+                if let Some(r) = row.reuse.filter(|s| s.measured()) {
                     covered += 1;
                     stats.merge(r);
                 }
@@ -726,7 +726,7 @@ pub(crate) fn run() -> Result<()> {
                 && local.runs != saved_rows
                 && cache::save(
                     LOCAL_CACHE_SCOPE,
-                    "local-v5",
+                    "local-v6",
                     crate::paths::now(),
                     &local.runs,
                 )
@@ -1345,7 +1345,7 @@ fn full_dashboard_cached_data_latency_probe() {
     let versions = data::fetch_versions(&data::Versions::local(), |_| {});
     assert!(versions.error.is_none(), "{:?}", versions.error);
     let at = crate::paths::now();
-    cache::save(LOCAL_CACHE_SCOPE, "local-v5", at, &local.runs).expect("private local cache");
+    cache::save(LOCAL_CACHE_SCOPE, "local-v6", at, &local.runs).expect("private local cache");
     cache::save(&scope, "hosted", at, &hosted).expect("private hosted cache");
     cache::save(&scope, "versions", at, &versions).expect("private versions cache");
     for sample in 1..=3 {
