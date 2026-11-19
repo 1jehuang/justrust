@@ -744,18 +744,16 @@ fn run_versions(
         .or_else(|| uploaded.and_then(|r| r.client_version.as_deref()));
     let tc = clean(tool.unwrap_or("-"));
     let client = clean(actual_client.unwrap_or("-"));
-    let available = width.saturating_sub(3);
-    let client_width = client
-        .width()
-        .min(available.saturating_sub(tc.width().min(available / 2)));
+    let tool_width = width / 2;
+    let client_width = width.saturating_sub(tool_width + 1);
     Line::from(vec![
         span(
-            clip(&tc, available - client_width),
+            pad(&tc, tool_width),
             version_color(tool, live.and_then(|l| l.toolchain_version.as_deref())),
         ),
-        span(" / ", DIM),
+        span(" ", DIM),
         span(
-            clip(&client, client_width),
+            clip(&client, client_width.saturating_sub(1)),
             version_color(actual_client, live.and_then(|l| l.release.as_deref())),
         ),
     ])
@@ -821,7 +819,12 @@ fn active_row(
                 format!(" {elapsed:>7}     -     -  "),
                 wall_color(run.elapsed),
             ),
-            span(pad("- / -", version_width), DIM),
+            span(pad("-", version_width / 2), DIM),
+            span(" ", DIM),
+            span(
+                pad("-", version_width.saturating_sub(version_width / 2 + 1)),
+                DIM,
+            ),
             span(label, VALUE),
             span(format!("  {detail}"), DIM),
             span(pad_left("now", 9), LABEL),
@@ -1074,23 +1077,27 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
     let command_width = remaining.saturating_sub(version_width);
     let header = if wide {
         format!(
-            "  {} {} {:>7} REUSE   OPT  {}{}{:>9}",
+            "  {} {} {:>7} REUSE   OPT  {} {}{}{:>9}",
             pad("RESULT", RESULT_WIDTH - 2),
             pad("WHERE", WHERE_WIDTH),
             "WALL",
             pad(
-                if version_width < 19 {
-                    "TC / CLIENT"
+                if version_width / 2 >= 9 {
+                    "TOOLCHAIN"
                 } else {
-                    "TOOLCHAIN / CLIENT"
+                    "TC"
                 },
-                version_width
+                version_width / 2
+            ),
+            pad(
+                "CLIENT",
+                version_width.saturating_sub(version_width / 2 + 1)
             ),
             pad("COMMAND", command_width),
             "WHEN"
         )
     } else {
-        "  RESULT · WHEN · REUSE · OPT · COMMAND · TC / CLIENT".into()
+        "  RESULT · WHEN · REUSE · OPT · COMMAND · TC  CLIENT".into()
     };
     let mut lines = vec![
         kind_bar(state, width),
@@ -1139,11 +1146,7 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
                 None
             },
             &state.versions,
-            if wide {
-                version_width.saturating_sub(1)
-            } else {
-                32
-            },
+            if wide { version_width } else { 20 },
         );
         let mut spans = vec![span("● ", color)];
         if wide {
@@ -1703,14 +1706,24 @@ mod tests {
             client_version: Some("1.2.3".into()),
             ..Default::default()
         }];
-        for (width, header) in [(140, "TOOLCHAIN / CLIENT"), (78, "TC / CLIENT")] {
+        for (width, header) in [(140, "TOOLCHAIN"), (78, "TC  CLIENT")] {
             let text = screen(&state, width, 40);
             let history = text.split_once("─ Runs").unwrap().1;
             assert!(history.contains(header), "{history}");
             assert!(
-                history
-                    .lines()
-                    .any(|l| l.contains("0.4.2 / 1.2.3") && l.contains("test")),
+                history.lines().any(|l| l.contains("0.4.2")
+                    && l.contains("1.2.3")
+                    && (width < 84
+                        || l.split_once("1.2.3").unwrap().0.width()
+                            == history
+                                .lines()
+                                .find(|h| h.contains(header))
+                                .unwrap()
+                                .split_once("CLIENT")
+                                .unwrap()
+                                .0
+                                .width())
+                    && l.contains("test")),
                 "{history}"
             );
         }
@@ -2218,10 +2231,10 @@ mod tests {
         let text = screen(&state, 140, 30);
         assert!(text.contains("tests failed"), "{text}");
         assert!(text.contains("5m ago"), "{text}");
-        assert!(text.contains("REUSE   OPT  TOOLCHAIN / CLIENT"));
+        assert!(text.contains("REUSE   OPT  TOOLCHAIN"));
         let row = text.lines().find(|l| l.contains("● tests failed")).unwrap();
         assert!(
-            row.contains("-     z  - / -") && row.contains("test -p ui"),
+            row.contains("-     z  -") && row.contains("test -p ui"),
             "{row}"
         );
         assert!(screen(&state, 70, 30).contains(" · - · z · test -p ui"));
