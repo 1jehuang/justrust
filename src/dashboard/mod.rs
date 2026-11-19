@@ -248,7 +248,7 @@ const LOCAL_CACHE_SCOPE: &str = "00000000000000000000000000000000000000000000000
 /// Only completed display data is restored. Never restore active builds or
 /// mark a cached answer as connected, freshly checked, or authoritative.
 fn restore_cached(state: &mut State, scope: Option<&str>) {
-    if let Some(saved) = cache::load::<Vec<RunRow>>(LOCAL_CACHE_SCOPE, "local-v2") {
+    if let Some(saved) = cache::load::<Vec<RunRow>>(LOCAL_CACHE_SCOPE, "local-v3") {
         state.snapshot.runs = saved.data;
         state.local_cached = !state.snapshot.runs.is_empty();
     }
@@ -678,7 +678,12 @@ pub(crate) fn run() -> Result<()> {
         .snapshot
         .runs
         .iter()
-        .map(|row| (row.id.clone(), (row.time, row.compile, row.reuse)))
+        .map(|row| {
+            (
+                row.id.clone(),
+                (row.time, row.compile, row.reuse, row.timeline.clone()),
+            )
+        })
         .collect();
     let mut saved_rows = state.snapshot.runs.clone();
     std::thread::spawn(move || {
@@ -690,7 +695,7 @@ pub(crate) fn run() -> Result<()> {
                 && local.runs != saved_rows
                 && cache::save(
                     LOCAL_CACHE_SCOPE,
-                    "local-v2",
+                    "local-v3",
                     crate::paths::now(),
                     &local.runs,
                 )
@@ -1293,7 +1298,7 @@ fn full_dashboard_cached_data_latency_probe() {
     let versions = data::fetch_versions(&data::Versions::local(), |_| {});
     assert!(versions.error.is_none(), "{:?}", versions.error);
     let at = crate::paths::now();
-    cache::save(LOCAL_CACHE_SCOPE, "local-v2", at, &local.runs).expect("private local cache");
+    cache::save(LOCAL_CACHE_SCOPE, "local-v3", at, &local.runs).expect("private local cache");
     cache::save(&scope, "hosted", at, &hosted).expect("private hosted cache");
     cache::save(&scope, "versions", at, &versions).expect("private versions cache");
     for sample in 1..=3 {
@@ -1331,7 +1336,12 @@ fn full_dashboard_cached_data_latency_probe() {
             .snapshot
             .runs
             .iter()
-            .map(|row| (row.id.clone(), (row.time, row.compile, row.reuse)))
+            .map(|row| {
+                (
+                    row.id.clone(),
+                    (row.time, row.compile, row.reuse, row.timeline.clone()),
+                )
+            })
             .collect();
         let refresh_started = Instant::now();
         let refreshed = data::local_snapshot(&mut times, |_| {});

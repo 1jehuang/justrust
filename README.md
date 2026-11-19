@@ -142,6 +142,14 @@ The Runs card says what happened instead of a bare exit code: `compile error`,
 failure with no recorded class shows its exit code. The last column is how long
 ago the run started. Enter still shows the run ID and full details.
 
+**Selected run** shows a chronological elapsed-time bar for the highlighted build.
+Read it from 0s on the left. Each cell samples one instant: solid colors show
+one category, two-color tiles show concurrent categories, and dots mean no
+activity was traced at that instant (not necessarily idle). The numbers at the
+ends are elapsed time, not summed task durations. A separate `Cargo elapsed`
+bar uses the recorder's clock when it cannot be aligned with the client's.
+Runs with only totals say `timeline unavailable` rather than guessing an order.
+
 **Overall profile** adds up the wait of the listed runs and shows each part
 as a gauge with its share and total: compiling, running tests, source sync,
 artifacts back, hosted overhead, cargo startup, build directory lock, the

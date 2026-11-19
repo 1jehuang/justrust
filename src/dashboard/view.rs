@@ -1,6 +1,9 @@
 //! Jcode-style cards: `╭─ Title · note ── ● status ─╮` borders, two cells of
 //! padding, label/value rows, `▰▱` gauges, and one accent color. Text is
 //! clipped by display cell, never wrapped. All server/log text is untrusted.
+#[path = "timeline_view.rs"]
+mod timeline_view;
+
 use super::data::{Currency, RunRow, Versions};
 use super::{CompileProfile, Kind, MenuRow, Profile, State};
 use ratatui::{
@@ -860,6 +863,7 @@ fn selected_lines(state: &State, width: usize) -> Vec<Line<'static>> {
         ),
         detail("Project", vec![span(tilde(&clean(&run.cwd)), VALUE)], width),
     ];
+    lines.extend(timeline_view::lines(run.timeline.as_ref(), width));
     if let Some(times) = &run.time {
         let total: f64 = times.iter().sum();
         let mut parts: Vec<_> = super::data::Bucket::ALL
@@ -1773,8 +1777,9 @@ mod tests {
             "{text}"
         );
         let wrapped = selected_lines(&state, 36);
-        assert_eq!(wrapped[3].to_string(), "Timing   compiling 8.0s (80%)");
-        assert_eq!(wrapped[4].to_string(), "         running tests 2.0s (20%)");
+        assert!(wrapped[3].to_string().contains("timeline unavailable"));
+        assert_eq!(wrapped[4].to_string(), "Timing   compiling 8.0s (80%)");
+        assert_eq!(wrapped[5].to_string(), "         running tests 2.0s (20%)");
         state.selected = 1;
         let lines = selected_lines(&state, 120);
         let text: String = lines
