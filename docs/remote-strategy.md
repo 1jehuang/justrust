@@ -12,19 +12,15 @@ finalization, and run-record transfer timings. Older agents omit these fields
 without changing build results. `justrust show <run-id>` separates that work
 from Cargo rather than attributing it all to network or compiler time.
 
-`JUSTRUST_REMOTE_EVICT_INTERVAL_SECS=60` opts into at most one opportunistic
-post-build target/artifact collection pass per minute per persistent agent.
-The client forwards the control to the agent. Zero (the default), invalid
-values, or values over 3600 preserve per-build collection. This experiment
-requires an agent containing the cadence implementation, for example a pinned
-development session with `JUSTRUST_REMOTE_DEV=1`.
+Each persistent agent starts at most one opportunistic post-build collection
+per minute by default. Set `JUSTRUST_REMOTE_EVICT_INTERVAL_SECS=0` for a pass
+after every build, or choose an interval up to 3600 seconds. Invalid values
+use the default.
 
 This does not defer durable source activity updates or change active-root
 protection, tenant boundaries, collection grace, or eviction eligibility.
 Low-disk build admission and ENOSPC recovery still collect immediately,
-independently of the opportunistic cadence. A focused warm-loop comparison
-does not replace the comprehensive session-weighted benchmark gate required
-before changing the default.
+independently of the opportunistic cadence.
 
 ## Where compile time goes (measured)
 

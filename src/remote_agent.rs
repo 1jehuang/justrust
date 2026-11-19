@@ -138,14 +138,14 @@ fn claim_periodic_collection(
 }
 
 fn collection_interval(env: &[(String, String)]) -> std::time::Duration {
-    // Zero preserves the per-build sweep. Cadence is opt-in until the full
-    // session-weighted benchmark gate can validate default promotion.
+    // A sweep after every result can block the next build's registry access.
+    // The low-disk floor and ENOSPC recovery bypass this interval.
     let secs = env
         .iter()
         .find(|(key, _)| key == "JUSTRUST_REMOTE_EVICT_INTERVAL_SECS")
         .and_then(|(_, value)| value.parse::<u64>().ok())
         .filter(|secs| *secs <= 3600)
-        .unwrap_or(0);
+        .unwrap_or(60);
     std::time::Duration::from_secs(secs)
 }
 
@@ -1498,14 +1498,14 @@ mod tests {
 
     #[test]
     fn periodic_collection_interval_is_bounded_and_request_scoped() {
-        assert_eq!(super::collection_interval(&[]).as_secs(), 0);
+        assert_eq!(super::collection_interval(&[]).as_secs(), 60);
         for (input, expected) in [
             ("0", 0),
             ("1", 1),
             ("3600", 3600),
-            ("3601", 0),
-            ("-1", 0),
-            ("bad", 0),
+            ("3601", 60),
+            ("-1", 60),
+            ("bad", 60),
         ] {
             let env = vec![("JUSTRUST_REMOTE_EVICT_INTERVAL_SECS".into(), input.into())];
             assert_eq!(super::collection_interval(&env).as_secs(), expected);
