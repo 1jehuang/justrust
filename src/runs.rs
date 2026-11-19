@@ -39,6 +39,19 @@ fn read_recent_entries(
     limit: usize,
     mut keep: impl FnMut(&mut IndexEntry) -> bool,
 ) -> std::io::Result<Vec<IndexEntry>> {
+    read_recent_records(reader, limit, |line| {
+        let Some(mut entry) = serde_json::from_slice(line).ok() else {
+            return Ok(None);
+        };
+        Ok(keep(&mut entry).then_some(entry))
+    })
+}
+
+fn read_recent_records<T>(
+    reader: &mut (impl std::io::Read + std::io::Seek),
+    limit: usize,
+    mut select: impl FnMut(&[u8]) -> std::io::Result<Option<T>>,
+) -> std::io::Result<Vec<T>> {
     use std::io::SeekFrom;
 
     let mut entries = Vec::new();
@@ -73,9 +86,7 @@ fn read_recent_entries(
                     .collect::<Vec<_>>();
                 &joined
             };
-            if let Ok(mut entry) = serde_json::from_slice(line)
-                && keep(&mut entry)
-            {
+            if let Some(entry) = select(line)? {
                 entries.push(entry);
                 if entries.len() == limit {
                     entries.reverse();
@@ -285,22 +296,45 @@ fn latest_in_context(
 pub fn log(id: Option<&str>, grep: Option<&str>, tail: Option<usize>) -> Result<()> {
     let id = resolve_id(id)?;
     let path = paths::runs_dir()?.join(&id).join("output.jsonl");
+    if let Some(n) = tail {
+        let mut f =
+            std::fs::File::open(&path).with_context(|| format!("run {id} has no saved output"))?;
+        for line in
+            log_tail(&mut f, grep, n).with_context(|| format!("reading output for run {id}"))?
+        {
+            println!("{line}");
+        }
+        return Ok(());
+    }
     let raw =
         std::fs::read_to_string(&path).with_context(|| format!("run {id} has no saved output"))?;
-    let mut lines: Vec<String> = raw
+    let lines = raw
         .lines()
         .filter_map(|l| serde_json::from_str::<crate::record::OutputLine>(l).ok())
         .map(|l| l.l)
-        .filter(|l| grep.is_none_or(|g| l.contains(g)))
-        .collect();
-    if let Some(n) = tail {
-        let skip = lines.len().saturating_sub(n);
-        lines.drain(..skip);
-    }
+        .filter(|l| grep.is_none_or(|g| l.contains(g)));
     for l in lines {
         println!("{l}");
     }
     Ok(())
+}
+
+/// Malformed JSON (including torn writes) is skipped. Invalid UTF-8 is an
+/// error in any visited record, but a bounded tail does not validate the
+/// unrequested prefix. An unbounded log still validates the entire file.
+fn log_tail(
+    reader: &mut (impl std::io::Read + std::io::Seek),
+    grep: Option<&str>,
+    n: usize,
+) -> std::io::Result<Vec<String>> {
+    read_recent_records(reader, n, |line| {
+        let text = std::str::from_utf8(line)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        Ok(serde_json::from_str::<crate::record::OutputLine>(text)
+            .ok()
+            .map(|record| record.l)
+            .filter(|l| grep.is_none_or(|g| l.contains(g))))
+    })
 }
 
 pub fn show(id: Option<&str>, json: bool) -> Result<()> {
@@ -908,6 +942,33 @@ mod tail_tests {
                 "{report}"
             );
         }
+    }
+
+    #[test]
+    fn output_tail_counts_valid_matching_records_not_physical_lines() {
+        use std::io::Cursor;
+        let long = format!("{}\nneedle", "界".repeat(75000));
+        let short = "last\nneedle";
+        let record = |l: &str| serde_json::json!({"t":0,"s":"e","l":l}).to_string();
+        let text = format!(
+            "{}\r\n{}\n{}\nnot json\n{{\"t\":",
+            record(&long),
+            record("other"),
+            record(short)
+        );
+        let mut reader = Cursor::new(text.as_bytes());
+        assert_eq!(
+            log_tail(&mut reader, Some("\nneedle"), 2).unwrap(),
+            [long, short.into()]
+        );
+        let bytes = [b"\xff\n".as_slice(), text.as_bytes()].concat();
+        let mut reader = Cursor::new(bytes);
+        assert_eq!(log_tail(&mut reader, None, 1).unwrap(), [short]);
+        assert_eq!(
+            log_tail(&mut reader, None, 10).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert!(log_tail(&mut reader, None, 0).unwrap().is_empty());
     }
 
     fn line(id: &str) -> String {
