@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -283,6 +284,110 @@ class SchedulerSweepTests(unittest.TestCase):
                 sweep.main()
             self.assertFalse((out / 'off.json').exists())
             self.assertFalse((out / 'on.json').exists())
+
+
+class SchedulerEvidenceTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which(suite.J), 'requires installed graph validator, never builds it')
+    def test_offline_native_owner_reconciliation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            ticket = dict(invocation_id='t', parent_task_id='scheduler-0', policy='required',
+                          capture_id='c', lifecycle='declared', execute_entered=False)
+            owner = dict(invocation_id='o', parent_invocation_id=None, parent_task_id=None, sealed=False,
+                         interrupted=False, lost_events=0, outcome='pending', tickets=[ticket])
+            manifest = dict(schema=1, profile='buildrunner-scheduler-entry-v1', run_id='r',
+                            authority_root='o', owners=[owner])
+            def write(name, obj):
+                (directory / (name + '.json')).write_text(json.dumps(obj))
+            write('owner-o.declaration', manifest)
+            ticket.update(lifecycle='execute_entered', execute_entered=True)
+            write('owner-o.execute-entered', manifest)
+            ticket.update(lifecycle='succeeded')
+            write('owner-o.execute-result', manifest)
+            owner.update(sealed=True, outcome='success')
+            write('owner-o.manifest', manifest)
+            write('c.envelope', dict(schema=1, run_id='r', invocation_id='t', parent_invocation_id='o',
+                                     parent_task_id='scheduler-0', capture_id='c', receipt_schema=1))
+            nodes = [dict(id=i, kind='cargo-unit', start_ns=s, end_ns=e, outcome='success')
+                     for i, s, e in [(0, 0, 10), (1, 5, 15)]]
+            events = [dict(unit=i, event=k, at_ns=t, **extra) for i, k, t, extra in [
+                (0, 'start', 0, {}), (0, 'artifact-ready', 4, {'artifact': 'rmeta'}), (1, 'start', 5, {}),
+                (0, 'terminal', 10, {'outcome': 'success'}), (1, 'terminal', 15, {'outcome': 'success'})]]
+            write('c', dict(schema=1, producer='cargo-scheduler', scope='cargo-unit-scheduler', capture_id='c',
+                            structural_complete=True, full_pipeline_complete=False, declared_nodes=2,
+                            declared_edges=1, issues=[], opaque_boundaries=['compiler'], nodes=nodes,
+                            edges=[{'from': 1, 'to': 0, 'artifact': 'rmeta'}], events=events))
+            self.assertEqual(sweep.sample_evidence(directory)['last_input_to_start_ns'], {1: 1})
+
+    def test_edge_observations_use_artifact_on_each_edge_not_producer_wide(self):
+        receipt = {'nodes': [{'id': i, 'start_ns': start, 'end_ns': end, 'outcome': 'success'}
+                             for i, start, end in [(0, 0, 10), (1, 6, 20), (2, 13, 30), (3, 15, 22)]],
+                   'events': [{'unit': 0, 'event': 'artifact-ready', 'artifact': 'rmeta', 'at_ns': 4}],
+                   'edges': [{'from': 1, 'to': 0, 'artifact': 'rmeta'},
+                             {'from': 2, 'to': 0, 'artifact': 'all'},
+                             {'from': 3, 'to': 0, 'artifact': 'rmeta'}]}
+        # Missing metadata event for a different prerequisite: only its terminal proves availability.
+        receipt['nodes'].append({'id': 4, 'start_ns': 1, 'end_ns': 14, 'outcome': 'fresh'})
+        receipt['edges'].append({'from': 3, 'to': 4, 'artifact': 'rmeta'})
+        self.assertEqual(sweep.edge_observations(receipt), {
+            'edge_sources': {'rmeta_event': 2, 'rmeta_at_completion': 1, 'all_at_completion': 1},
+            'last_input_to_start_ns': {1: 2, 2: 3, 3: 1}})
+
+    def test_missing_and_incomplete_native_owner_graph(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(ValueError, 'missing'):
+                sweep.sample_evidence(root)
+            (root / 'owner-test.manifest.json').touch()
+            with patch.object(sweep.subprocess, 'run') as native:
+                native.return_value.stdout = '{"scheduler_entry_complete":false}'
+                with self.assertRaisesRegex(ValueError, 'incomplete'):
+                    sweep.sample_evidence(root)
+                self.assertEqual(native.call_args.args[0][1:], [
+                    'graph', str(root), '--manifest', str(root / 'owner-test.manifest.json'), '--json'])
+                self.assertTrue(native.call_args.kwargs['check'])
+
+    def test_abba_never_publishes_unchecked_enabled_arm(self):
+        for fail in ('missing graph', 'missing mode', None):
+            with self.subTest(fail=fail), tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp) / 'out'
+                runs, compared = [], []
+                def execute(cmd, **kwargs):
+                    if cmd[2] == 'compare':
+                        compared.append(cmd)
+                        return
+                    mode = sweep.MODES[len(runs)]
+                    rid = f'run-{len(runs)}'
+                    runs.append(rid)
+                    current = segment(mode)['result']
+                    measured = current['scenarios']['desktop-body-check']['samples'][0]
+                    measured['id'] = rid
+                    if rid != 'run-2' or fail != 'missing mode':
+                        measured['scheduler_launch_mode'] = '1' if mode == 'on' else '0'
+                    Path(cmd[cmd.index('--out') + 1]).write_text(json.dumps({'unchecked_scheduler_segment': current}))
+                def evidence(path):
+                    if fail == 'missing graph' and path.name == 'run-2':
+                        raise ValueError('unchecked enabled sample')
+                    return {'receipt': path.name}
+                argv = ['sweep', '--require-scheduling-evidence', '--samples', '1', '--toolchain', 'nightly',
+                        '--out-dir', str(out), 'desktop-body-check']
+                with patch.dict(os.environ, {'JUSTRUST_HOME': tmp}, clear=True), patch('sys.argv', argv), \
+                     patch.object(sweep, 'identities', return_value={}), patch.object(sweep, 'verify_recorded_selection'), \
+                     patch.object(sweep, 'sample_evidence', side_effect=evidence), \
+                     patch.object(sweep.subprocess, 'run', side_effect=execute):
+                    if fail:
+                        with self.assertRaisesRegex(ValueError, 'unchecked enabled|scheduler launch mode'):
+                            sweep.main()
+                        self.assertFalse(list(out.rglob('*.json')))
+                        self.assertFalse(compared)
+                    else:
+                        sweep.main()
+                        self.assertEqual(len(compared), 1)
+                        for mode in ('off', 'on'):
+                            result = json.loads((out / f'{mode}.json').read_text())
+                            samples = result['scenarios']['desktop-body-check']['samples']
+                            self.assertEqual([s['scheduling_evidence']['receipt'] for s in samples],
+                                             [r for r, m in zip(runs, sweep.MODES) if m == mode])
 
 
 class WeightedSchedulerTests(unittest.TestCase):

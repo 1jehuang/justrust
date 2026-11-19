@@ -1059,6 +1059,19 @@ This is controlled host-local scheduling evidence, not hosted transport latency,
 a proof of a causal compiler DAG, or a reason to promote the default-off scheduler
 before real public-interface correctness and performance acceptance.
 
+Add `--require-scheduling-evidence` for a trial that must explain dependency
+readiness. Use a scenario that executes dependent units, not a no-op. Each
+measured invocation gets a fresh native Cargo graph directory under `--out-dir`.
+`justrust graph --manifest` must reconcile one successful scheduler entry per
+sample in all four segments. A metadata edge uses the prerequisite's `rmeta`
+event if observed, otherwise its completion. A full-artifact edge always uses
+completion. Each sample records edge counts, the receipt digest and the interval
+from the last declared input becoming available until each dependent starts.
+Unit IDs are receipt-local. These intervals are not queue wait, a counterfactual
+speedup, or evidence of the scheduler's selected priority. Both arms include
+capture overhead. An incomplete trial retains raw graphs for diagnosis but no
+comparable arm results, and it does not run `suite.py compare`.
+
 ## Committed evidence correspondence
 
 `python3 bench/audit_hosted_evidence.py` audits the committed October 13 hosted

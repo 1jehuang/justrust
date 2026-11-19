@@ -959,7 +959,7 @@ def hosted_early_provenance(summary: dict) -> dict:
     return early
 
 
-def run_once(s: Scenario, root: Path, target: Path) -> dict:
+def run_once(s: Scenario, root: Path, target: Path, *, graph_root=None) -> dict:
     rid = new_id()
     env = dict(os.environ)
     env.update(
@@ -984,6 +984,10 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     # samples; scenarios that measure it turn it on.
     env.setdefault("JUSTRUST_BUILDD", "0")
     env.update(s.env)
+    if graph_root is not None:
+        capture = graph_root / rid
+        capture.mkdir(mode=0o700, exist_ok=False)
+        env['JUSTRUST_EXECUTION_GRAPH_DIR'] = str(capture.resolve())
     if REMOTE:
         env["JUSTRUST_REMOTE"] = "force"
         if env.get("JUSTRUST_HOSTED_HTTP_POOL") in ("1", "on", "true"):
@@ -1070,6 +1074,7 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     early = sm.get("early") or {}
     return {
         "id": rid,
+        **({'scheduler_launch_mode': env.get('JUSTRUST_CARGO_CRITICAL_PATH')} if graph_root else {}),
         "wall": round(wall, 3),
         # Seconds until the first `error` line on stderr (None: no error).
         "first_error": None if first_error is None else round(first_error, 3),
@@ -1141,7 +1146,7 @@ def cold_target(suggested: Path) -> Path:
     return Path(tempfile.mkdtemp(prefix=suggested.name + '-', dir=parent))
 
 
-def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float) -> dict:
+def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float, *, graph_root=None) -> dict:
     root = prepare(s.snapshot)
     if s.prebuilt:
         prebuilt_store(s, root)
@@ -1171,8 +1176,9 @@ def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float) -> dict:
                 apply_edit(root, s.edit, base + i)
             if quiet_wait:
                 wait_quiet(quiet_wait)
-            r = run_once(s, root, target)
             measured = i >= warm
+            capture = {'graph_root': graph_root} if measured and graph_root is not None else {}
+            r = run_once(s, root, target, **capture)
             tag = "" if measured else " (warmup)"
             flag = " noisy" if r["noisy"] else ""
             print(
@@ -1730,7 +1736,9 @@ def cmd_run(args) -> None:
                                      MINIZ_OPT_LEVEL)
         if hosted_early:
             scenario = replace(scenario, env={**scenario.env, "JUSTRUST_EARLY": "query", "JUSTRUST_EARLY_EXIT": "0"})
-        result["scenarios"][name] = run_scenario(scenario, args.n, args.warmup, args.quiet_wait)
+        capture = getattr(args, 'scheduler_graph_root', None)
+        result["scenarios"][name] = run_scenario(scenario, args.n, args.warmup, args.quiet_wait,
+                                                 **({'graph_root': capture} if capture else {}))
     verify_binary_identity(info)
     result["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     out = Path(args.out) if args.out else RESULTS / (
@@ -1738,10 +1746,14 @@ def cmd_run(args) -> None:
         + ("" if TOOLCHAIN == "system" else f"-{TOOLCHAIN}") + ("-remote" if REMOTE else "") + ".json"
     )
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(result, indent=1) + "\n")
+    # Even if the paired-trial parent is interrupted before cleanup, this
+    # staging document is not an ordinary comparable suite result.
+    staged = bool(getattr(args, 'scheduler_graph_root', None))
+    out.write_text(json.dumps({'unchecked_scheduler_segment': result} if staged else result, indent=1) + "\n")
     print(table(result))
     print(f"\nsaved {out}")
-    upload_result(out)
+    if not staged:
+        upload_result(out)
 
 
 def _synth():
@@ -2093,6 +2105,7 @@ def main() -> None:
     r.add_argument("--quiet-wait", type=float, default=0, metavar="SECS",
                    help="before each run wait up to SECS for no foreign rustc and load < 2")
     r.add_argument("-o", "--out", help="result file (default bench/results/<time>-<rev>.json)")
+    r.add_argument('--scheduler-graph-root', type=Path, help=argparse.SUPPRESS)
     r.add_argument("--synth", type=int, metavar="SEED",
                    help="run the synthetic usage-weighted workload (bench/synth/) instead of the named "
                         "scenarios; -n is then runs per point")

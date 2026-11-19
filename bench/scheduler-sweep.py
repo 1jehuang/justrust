@@ -12,10 +12,57 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 import suite
 
 MODES = ("off", "on", "on", "off")
+
+
+def edge_observations(receipt):
+    """After native validation: latest *declared* input availability, not queue wait."""
+    nodes = {n['id']: n for n in receipt['nodes']}
+    metadata = {e['unit']: e['at_ns'] for e in receipt['events'] if e['event'] == 'artifact-ready'}
+    last = {}
+    counts = {'rmeta_event': 0, 'rmeta_at_completion': 0, 'all_at_completion': 0}
+    for edge in receipt['edges']:
+        consumer, producer = edge['from'], edge['to']
+        if edge['artifact'] == 'rmeta' and producer in metadata:
+            available, source = metadata[producer], 'rmeta_event'
+        else:
+            available, source = nodes[producer]['end_ns'], edge['artifact'] + '_at_completion'
+        if nodes[consumer]['outcome'] not in ('success', 'fresh') or available is None:
+            raise ValueError('unobserved scheduler edge lifecycle')
+        counts[source] += 1
+        last[consumer] = max(last.get(consumer, 0), available)
+    if not last or not any(nodes[k]['outcome'] == 'success' for k in last):
+        raise ValueError('no executed non-fresh dependent in scheduler evidence')
+    return {'edge_sources': counts, 'last_input_to_start_ns': {
+        k: nodes[k]['start_ns'] - t for k, t in last.items()}}
+
+
+def sample_evidence(directory):
+    manifests = list(directory.glob('owner-*.manifest.json'))
+    if len(manifests) != 1:
+        raise ValueError(f'{directory.name}: missing or ambiguous Cargo scheduler owner manifest')
+    manifest, = manifests
+    checked = subprocess.run([suite.J, 'graph', str(directory), '--manifest', str(manifest), '--json'],
+                             check=True, stdout=subprocess.PIPE, text=True)
+    coverage = json.loads(checked.stdout)
+    if (coverage.get('scheduler_entry_complete') is not True or coverage.get('issues') != []
+            or coverage.get('expected_receipts') != 1 or coverage.get('accounted_receipts') != 1):
+        raise ValueError(f'{directory.name}: incomplete native scheduler graph')
+    owner, = suite.bounded_identity_json(manifest, 16384)['owners']
+    ticket, = owner['tickets']
+    if ticket['lifecycle'] != 'succeeded' or owner['outcome'] != 'success':
+        raise ValueError('scheduler evidence requires a successful BuildRunner entry')
+    path = directory / (ticket['capture_id'] + '.json')
+    receipt = suite.bounded_identity_json(path, 64 * 1024 * 1024)
+    if (receipt['capture_id'] != ticket['capture_id'] or receipt['producer'] != 'cargo-scheduler'
+            or receipt['structural_complete'] is not True):
+        raise ValueError('incomplete or mismatched scheduler receipt')
+    return {'scope': 'one Cargo scheduler entry, not queue wait or predicted savings',
+            'sha256': suite.binary_sha256(path), **edge_observations(receipt)}
 
 
 def identities(toolchain):
@@ -115,6 +162,8 @@ def main():
     parser.add_argument("--jobs", type=int, choices=(1, 2, 4, 8, 16, 24), default=24)
     parser.add_argument("--quiet-wait", type=float, default=30)
     parser.add_argument("--samples", type=int, default=2)
+    parser.add_argument('--require-scheduling-evidence', action='store_true',
+                        help='require a validated native Cargo graph for every measured ABBA sample')
     parser.add_argument("--costs", type=Path,
                         help="explicit bounded package hints, copied and digest-guarded")
     parser.add_argument("scenarios", nargs="+", choices=tuple(suite.BY_NAME))
@@ -143,6 +192,7 @@ def main():
                        "CARGO_BUILD_JOBS": str(args.jobs), "JUSTRUST_NO_UPDATE": "1",
                        "JUSTRUST_TOOLCHAIN_AUTO_INSTALL": "0", "JUSTRUST_SHADOW": "0"})
     segments = []
+    seen = set()
     for index, mode in enumerate(MODES):
         if hints is not None and suite.load_scheduler_hints(hint_snapshot) != hints:
             raise ValueError("cost hint snapshot changed before the segment")
@@ -155,7 +205,18 @@ def main():
         command = [sys.executable, str(Path(suite.__file__)), "run", "--toolchain", args.toolchain,
                    "--warmup", "1", "-n", str(args.samples), "--quiet-wait", str(args.quiet_wait),
                    "--out", str(out), *args.scenarios]
-        subprocess.run(command, check=True)
+        if args.require_scheduling_evidence:
+            graph_root = args.out_dir / f'{index}-{mode}-graphs'
+            graph_root.mkdir(mode=0o700)
+            # Unvalidated suite files are neither published nor retained as reusable results.
+            with tempfile.TemporaryDirectory(dir=args.out_dir) as scratch:
+                private = Path(scratch) / 'segment.json'
+                command[command.index('--out') + 1] = str(private)
+                subprocess.run([*command, '--scheduler-graph-root', str(graph_root)], check=True)
+                result = json.loads(private.read_text())['unchecked_scheduler_segment']
+        else:
+            subprocess.run(command, check=True)
+            result = json.loads(out.read_text())
         current = identities(args.toolchain)
         if hints is not None:
             current["cost_hints"] = hints[1]
@@ -163,7 +224,6 @@ def main():
             raise ValueError("toolchain or justrust changed during scheduler sweep")
         if hints is not None and suite.load_scheduler_hints(hint_snapshot) != hints:
             raise ValueError("cost hint snapshot changed during the segment")
-        result = json.loads(out.read_text())
         expected_mode = "1" if mode == "on" else "0"
         if result.get("env", {}).get("optimization_env", {}).get("JUSTRUST_CARGO_CRITICAL_PATH") != expected_mode:
             raise ValueError("recorded segment mode does not match the scheduler experiment")
@@ -171,11 +231,26 @@ def main():
         if result.get("env", {}).get("optimization_env", {}).get("JUSTRUST_CARGO_CRITICAL_PATH_COSTS_SHA256") != expected_costs:
             raise ValueError("recorded cost hints do not match the scheduler experiment")
         verify_recorded_selection(result, args.toolchain, identity, args.jobs)
+        if args.require_scheduling_evidence:
+            if set(result['scenarios']) != set(args.scenarios):
+                raise ValueError('missing requested scheduler evidence scenario')
+            for scenario in result['scenarios'].values():
+                if len(scenario['samples']) != args.samples:
+                    raise ValueError('incomplete scheduler sample inventory')
+                for sample in scenario['samples']:
+                    rid = sample['id']  # checked in verify_recorded_selection
+                    if sample.get('scheduler_launch_mode') != expected_mode:
+                        raise ValueError(f'{rid}: missing or mismatched scheduler launch mode')
+                    if rid in seen:
+                        raise ValueError('reused scheduler sample ID')
+                    seen.add(rid)
+                    sample['scheduling_evidence'] = sample_evidence(graph_root / rid)
         segments.append({"mode": mode, "result": result})
-        (args.out_dir / "partial.json").write_text(json.dumps({"segments": segments,
-                                                                "identities": identity}, indent=2) + "\n")
-    for mode in ("off", "on"):
-        result = aggregate(segments, mode, identity, args.jobs)
+        if not args.require_scheduling_evidence:
+            (args.out_dir / "partial.json").write_text(json.dumps({"segments": segments,
+                                                                    "identities": identity}, indent=2) + "\n")
+    pair = {mode: aggregate(segments, mode, identity, args.jobs) for mode in ('off', 'on')}
+    for mode, result in pair.items():
         (args.out_dir / f"{mode}.json").write_text(json.dumps(result, indent=2) + "\n")
     subprocess.run([sys.executable, str(Path(suite.__file__)), "compare",
                     str(args.out_dir / "off.json"), str(args.out_dir / "on.json")], check=True)
