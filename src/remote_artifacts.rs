@@ -690,6 +690,9 @@ fn produce_files(
             let rid = format!("t1-{:x}", digest.finalize());
             let offered = h.and_then(|h| h.id.as_deref());
             if offered == Some(&rid) {
+                // No frame means no publication or in-stream anchor needs this copy.
+                // If unlink fails, TestScratch still retries cleanup on drop.
+                let _ = std::fs::remove_file(&snap);
                 continue;
             }
             let prefix = format!("test-{scope:x}-");
@@ -2373,6 +2376,85 @@ mod tests {
         assert!(second[0].1 < first[0].1 / 10, "{second:?} vs {first:?}");
         assert_eq!(std::fs::read(local.join("app")).unwrap(), body);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn acknowledged_selected_snapshots_are_gone_before_next_frame() {
+        if !available() {
+            return;
+        }
+        let root = TestScratch::new(&std::env::temp_dir()).unwrap();
+        let names = ["warm", "first", "second"];
+        for name in names {
+            std::fs::write(root.0.join(name), vec![42; 1 << 20]).unwrap();
+            crate::sys::set_mode(&root.0.join(name), 0o751).unwrap();
+        }
+        let mut req = Request {
+            cwd: "fixture".into(),
+            args: vec![],
+            start: 0.0,
+            have: vec![],
+            test_run: Some("fixture".into()),
+            anchors: true,
+            prediction_v1: false,
+        };
+        let run = |names: &[&str], req: &Request, mixed: bool| {
+            let scratch = TestScratch::new(&root.0).unwrap();
+            let path = scratch.0.clone();
+            let files = names
+                .iter()
+                .map(|&n| (n.to_owned(), root.0.join(n).metadata().unwrap()))
+                .collect();
+            let mut frames = Vec::new();
+            produce_files(
+                &root.0,
+                req,
+                &root.0,
+                Some(scratch),
+                files,
+                &mut |frame, mut data| {
+                    if mixed {
+                        assert!(!path.join("0.new").exists());
+                        if !frames.is_empty() {
+                            assert!(path.join("1.new").is_file());
+                        }
+                    }
+                    let mut bytes = Vec::new();
+                    data.read_to_end(&mut bytes)?;
+                    frames.push((frame, bytes));
+                    Ok(())
+                },
+            )
+            .unwrap();
+            frames
+        };
+        let warm = run(&names[..1], &req, false);
+        let Frame::File { id, .. } = &warm[0].0 else {
+            panic!()
+        };
+        req.have.push(Have {
+            name: "warm".into(),
+            id: Some(id.clone()),
+            mtime: 0.0,
+        });
+        assert!(run(&names[..1], &req, false).is_empty());
+        // An offered but unpublished basis must still fall back to a full frame.
+        req.have.push(Have {
+            name: "first".into(),
+            id: Some(id.clone()),
+            mtime: 0.0,
+        });
+        let reference = run(&names[1..], &req, false);
+        let mixed = run(&names, &req, true);
+        assert_eq!(mixed, reference); // headers, modes, order and compressed bytes
+        assert_eq!(mixed.len(), 2);
+        assert!(
+            matches!(&mixed[0].0, Frame::File { name, mode: 0o751, patch: false, base: None, .. } if name == "first")
+        );
+        assert!(
+            matches!(&mixed[1].0, Frame::File { name, mode: 0o751, patch: false, base: Some(base), .. } if name == "second" && base == "first")
+        );
     }
 
     #[test]
