@@ -25,6 +25,15 @@ base=$root/build/jr/pgo-bolt-base$sfx
 out=$root/build/jr/pgo-bolt$sfx
 prof=$root/build/pgo/bolt
 [ -x "$bolt_dir/llvm-bolt" ] || { echo "no llvm-bolt in $bolt_dir" >&2; exit 2; }
+# Parse the exact final flags before replacing outputs or spending time training.
+# LLVM's --version can return success despite printing an invalid-option error.
+opt_flags=(-reorder-blocks=ext-tsp -reorder-functions=cdsort -split-functions
+  -split-strategy=cdsplit -split-all-cold -jump-tables=move -icf=all
+  -update-debug-sections -dyno-stats)
+if ! diagnostic=$("$bolt_dir/llvm-bolt" "${opt_flags[@]}" --version 2>&1 >/dev/null) || [[ -n $diagnostic ]]; then
+  printf 'incompatible llvm-bolt in %s: %s\n' "$bolt_dir" "$diagnostic" >&2
+  exit 2
+fi
 [ -d "$base" ] || { echo "no $base: run ./build-jr.sh pgo-bolt-base" >&2; exit 2; }
 
 rm -rf "$out" "$prof"
@@ -46,8 +55,6 @@ rm -f "$prof"/prof.*.fdata
 
 echo "bolt: optimizing" >&2
 "$bolt_dir/llvm-bolt" "$orig" -data "$prof/merged.fdata" -o "$driver" \
-  -reorder-blocks=ext-tsp -reorder-functions=cdsort -split-functions \
-  -split-strategy=cdsplit -split-all-cold -jump-tables=move -icf=all \
-  -update-debug-sections -dyno-stats 2> "$prof/bolt.log"
+  "${opt_flags[@]}" 2> "$prof/bolt.log"
 rm -f "$orig"
 echo "bolt: done -> $out/bin/rustc" >&2
