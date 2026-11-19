@@ -921,6 +921,13 @@ fallback. Payloads must not escape the owned session with `setsid()`.
 Original logs/results remain available after stop, and a cancelled or incomplete
 run is not a valid comparison baseline.
 
+Named suite and versus cold samples on the build machine use a fresh private
+directory recorded as `cold_scratch`. The guardian removes it after verifying
+that no session members remain, including after failure, timeout, or stop.
+It does not sweep old directories, warm targets, shared dependency caches,
+or outputs on a different machine. If the guardian itself is killed or the
+machine reboots, its record identifies the scratch for manual inspection.
+
 ## The suite: `bench/suite.py`
 
 Use this for any speed claim. It runs the agent edit loop on **pinned source

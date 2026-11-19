@@ -137,6 +137,47 @@ class Sessions(unittest.TestCase):
         process.send_signal(signal.SIGTERM)
         self.assert_clean(process, 143)
 
+    def test_stopped_cold_target_retention(self):
+        marker = self.root / 'allocation.json'
+        warm = self.root / 'shared-warm'
+        warm.mkdir()
+        (warm / 'keep').write_bytes(b'warm')
+        code = f'''import json, os, sys, time
+from pathlib import Path
+sys.path.insert(0, {str(HELPER.parent.resolve())!r})
+import suite, versus
+versus.WORK = Path({str(warm)!r})
+st = versus.STACKS[0]
+s = suite.Scenario('cold-test', 'fixture', ['check'], None, 'cold fixture', cold=True)
+target = versus.target_dir(st, s, 'sample')
+assert versus.target_dir(st, s, None).is_relative_to(versus.WORK)
+target.mkdir(exist_ok=True, parents=True)
+(target / 'link').symlink_to(versus.WORK, target_is_directory=True)
+with (target / 'crate.rlib').open('wb') as stream:
+    stream.write(os.urandom(256 * 1024))
+    stream.flush()
+    os.fsync(stream.fileno())
+allocated = (target / 'crate.rlib').stat().st_blocks * 512
+Path({str(marker)!r}).write_text(json.dumps([str(target), allocated]))
+time.sleep(60)'''
+        process = self.launch(code)
+        self.wait_for(marker.exists)
+        target, allocated = json.loads(marker.read_text())
+        self.assertGreater(allocated, 0)
+        self.assertEqual(self.control().returncode, 0)
+        self.assert_clean(process, 138)
+        self.assertFalse(Path(target).exists(), f'{allocated} bytes retained')
+        self.assertEqual((warm / 'keep').read_bytes(), b'warm')
+
+    def test_replaced_scratch_is_preserved_and_cleanup_fails(self):
+        code = ("import os,pathlib; p=pathlib.Path(os.environ['JUSTRUST_BENCH_COLD_ROOT']); "
+                "p.rename(p.with_suffix('.original')); p.mkdir(); (p/'keep').touch()")
+        proc = self.launch(code)
+        out, _ = proc.communicate(timeout=10)
+        record = remote.read_record(self.record)
+        self.assertEqual((proc.returncode, record['status']), (125, 'failed'), out)
+        self.assertTrue((Path(record['cold_scratch']) / 'keep').exists())
+
     def test_malformed_record_no_signal(self):
         process = self.launch('import time; time.sleep(60)')
         original = self.record.read_bytes()

@@ -306,7 +306,7 @@ def stack_env(st: Stack, s: suite.Scenario, target: Path, rid: str) -> dict[str,
 
 def target_dir(st: Stack, s: suite.Scenario, cold_tag: str | None) -> Path:
     base = WORK / "target" / s.snapshot / st.name
-    return base.with_name(f"{st.name}-cold-{cold_tag}") if cold_tag else base
+    return suite.cold_target(base.with_name(f"{st.name}-cold-{cold_tag}")) if cold_tag else base
 
 
 def run_one(st: Stack, s: suite.Scenario, root: Path, cold_tag: str | None, extra: list[str]) -> dict:

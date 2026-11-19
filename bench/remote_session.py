@@ -11,9 +11,11 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -126,13 +128,20 @@ def run(args):
         signal.signal(sig, lambda number, frame: cancelled.append(number))
     record = dict(me, version=1, boot=boot(), status='running')
     record.pop('state')
-    atomic(path, record)
-    atomic(Path(args.pidfile), me['pid'])
     status = 125
     clean = False
     child = None
+    scratch = None
+    scratch_fd = None
     try:
-        child = subprocess.Popen(args.command)
+        # Only disposable cold targets opt into this root. Never redirect a
+        # caller's TMPDIR, evidence, explicit work directory or warm cache.
+        scratch = Path(tempfile.mkdtemp(prefix='.bench-cold-', dir=path.parent))
+        scratch_fd = os.open(scratch, os.O_DIRECTORY | os.O_NOFOLLOW)
+        record['cold_scratch'] = str(scratch)
+        atomic(path, record)
+        atomic(Path(args.pidfile), me['pid'])
+        child = subprocess.Popen(args.command, env=dict(os.environ, JUSTRUST_BENCH_COLD_ROOT=str(scratch)))
         deadline = time.monotonic() + args.timeout
         while child.poll() is None and not cancelled and time.monotonic() < deadline:
             time.sleep(0.05)
@@ -143,6 +152,16 @@ def run(args):
             status = 124
     finally:
         clean = cleanup(me['sid'], args.grace)
+        if clean and scratch is not None:
+            try:
+                if scratch_fd is None or not os.path.samestat(os.fstat(scratch_fd), scratch.lstat()):
+                    raise ValueError('cold scratch directory identity changed')
+                shutil.rmtree(scratch)
+            except (OSError, ValueError) as error:
+                print(f'cold scratch cleanup refused for {scratch}: {error}', file=sys.stderr)
+                clean = False
+        if scratch_fd is not None:
+            os.close(scratch_fd)
         if not clean:
             status = 125
         elif status is not None and status < 0:

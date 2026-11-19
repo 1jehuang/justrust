@@ -991,7 +991,7 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     if s.prebuilt:
         # A new machine: nothing in the local depcache, the store has it.
         cache = target.with_name(target.name + "-depcache")
-        shutil.rmtree(cache, ignore_errors=True)
+        cache.mkdir(mode=0o700, exist_ok=False)
         env["JUSTRUST_DEPCACHE_DIR"] = str(cache)
         env["JUSTRUST_PREBUILT"] = PREBUILT_URL
     cwd = root / SNAPSHOTS[s.snapshot]["cwd"]
@@ -1133,6 +1133,14 @@ def stats(samples: list[dict]) -> dict:
     }
 
 
+def cold_target(suggested: Path) -> Path:
+    # The on-machine session guardian reclaims unfinished samples only after
+    # the whole process tree is stopped. Allocate uniquely even on PID reuse.
+    parent = Path(os.environ.get('JUSTRUST_BENCH_COLD_ROOT', suggested.parent))
+    parent.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=suggested.name + '-', dir=parent))
+
+
 def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float) -> dict:
     root = prepare(s.snapshot)
     if s.prebuilt:
@@ -1157,7 +1165,7 @@ def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float) -> dict:
     try:
         for i in range(total):
             if s.cold:
-                target = root / f"{tdir}-cold-{os.getpid()}-{i}"
+                target = cold_target(root / f"{tdir}-cold-{os.getpid()}-{i}")
                 restore(root, s.edit)
             elif s.edit:
                 apply_edit(root, s.edit, base + i)
@@ -1176,7 +1184,8 @@ def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float) -> dict:
                 samples.append(r)
             if s.cold:
                 shutil.rmtree(target, ignore_errors=True)
-                shutil.rmtree(target.with_name(target.name + "-depcache"), ignore_errors=True)
+                if s.prebuilt:
+                    shutil.rmtree(target.with_name(target.name + "-depcache"))
     finally:
         restore(root, s.edit)
     if s.edit is None and not s.cold and any(x["units"] for x in samples):
