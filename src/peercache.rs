@@ -197,14 +197,11 @@ pub fn install(root: &Path, base: &str, line: &str, out: &str, bundle: &[u8]) ->
     }
     let final_dir = root.join("o").join(out);
     if !final_dir.join("meta.json").is_file() {
-        let tmp = scratch(root, "pi");
         let stage = root
             .join("o")
             .join(format!(".{out}.peer{}", std::process::id()));
         let _ = std::fs::create_dir_all(root.join("o"));
-        let ok = std::fs::write(&tmp, bundle).is_ok()
-            && crate::depcache_remote::unpack(&tmp, &stage).is_some();
-        let _ = std::fs::remove_file(&tmp);
+        let ok = crate::depcache_remote::unpack_peer(bundle, &stage).is_some();
         if !ok || std::fs::rename(&stage, &final_dir).is_err() {
             let _ = std::fs::remove_dir_all(&stage);
             if !final_dir.join("meta.json").is_file() {
@@ -1215,6 +1212,35 @@ mod tests {
         );
         assert_eq!(w, vec!["a".repeat(32)]);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn install_needs_no_spool_and_discards_corrupt_stage() {
+        let d = std::env::temp_dir().join(format!("jr-peer-slice-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let src = d.join("source");
+        std::fs::create_dir_all(&src).unwrap();
+        let meta = br#"{"files":[],"stderr":[],"wall":0.0}"#;
+        std::fs::write(src.join("meta.json"), meta).unwrap();
+        let path = d.join("bundle.gz");
+        crate::depcache_remote::pack(&src, &path).unwrap();
+        let bytes = std::fs::read(path).unwrap();
+        std::fs::write(d.join("tmp"), b"not a directory").unwrap();
+        let base = "b".repeat(32);
+        let out = "a".repeat(32);
+        let line = format!(r#"{{"inputs":[],"env":[],"out":"{out}"}}"#);
+        let mut corrupt = bytes.clone();
+        let crc = corrupt.len() - 8;
+        corrupt[crc] ^= 1;
+        assert!(!install(&d, &base, &line, &out, &corrupt));
+        assert_eq!(std::fs::read_dir(d.join("o")).unwrap().count(), 0);
+        assert!(!d.join("m").exists());
+        assert!(install(&d, &base, &line, &out, &bytes));
+        assert_eq!(
+            std::fs::read(d.join("o").join(out).join("meta.json")).unwrap(),
+            meta
+        );
+        std::fs::remove_dir_all(d).unwrap();
     }
 
     #[test]

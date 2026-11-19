@@ -303,11 +303,27 @@ pub(crate) fn unpack_public(src: &Path, dst: &Path) -> Option<()> {
 
 fn unpack_limited(src: &Path, dst: &Path, compressed: u64, expanded: u64) -> Option<()> {
     let f = std::fs::File::open(src).ok()?;
-    if f.metadata().ok()?.len() > compressed {
+    let len = f.metadata().ok()?.len();
+    unpack_reader(std::io::BufReader::new(f), len, dst, compressed, expanded)
+}
+
+/// Peer transport already holds the complete compressed member in memory.
+pub(crate) fn unpack_peer(bytes: &[u8], dst: &Path) -> Option<()> {
+    unpack_reader(bytes, bytes.len() as u64, dst, MAX_BUNDLE, 4 * MAX_BUNDLE)
+}
+
+fn unpack_reader(
+    src: impl Read,
+    len: u64,
+    dst: &Path,
+    compressed: u64,
+    expanded: u64,
+) -> Option<()> {
+    if len > compressed {
         return None;
     }
     // One extra byte distinguishes genuine EOF from exhaustion of the budget.
-    let mut r = flate2::read::GzDecoder::new(std::io::BufReader::new(f)).take(expanded + 1);
+    let mut r = flate2::read::GzDecoder::new(src).take(expanded + 1);
     let mut magic = [0u8; 6];
     r.read_exact(&mut magic).ok()?;
     if magic != MAGIC {
