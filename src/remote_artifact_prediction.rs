@@ -59,43 +59,7 @@ fn encode(basis: &[u8], size: u64, mut input: impl Read, mut out: impl Write) ->
         let block = &mut block[..len];
         input.read_exact(block)?;
         hash.update(&*block);
-        // Sample eight neighborhoods. A hit only proposes an alignment: hash
-        // collisions or a poor prediction can affect ratio, never the result.
-        let mut candidates = [0i64; 130];
-        candidates[0] = previous_shift;
-        let mut count = 2;
-        for j in (0..len.saturating_sub(23)).step_by(BLOCK / 8) {
-            for k in j..j + 16 {
-                let w = word(block, k);
-                let s = table[bucket(w, bits)];
-                if s != LITERAL && word(basis, s as usize) == w {
-                    candidates[count] = i64::from(s) - (pos + k) as i64;
-                    count += 1;
-                }
-            }
-        }
-        let candidates = &mut candidates[..count];
-        candidates.sort_unstable();
-        let mut last = None;
-        let mut best = 0;
-        let mut source = LITERAL;
-        for &shift in candidates.iter() {
-            if last == Some(shift) {
-                continue;
-            }
-            last = Some(shift);
-            let Ok(at) = usize::try_from(pos as i64 + shift) else {
-                continue;
-            };
-            let Some(old) = basis.get(at..at + len) else {
-                continue;
-            };
-            let score = (0..len).step_by(17).filter(|&i| old[i] == block[i]).count();
-            if score > best && score * 17 > len / 2 {
-                best = score;
-                source = at as u32;
-            }
-        }
+        let source = best_source(basis, block, pos, previous_shift, bits, &table);
         if source != LITERAL {
             referenced += len;
             previous_shift = i64::from(source) - pos as i64;
@@ -114,6 +78,63 @@ fn encode(basis: &[u8], size: u64, mut input: impl Read, mut out: impl Write) ->
     ensure!(input.read(&mut [0])? == 0, "artifact grew");
     out.write_all(&hash.finalize())?;
     Ok(())
+}
+
+fn best_source(
+    basis: &[u8],
+    block: &[u8],
+    pos: usize,
+    previous_shift: i64,
+    bits: u32,
+    table: &[u32],
+) -> u32 {
+    let len = block.len();
+    // Most neighboring blocks have moved together. Probe their old alignment
+    // first, only touching the random-access index when the match is weak.
+    if let Ok(at) = usize::try_from(pos as i64 + previous_shift)
+        && let Some(old) = basis.get(at..at + len)
+        && (0..len).step_by(31).filter(|&i| old[i] == block[i]).count() * 8 >= len.div_ceil(31) * 7
+    {
+        return at as u32;
+    }
+    // Hash matches only propose alignments. A collision can affect ratio,
+    // never reconstruction: every chosen reference is corrected by residuals.
+    let mut candidates = [0i64; 130];
+    candidates[0] = previous_shift;
+    let mut count = 2;
+    for j in (0..len.saturating_sub(23)).step_by(BLOCK / 8) {
+        for k in j..j + 16 {
+            let w = word(block, k);
+            let s = table[bucket(w, bits)];
+            if s != LITERAL && word(basis, s as usize) == w {
+                candidates[count] = i64::from(s) - (pos + k) as i64;
+                count += 1;
+            }
+        }
+    }
+    let candidates = &mut candidates[..count];
+    candidates.sort_unstable();
+    let mut last = None;
+    let mut best = 0;
+    let mut source = LITERAL;
+    for &shift in candidates.iter() {
+        if last == Some(shift) {
+            continue;
+        }
+        last = Some(shift);
+        let Ok(at) = usize::try_from(pos as i64 + shift) else {
+            continue;
+        };
+        let Some(old) = basis.get(at..at + len) else {
+            continue;
+        };
+        let score = (0..len).step_by(17).filter(|&i| old[i] == block[i]).count();
+        if score > best && score * 17 > len / 2 {
+            best = score;
+            source = at as u32;
+        }
+    }
+    source
 }
 
 fn decode(basis: &[u8], size: u64, mut input: impl Read, mut out: impl Write) -> Result<()> {
