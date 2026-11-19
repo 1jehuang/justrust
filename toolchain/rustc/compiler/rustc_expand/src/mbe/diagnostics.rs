@@ -368,7 +368,7 @@ impl<'dcx> CollectTrackerAndEmitter<'dcx, '_> {
 pub(super) fn emit_frag_parse_err(
     mut e: Diag<'_>,
     parser: &mut Parser<'_>,
-    orig_parser: &mut Parser<'_>,
+    orig_parser: Option<&mut Parser<'_>>,
     site_span: Span,
     arm_span: Span,
     kind: AstFragmentKind,
@@ -402,9 +402,9 @@ pub(super) fn emit_frag_parse_err(
     } else if parser.psess.source_map().is_imported(parser.token.span) {
         e.span_label(site_span, "in this macro invocation");
     }
-    match kind {
-        // Try a statement if an expression is wanted but failed and suggest adding `;` to call.
-        AstFragmentKind::Expr => match parse_ast_fragment(orig_parser, AstFragmentKind::Stmts) {
+    match orig_parser {
+        // Only expressions retain a snapshot for the alternate statement parse.
+        Some(orig_parser) => match parse_ast_fragment(orig_parser, AstFragmentKind::Stmts) {
             Err(err) => err.cancel(),
             Ok(_) => {
                 e.note(
@@ -430,7 +430,7 @@ pub(super) fn emit_frag_parse_err(
                 }
             }
         },
-        _ => annotate_err_with_kind(&mut e, kind, site_span),
+        None => annotate_err_with_kind(&mut e, kind, site_span),
     };
 
     if parser.token.kind == token::Dollar {

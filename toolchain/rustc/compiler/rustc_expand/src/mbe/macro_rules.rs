@@ -77,14 +77,16 @@ impl<'a, 'b> ParserAnyMacro<'a, 'b> {
             bindings,
             matched_rule_bindings,
         } = *self;
-        let snapshot = &mut parser.create_snapshot_for_diagnostic();
+        // Only expression recovery tries parsing the original stream as statements.
+        let mut snapshot =
+            (kind == AstFragmentKind::Expr).then(|| parser.create_snapshot_for_diagnostic());
         let fragment = match parse_ast_fragment(parser, kind) {
             Ok(f) => f,
             Err(err) => {
                 let guar = super::diagnostics::emit_frag_parse_err(
                     err,
                     parser,
-                    snapshot,
+                    snapshot.as_deref_mut(),
                     site_span,
                     arm_span,
                     kind,
@@ -1082,8 +1084,9 @@ fn cacheable_transcriber(tree: &mbe::TokenTree, lhs: &[MatcherLoc]) -> bool {
 
 #[cfg(test)]
 mod declarative_cache_tests {
-    use super::*;
     use rustc_span::{DUMMY_SP, create_default_session_globals_then};
+
+    use super::*;
 
     fn declaration(name: &str, kind: NonterminalKind) -> MatcherLoc {
         MatcherLoc::MetaVarDecl {
