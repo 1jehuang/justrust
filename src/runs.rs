@@ -246,9 +246,10 @@ fn resolve_id(id: Option<&str>) -> Result<String> {
             let cwd = std::env::current_dir()?;
             let session = std::env::var("JCODE_SESSION_ID").ok();
             let mut file = std::fs::File::open(paths::index_file()?).context("no recorded runs")?;
-            latest_in_context(&mut file, &cwd, session.as_deref())?.context(format!(
+            let workspace = selection_workspace(&cwd);
+            latest_in_context(&mut file, &cwd, &workspace, session.as_deref())?.with_context(|| format!(
                 "no recorded runs in workspace {}{}; use `justrust runs` and an explicit run ID to inspect another context",
-                selection_workspace(&cwd).display(),
+                workspace.display(),
                 session.as_ref().map(|s| format!(" for session {s}")).unwrap_or_default()
             ))
         }
@@ -300,12 +301,30 @@ fn selection_workspace(cwd: &std::path::Path) -> std::path::PathBuf {
 fn latest_in_context(
     reader: &mut (impl std::io::Read + std::io::Seek),
     cwd: &std::path::Path,
+    workspace: &std::path::Path,
     session: Option<&str>,
 ) -> std::io::Result<Option<String>> {
-    let workspace = selection_workspace(cwd);
+    // Only negative matches repeat: the first positive match ends the scan.
+    // Key by literal spelling, not Path equality or a normalized ancestor.
+    let mut misses = std::collections::HashSet::<String>::new();
     Ok(read_recent_entries(reader, 1, |r| {
-        session.is_none_or(|s| r.agent_session.as_deref() == Some(s))
-            && selection_workspace(std::path::Path::new(&r.cwd)) == workspace
+        if session.is_some_and(|s| r.agent_session.as_deref() != Some(s)) {
+            return false;
+        }
+        if cwd.to_str() == Some(r.cwd.as_str()) {
+            return true;
+        }
+        if misses.contains(&r.cwd) {
+            return false;
+        }
+        if selection_workspace(std::path::Path::new(&r.cwd)) == workspace {
+            return true;
+        }
+        if misses.len() == 128 {
+            misses.clear();
+        }
+        misses.insert(std::mem::take(&mut r.cwd));
+        false
     })?
     .pop()
     .map(|r| r.id))
@@ -830,7 +849,13 @@ mod tail_tests {
         }
         data.push_str("incomplete concurrent append");
         let select = |cwd: &std::path::Path, session| {
-            latest_in_context(&mut std::io::Cursor::new(data.as_bytes()), cwd, session).unwrap()
+            latest_in_context(
+                &mut std::io::Cursor::new(data.as_bytes()),
+                cwd,
+                &selection_workspace(cwd),
+                session,
+            )
+            .unwrap()
         };
         assert_eq!(select(&root, Some("agent-a")).as_deref(), Some("ours"));
         assert_eq!(select(&member, Some("agent-a")).as_deref(), Some("ours"));
@@ -846,6 +871,11 @@ mod tail_tests {
             let alias = dir.join("alias");
             std::os::unix::fs::symlink(&root, &alias).unwrap();
             assert_eq!(select(&alias, Some("agent-a")).as_deref(), Some("ours"));
+            // A recorded path can disappear or be redirected between lookups.
+            std::fs::remove_dir(&sibling).unwrap();
+            assert_eq!(select(&root, None).as_deref(), Some("legacy"));
+            std::os::unix::fs::symlink(&root, &sibling).unwrap();
+            assert_eq!(select(&root, None).as_deref(), Some("other-workspace"));
         }
         std::fs::remove_dir_all(dir).unwrap();
     }
