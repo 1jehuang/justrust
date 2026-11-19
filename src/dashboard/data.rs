@@ -13,7 +13,7 @@ const SUMMARY_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Where a run's wait went, grouped from the end-to-end segments
 /// (`crate::e2e`) into the few buckets a person can act on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Bucket {
     Compile,
     Tests,
@@ -26,6 +26,17 @@ pub(crate) enum Bucket {
     Other,
 }
 
+/// Half-open measured intervals in seconds since the start of this elapsed axis.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Timeline {
+    #[serde(default)]
+    pub end_to_end: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cargo: Option<Box<Timeline>>,
+    pub wall: f64,
+    pub spans: Vec<(f64, f64, Bucket)>,
+}
+
 pub(crate) const BUCKETS: usize = 9;
 
 /// Seconds per [`Bucket`], indexed by `Bucket as usize`. Sums to the wait.
@@ -33,8 +44,15 @@ pub(crate) type Times = [f64; BUCKETS];
 
 /// Parsed timings by run ID. A finished run's summary never changes, so each
 /// is read once. `None` records a summary that could not be read.
-pub(crate) type TimeCache =
-    std::collections::HashMap<String, (Option<Times>, Option<CompileTimes>, Option<ReuseStats>)>;
+pub(crate) type TimeCache = std::collections::HashMap<
+    String,
+    (
+        Option<Times>,
+        Option<CompileTimes>,
+        Option<ReuseStats>,
+        Option<Timeline>,
+    ),
+>;
 
 /// What the compiler's time went to, from the units a run recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +143,8 @@ impl Part {
 /// Only what the compile profile needs from a recorded unit.
 #[derive(serde::Deserialize)]
 struct UnitTime {
+    start: Option<f64>,
+    end: Option<f64>,
     #[serde(default)]
     reuse: Vec<crate::reuse::Row>,
     #[serde(default)]
@@ -147,7 +167,14 @@ struct UnitTime {
 fn compile_times(units: &[u8]) -> Option<CompileTimes> {
     unit_profiles(units).0
 }
+#[cfg(test)]
 fn unit_profiles(units: &[u8]) -> (Option<CompileTimes>, Option<ReuseStats>) {
+    profile(units, |_, _| {})
+}
+fn profile(
+    units: &[u8],
+    mut interval: impl FnMut(f64, f64),
+) -> (Option<CompileTimes>, Option<ReuseStats>) {
     let mut reuse = ReuseStats::default();
     let mut out = [0.0; PARTS];
     let mut any = false;
@@ -155,6 +182,9 @@ fn unit_profiles(units: &[u8]) -> (Option<CompileTimes>, Option<ReuseStats>) {
         let Ok(unit) = serde_json::from_slice::<UnitTime>(row) else {
             continue;
         };
+        if let (Some(start), Some(end)) = (unit.start, unit.end) {
+            interval(start, end);
+        }
         reuse.observe(&unit.reuse);
         if !unit.wall.is_finite() || unit.wall <= 0.0 {
             continue;
@@ -179,6 +209,120 @@ fn unit_profiles(units: &[u8]) -> (Option<CompileTimes>, Option<ReuseStats>) {
         any = true;
     }
     (any.then_some(out), (reuse.ledgers > 0).then_some(reuse))
+}
+
+/// Summary and sidecars travel together from the recorder. Neither their
+/// epoch nor their wall time is the hosted client's clock.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct TimelineInput {
+    start: Option<f64>,
+    wall: f64,
+    tests: BinaryNames,
+    e2e: Option<crate::e2e::E2e>,
+}
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct BinaryNames {
+    binaries: Vec<BinaryName>,
+}
+#[derive(serde::Deserialize)]
+struct BinaryName {
+    name: String,
+}
+
+fn timeline_profiles(
+    summary: &[u8],
+    units: &[u8],
+    local: bool,
+    processes: impl FnOnce() -> Vec<u8>,
+) -> (Option<CompileTimes>, Option<ReuseStats>, Option<Timeline>) {
+    let input = serde_json::from_slice::<TimelineInput>(summary).unwrap_or_default();
+    let e2e = input.e2e.as_ref().filter(|e| {
+        !e.derived
+            && e.wall.is_finite()
+            && e.wall > 0.
+            && e.trace
+                .iter()
+                .any(|(a, b, _)| *a >= 0. && a < b && *b <= e.wall)
+    });
+    let mut timeline = Timeline {
+        wall: e2e.map_or(input.wall, |e| e.wall),
+        spans: Vec::new(),
+        end_to_end: e2e.is_some(),
+        cargo: None,
+    };
+    let mut window = e2e.is_none().then_some((0., input.wall));
+    if let Some(e) = e2e {
+        for (lo, hi, key) in &e.trace {
+            if !(0. <= *lo && lo < hi && *hi <= e.wall) {
+                continue;
+            }
+            if key == "build.window" {
+                if local {
+                    window = Some((*lo, *hi));
+                }
+            } else {
+                timeline.spans.push((*lo, *hi, Bucket::of(key)));
+            }
+        }
+    }
+    let separate = window.is_none();
+    let mut cargo = Timeline {
+        wall: input.wall,
+        spans: Vec::new(),
+        end_to_end: false,
+        cargo: None,
+    };
+    let (offset, limit) = window.unwrap_or((0., input.wall));
+    let target = if separate { &mut cargo } else { &mut timeline };
+    let mut observe = |start: f64, end: f64, bucket| {
+        if let Some(epoch) = input.start {
+            let lo = (start - epoch).max(0.);
+            let hi = (end - epoch).min(input.wall).min(limit - offset);
+            if start.is_finite() && end.is_finite() && lo < hi {
+                target.spans.push((offset + lo, offset + hi, bucket));
+            }
+        }
+    };
+    let (compile, reuse) = profile(units, |s, e| observe(s, e, Bucket::Compile));
+    // Summary binary ranges can enclose gaps between several invocations of
+    // the same binary. Color only the lifetime actually observed for each PID.
+    if !input.tests.binaries.is_empty() {
+        let names: std::collections::HashSet<_> = input
+            .tests
+            .binaries
+            .iter()
+            .map(|b| b.name.as_str())
+            .collect();
+        if let Ok(procs) = serde_json::from_slice::<Vec<crate::record::ProcRecord>>(&processes()) {
+            for p in procs {
+                if p.kind == "target-binary"
+                    && p.cmdline
+                        .split_whitespace()
+                        .next()
+                        .is_some_and(|exe| names.contains(crate::sys::last_component(exe)))
+                {
+                    observe(p.first_seen, p.last_seen, Bucket::Tests);
+                }
+            }
+        }
+    }
+    if separate && cargo.wall.is_finite() && cargo.wall > 0. && !cargo.spans.is_empty() {
+        cargo
+            .spans
+            .sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+        if timeline.spans.is_empty() {
+            timeline = cargo;
+        } else {
+            timeline.cargo = Some(Box::new(cargo));
+        }
+    }
+    timeline
+        .spans
+        .sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+    let measured = timeline.wall.is_finite() && timeline.wall > 0. && !timeline.spans.is_empty();
+    (compile, reuse, measured.then_some(timeline))
 }
 
 impl Bucket {
@@ -299,6 +443,8 @@ pub(crate) struct RunRow {
     /// What the compiler's time went to. Only for runs with units recorded here.
     pub compile: Option<CompileTimes>,
     pub reuse: Option<ReuseStats>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<Timeline>,
 }
 
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
@@ -329,10 +475,11 @@ pub(crate) fn local_snapshot(
     match rows {
         Ok(mut rows) => {
             for row in &mut rows {
-                if let Some((time, compile, reuse)) = cache.get(&row.id) {
+                if let Some((time, compile, reuse, timeline)) = cache.get(&row.id) {
                     row.time = *time;
                     row.compile = *compile;
                     row.reuse = *reuse;
+                    row.timeline.clone_from(timeline);
                 }
             }
             // The index is small. Never hold its rows behind a directory scan
@@ -384,20 +531,23 @@ fn enrich_rows(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path) {
                             continue;
                         }
                         let run = dir.join(&row.id);
-                        row.time = read_summary(&run.join("summary.json"))
-                            .ok()
-                            .and_then(|bytes| times(&bytes));
-                        (row.compile, row.reuse) = read_summary(&run.join("units.jsonl"))
-                            .ok()
-                            .map(|bytes| unit_profiles(&bytes))
-                            .unwrap_or_default();
+                        let summary = read_summary(&run.join("summary.json")).unwrap_or_default();
+                        row.time = times(&summary);
+                        let units = read_summary(&run.join("units.jsonl")).unwrap_or_default();
+                        (row.compile, row.reuse, row.timeline) =
+                            timeline_profiles(&summary, &units, row.place == "local", || {
+                                read_summary(&run.join("processes.json")).unwrap_or_default()
+                            });
                     }
                 });
             }
         });
     }
     for row in rows.iter() {
-        cache.insert(row.id.clone(), (row.time, row.compile, row.reuse));
+        cache.insert(
+            row.id.clone(),
+            (row.time, row.compile, row.reuse, row.timeline.clone()),
+        );
     }
     let ids: std::collections::HashSet<_> = rows.iter().map(|row| row.id.as_str()).collect();
     cache.retain(|id, _| ids.contains(id.as_str()));
@@ -591,6 +741,7 @@ fn index_rows(tail: &str) -> Vec<RunRow> {
             time: None,
             compile: None,
             reuse: None,
+            timeline: None,
         })
         .collect()
 }
@@ -631,6 +782,7 @@ fn hosted_row(value: &Value) -> Option<RunRow> {
         time: None,
         compile: None,
         reuse: None,
+        timeline: None,
     })
 }
 
@@ -1103,6 +1255,55 @@ mod tests {
     }
 
     #[test]
+    fn timeline_aligns_only_in_the_recorders_clock_domain() {
+        let summary = br#"{"start":100,"wall":6,"tests":{"binaries":[{"name":"suite","start":0,"wall":6}]},"e2e":{"wall":12,"segments":[],"trace":[[0,2,"client.setup"],[2,8,"build.window"],[10,12,"client.report"]]}}"#;
+        let units = br#"{"start":99,"end":103}
+{"wall":10}
+{"start":107,"end":108}"#;
+        let procs = br#"[{"pid":1,"comm":"suite","cmdline":"target/debug/deps/suite --exact foo","kind":"target-binary","first_seen":102,"last_seen":104,"cpu_secs":0,"max_rss_mb":0}]"#;
+        let local = timeline_profiles(summary, units, true, || procs.to_vec())
+            .2
+            .unwrap();
+        assert!(local.end_to_end);
+        assert_eq!(local.wall, 12.);
+        assert_eq!(
+            local.spans,
+            [
+                (0., 2., Bucket::Client),
+                (2., 5., Bucket::Compile),
+                (4., 6., Bucket::Tests),
+                (10., 12., Bucket::Client)
+            ]
+        );
+        let hosted = timeline_profiles(summary, units, false, || procs.to_vec())
+            .2
+            .unwrap();
+        assert_eq!(
+            hosted.cargo.unwrap().spans,
+            [(0., 3., Bucket::Compile), (2., 4., Bucket::Tests)]
+        );
+        assert_eq!(
+            hosted.spans,
+            [(0., 2., Bucket::Client), (10., 12., Bucket::Client)]
+        );
+    }
+
+    #[test]
+    fn legacy_timeline_uses_cargo_wall_not_reconstructed_segments() {
+        let summary = br#"{"start":100,"wall":5,"e2e":{"wall":20,"segments":[{"key":"sync.push","secs":15}]}}"#;
+        let t = timeline_profiles(summary, br#"{"start":103,"end":110}"#, false, Vec::new)
+            .2
+            .unwrap();
+        assert!(!t.end_to_end);
+        assert_eq!((t.wall, t.spans), (5., vec![(3., 5., Bucket::Compile)]));
+        assert!(
+            timeline_profiles(summary, br#"{"wall":4}"#, false, Vec::new)
+                .2
+                .is_none()
+        );
+    }
+
+    #[test]
     fn cached_profile_rows_need_no_summary_or_unit_files() {
         let time = Some([1.0; BUCKETS]);
         let compile = Some([2.0; PARTS]);
@@ -1113,8 +1314,8 @@ mod tests {
             ..Default::default()
         }];
         let mut cache = TimeCache::from([
-            ("saved".into(), (time, compile, None)),
-            ("expired".into(), (None, None, None)),
+            ("saved".into(), (time, compile, None, None)),
+            ("expired".into(), (None, None, None, None)),
         ]);
         enrich_rows(
             &mut rows,
@@ -1124,7 +1325,7 @@ mod tests {
         assert_eq!(rows[0].time, time);
         assert_eq!(rows[0].compile, compile);
         assert_eq!(cache.len(), 1);
-        assert_eq!(cache["saved"], (time, compile, None));
+        assert_eq!(cache["saved"], (time, compile, None, None));
     }
 
     #[test]
