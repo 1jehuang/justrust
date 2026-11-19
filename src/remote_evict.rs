@@ -770,8 +770,41 @@ fn collect_with<R: std::ops::Deref<Target = Registry>>(
     if still > 0 {
         let registered: Vec<PathBuf> = roots.keys().cloned().collect();
         let targets: Vec<PathBuf> = registered.iter().map(|r| r.join("target")).collect();
+        let orphan_epoch = (registry.enrollment_version, registry.roots.len());
+        // Discovery, process enumeration and tree sizing grant no deletion
+        // authority. Let active builds register and finish during the scan.
+        drop(registry);
         let dirs = orphans::find(&orphans::bases(home, &registered), &targets);
-        let chosen = orphans::plan(&dirs, still, orphans::ORPHAN_IDLE, probe);
+        let mut chosen = orphans::plan(&dirs, still, orphans::ORPHAN_IDLE, probe);
+        let Some(registry) = acquire() else {
+            return Collection {
+                bytes: freed,
+                failed: true,
+            };
+        };
+        if orphan_epoch != (registry.enrollment_version, registry.roots.len()) {
+            log("evict: enrollment changed during orphan discovery; deferring candidates".into());
+            chosen.clear();
+        } else if !chosen.is_empty() {
+            // Another agent can publish a durable registration without taking
+            // this process's mutex. Exclude targets now covered by a receipt.
+            let Ok((latest, rejected)) = registry.snapshot() else {
+                return Collection {
+                    bytes: freed,
+                    failed: true,
+                };
+            };
+            if !rejected.is_empty() {
+                chosen.clear();
+            } else {
+                chosen.retain(|o| {
+                    !latest.keys().any(|r| {
+                        let t = r.join("target");
+                        o.dir.starts_with(&t) || t.starts_with(&o.dir)
+                    })
+                });
+            }
+        }
         log(format!(
             "evict: orphan build dirs found={} planned={} needed_bytes={still} idle_seconds={}",
             dirs.len(),
@@ -1166,6 +1199,57 @@ mod tests {
         );
         assert!(activity.seen.get());
         assert!(root.join("target/debug/big").exists());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn enrollment_during_orphan_sizing_preserves_the_new_target() {
+        struct Enroll<'a>(&'a Shared, &'a Path, std::cell::Cell<bool>);
+        impl Probe for Enroll<'_> {
+            fn disk(&self, _: &Path) -> Option<(u64, u64)> {
+                Some((GIB, 484 * GIB))
+            }
+            fn now(&self) -> u64 {
+                u64::MAX
+            }
+            fn in_use_by_other(&self, _: &Path) -> bool {
+                false
+            }
+            fn size(&self, p: &Path) -> u64 {
+                assert_eq!(p, self.1.join("target"));
+                self.0
+                    .try_lock()
+                    .expect("orphan sizing must not block admission")
+                    .register(self.1)
+                    .unwrap();
+                self.2.set(true);
+                64 * GIB
+            }
+        }
+        let base = scratch("orphan-race");
+        let newly_registered = base.join(".cache/new-project");
+        let target = newly_registered.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(
+            target.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n# cargo\n",
+        )
+        .unwrap();
+        let registry = Shared::default();
+        let probe = Enroll(&registry, &newly_registered, false.into());
+        assert_eq!(
+            collect_shared(
+                &registry,
+                &base,
+                Mode::On,
+                DEFAULT_GRACE,
+                &probe,
+                &mut |_| {}
+            ),
+            0
+        );
+        assert!(probe.2.get() && target.join("CACHEDIR.TAG").is_file());
         std::fs::remove_dir_all(base).unwrap();
     }
 
