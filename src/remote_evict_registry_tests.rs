@@ -131,6 +131,22 @@ fn restart_retains_unclean_lease_until_successful_idle_completion() {
 }
 
 #[test]
+fn delayed_idle_finish_refreshes_grace_before_clearing_marker() {
+    let f = Fixture::new();
+    let root = f.root("delayed");
+    let store = f.store();
+    store.register(&root).unwrap();
+    store.begin(&root).unwrap();
+    age(&store, &root);
+    assert_eq!(store.state(&root).unwrap().leases, 1);
+    let before = ev::System.now();
+    store.finish(&root, 100).unwrap();
+    let state = f.store().state(&root).unwrap();
+    assert_eq!(state.leases, 0);
+    assert!(state.last_build_end >= before);
+}
+
+#[test]
 fn concurrent_agents_cannot_clear_each_others_lease() {
     if ev::lock_tests::isolated_lock_test(
         "remote_evict::durable::tests::concurrent_agents_cannot_clear_each_others_lease",

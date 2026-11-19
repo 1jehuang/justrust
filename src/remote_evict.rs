@@ -374,7 +374,7 @@ impl Registry {
             Err(e) => return Err(e),
         };
         if let Some(store) = &self.store {
-            store.finish(root)?;
+            store.finish(root, self.roots.get(root).map_or(0, |s| s.last_build_end))?;
         }
         Ok(())
     }

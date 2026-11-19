@@ -210,13 +210,25 @@ impl Store {
         // Persistent uncertainty marker. A crash or failed end update cannot
         // turn an old start timestamp into permission to delete a recent build.
         file.set_permissions(std::fs::Permissions::from_mode(0o700))?;
-        file.sync_all()?;
-        self.activity(root)
+        // The worker cannot start until begin returns. Commit both inode
+        // updates together before admitting it, on the authenticated handle.
+        file.set_modified(SystemTime::now())?;
+        file.sync_all()
     }
 
-    pub fn finish(&self, root: &Path) -> io::Result<()> {
-        self.activity(root)?;
-        let (_, file, _) = self.read_root(root)?;
+    pub fn finish(&self, root: &Path, synced_end: u64) -> io::Result<()> {
+        let (_, file, stamp) = self.read_root(root)?;
+        let now = SystemTime::now();
+        // end() already fsynced the activity time before dropping the build
+        // lock. GC measures seconds. Reuse that durable grace period only
+        // when this receipt, our completed end, and the clock still agree.
+        if synced_end == 0
+            || synced_end != stamp
+            || now.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs()) != Some(stamp)
+        {
+            file.set_modified(now)?;
+            file.sync_all()?;
+        }
         file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         file.sync_all()
     }
