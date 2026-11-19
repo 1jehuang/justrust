@@ -778,52 +778,65 @@ fn push_loop(d: &Daemon, rx: Receiver<PathBuf>) {
                 .collect();
             (roots, d.sync.foreground_epoch(), st.link.clone().unwrap())
         };
-        for r in roots {
-            // Only discovery is speculative. No mirror operation runs unlocked.
-            let total = Instant::now();
-            let scan = remote_sync::scan(&r);
-            let scanned = total.elapsed();
-            // One complete root remains atomic. Yield the mirror lock between
-            // roots so a queued foreground build need not wait for the batch.
-            let Ok(mut st) = d.sync.background_lock() else {
-                return;
-            };
-            if d.draining.load(Ordering::SeqCst) || !st.link.as_ref().is_some_and(|l| l.alive()) {
-                break;
-            }
-            // A foreground sync may have repaired, replaced or removed this
-            // root while the watcher yielded. Recheck under the same lock.
-            if !st.roots.get(&r).is_some_and(|root| !root.needs_full_sync) {
-                continue;
-            }
-            if !r.is_dir() {
-                // Deleted (a removed worktree): forget it instead of
-                // dropping the link over a failed rsync.
-                st.receipt = None;
-                st.roots.remove(&r);
-                log(&format!("forgot {} (deleted)", r.display()));
-                continue;
-            }
-            let result = if epoch == d.sync.foreground_epoch()
-                && st
-                    .link
-                    .as_ref()
-                    .is_some_and(|link| Arc::ptr_eq(link, &observed_link))
-            {
-                scan.and_then(|scan| push_scanned(d, &mut st, &r, scan, total, scanned))
-            } else {
-                // Never compare an older scan to a newer foreground manifest.
-                epoch = d.sync.foreground_epoch();
-                observed_link = st.link.clone().unwrap();
-                push_root(d, &mut st, &r)
-            };
-            if let Err(e) = result {
-                log(&format!("push {}: {e:#}", r.display()));
-                st.source_sync_failed(&r);
-                if st.link.as_ref().is_some_and(|l| !l.alive()) {
-                    drop_link(d, &mut st);
-                    break;
+        'roots: for r in roots {
+            // One unlocked retry avoids holding up the next build on the first
+            // conflict. A second conflict takes the existing locked fallback:
+            // repeated foreground changes cannot restart this root forever.
+            let mut retried = false;
+            loop {
+                // Only discovery is speculative. No mirror operation runs unlocked.
+                let total = Instant::now();
+                let scan = remote_sync::scan(&r);
+                let scanned = total.elapsed();
+                // One complete root remains atomic. Yield the mirror lock between
+                // roots so a queued foreground build need not wait for the batch.
+                let Ok(mut st) = d.sync.background_lock() else {
+                    return;
+                };
+                if d.draining.load(Ordering::SeqCst) || !st.link.as_ref().is_some_and(|l| l.alive())
+                {
+                    break 'roots;
                 }
+                // A foreground sync may have repaired, replaced or removed this
+                // root while the watcher yielded. Recheck under the same lock.
+                if !st.roots.get(&r).is_some_and(|root| !root.needs_full_sync) {
+                    continue 'roots;
+                }
+                if !r.is_dir() {
+                    // Deleted (a removed worktree): forget it instead of
+                    // dropping the link over a failed rsync.
+                    st.receipt = None;
+                    st.roots.remove(&r);
+                    log(&format!("forgot {} (deleted)", r.display()));
+                    continue 'roots;
+                }
+                let result = if epoch == d.sync.foreground_epoch()
+                    && st
+                        .link
+                        .as_ref()
+                        .is_some_and(|link| Arc::ptr_eq(link, &observed_link))
+                {
+                    scan.and_then(|scan| push_scanned(d, &mut st, &r, scan, total, scanned))
+                } else {
+                    // Never compare an older scan to a newer foreground manifest.
+                    epoch = d.sync.foreground_epoch();
+                    observed_link = st.link.clone().unwrap();
+                    if !retried {
+                        retried = true;
+                        drop(st);
+                        continue;
+                    }
+                    push_root(d, &mut st, &r)
+                };
+                if let Err(e) = result {
+                    log(&format!("push {}: {e:#}", r.display()));
+                    st.source_sync_failed(&r);
+                    if st.link.as_ref().is_some_and(|l| !l.alive()) {
+                        drop_link(d, &mut st);
+                        break 'roots;
+                    }
+                }
+                break;
             }
         }
     }
