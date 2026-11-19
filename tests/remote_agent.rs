@@ -192,6 +192,34 @@ impl Agent {
         self.dir.join("root").join(p.trim_start_matches('/'))
     }
 
+    // Read readiness from the same stream as admission failures. Polling
+    // files or process names hid terminal errors until the startup timeout.
+    fn wait_ready(&self, id: u64, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        let mut stdout = Vec::new();
+        loop {
+            let (msg, data) = self
+                .rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("waiting for fixture-ready");
+            match msg {
+                Msg::Out { id: got, stream: 1 } if got == id => {
+                    stdout.extend(data);
+                    if stdout
+                        .windows(b"fixture-ready\n".len())
+                        .any(|w| w == b"fixture-ready\n")
+                    {
+                        return;
+                    }
+                }
+                Msg::Out { id: got, stream: 2 } if got == id => {
+                    eprint!("{}", String::from_utf8_lossy(&data))
+                }
+                other => panic!("fixture failed before readiness: {other:?}"),
+            }
+        }
+    }
+
     /// Collect a run's output until `Exit`: (stdout, code).
     fn wait_run(&self, id: u64) -> (String, i32) {
         let mut out = String::new();
@@ -235,17 +263,7 @@ fn read(p: &Path) -> String {
 #[test]
 fn completed_run_reports_exit_while_another_roots_registration_is_blocked() {
     let mut a = Agent::start("exit-during-enrollment");
-    for (path, contents) in [
-        (
-            "/p/Cargo.toml",
-            "[package]\nname='waiter'\nversion='0.1.0'\nedition='2024'\n",
-        ),
-        (
-            "/p/src/main.rs",
-            "fn main(){ std::fs::write(\"started\",b\"\").unwrap(); while !std::path::Path::new(\"go\").exists() {std::thread::sleep(std::time::Duration::from_millis(5));} }",
-        ),
-        ("/other/source", ""),
-    ] {
+    for (path, contents) in [("/p/source", ""), ("/other/source", "")] {
         a.send(
             Msg::Write {
                 path: path.into(),
@@ -279,22 +297,19 @@ fn completed_run_reports_exit_while_another_roots_registration_is_blocked() {
         Msg::Run {
             id: 41,
             cwd: "/p".into(),
-            args: vec!["run".into(), "--offline".into()],
-            env: vec![
-                ("JUSTRUST_TOOLCHAIN".into(), "system".into()),
-                ("JUSTRUST_BUILDD".into(), "0".into()),
+            args: vec![
+                "cargo".into(),
+                "-c".into(),
+                "echo fixture-ready; while [ ! -e go ]; do sleep 0.01; done".into(),
             ],
+            env: fake_cargo_env("sh"),
             roots: vec![],
             start: false,
             run_id: "exit-during-enrollment".into(),
         },
         &[],
     );
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !a.at("/p/started").exists() {
-        assert!(Instant::now() < deadline, "fixture never started");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    a.wait_ready(41, Duration::from_secs(30));
     a.send(
         Msg::Synced {
             path: "/other".into(),
@@ -1449,56 +1464,73 @@ fn immediate_pipeline_cancel_is_not_lost_before_pid_registration() {
     assert!(matches!(a.recv().0, Msg::Pong { active: 0, .. }));
 }
 
-#[test]
-fn closing_the_connection_stops_runs() {
-    let mut a = Agent::start("close");
+// The shell holds an exclusive lock through exec. Unlike a host-wide name
+// search, this tracks this fixture's descendant even during concurrent runs.
+fn start_locked_sleeper(a: &mut Agent) -> std::fs::File {
     a.send(
         Msg::Mkdir {
             path: "/proj".into(),
         },
         &[],
     );
-    a.send(sleep_run(1, "30.202"), &[]);
-    let t = std::time::Instant::now();
-    while !running("sleep 30.202") && t.elapsed() < Duration::from_secs(10) {
-        std::thread::sleep(Duration::from_millis(20));
+    a.send(
+        Msg::Run {
+            id: 1,
+            cwd: "/proj".into(),
+            args: vec![
+                "cargo".into(),
+                "-c".into(),
+                "exec 9>child.lock; flock -x 9 || exit 1; echo fixture-ready; exec sleep 30".into(),
+            ],
+            env: fake_cargo_env("sh"),
+            roots: vec![],
+            start: false,
+            run_id: String::new(),
+        },
+        &[],
+    );
+    a.wait_ready(1, Duration::from_secs(10));
+    let lock = std::fs::File::open(a.at("/proj/child.lock")).unwrap();
+    assert!(matches!(
+        lock.try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    ));
+    lock
+}
+
+fn assert_sleeper_stopped(lock: &std::fs::File) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return,
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            other => panic!("waiting for child to release lock: {other:?}"),
+        }
     }
-    assert!(running("sleep 30.202"));
+}
+
+#[test]
+fn closing_the_connection_stops_runs() {
+    let mut a = Agent::start("close");
+    let lock = start_locked_sleeper(&mut a);
     a.w.take(); // EOF on the agent's stdin
     let st = a.child.wait().unwrap();
     assert!(st.success(), "{st:?}");
-    let t = std::time::Instant::now();
-    while running("sleep 30.202") && t.elapsed() < Duration::from_secs(5) {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(!running("sleep 30.202"));
+    assert_sleeper_stopped(&lock);
 }
 
 #[test]
 fn killing_the_agent_stops_runs() {
     let mut a = Agent::start("kill");
-    a.send(
-        Msg::Mkdir {
-            path: "/proj".into(),
-        },
-        &[],
-    );
-    a.send(sleep_run(1, "30.303"), &[]);
-    let t = std::time::Instant::now();
-    while !running("sleep 30.303") && t.elapsed() < Duration::from_secs(10) {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(running("sleep 30.303"));
+    let lock = start_locked_sleeper(&mut a);
     // SAFETY: signalling our own child.
     unsafe {
         libc::kill(a.child.id() as i32, libc::SIGTERM);
     }
     let _ = a.child.wait();
-    let t = std::time::Instant::now();
-    while running("sleep 30.303") && t.elapsed() < Duration::from_secs(5) {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(!running("sleep 30.303"));
+    assert_sleeper_stopped(&lock);
 }
 
 #[test]
