@@ -259,12 +259,53 @@ fn touch_used(dir: &Path) {
         .and_then(|f| f.set_modified(SystemTime::now()));
 }
 
+const AUTO_HISTORY_LINES: usize = 400;
+
+/// Unlike runs' filtered entry scanner, this budget counts *physical* lines,
+/// even empty/malformed ones. Validate the entire selected window before using
+/// it: corrupt UTF-8 there suppresses autostart, but corrupt older history is
+/// intentionally irrelevant (validating it would require unbounded I/O).
+fn auto_history_tail(path: &Path) -> Result<String> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let len = file.seek(SeekFrom::End(0))?;
+    let mut end = len;
+    let mut remaining = AUTO_HISTORY_LINES;
+    let mut blocks = Vec::new();
+    while end > 0 {
+        let start = end.saturating_sub(64 * 1024);
+        let mut block = vec![0; (end - start) as usize];
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut block)?;
+        // A final LF terminates a line, it does not introduce an empty one.
+        let scan = block.len() - usize::from(end == len && block.last() == Some(&b'\n'));
+        let mut found = false;
+        for i in (0..scan).rev() {
+            if block[i] == b'\n' {
+                remaining -= 1;
+                if remaining == 0 {
+                    block.drain(..=i);
+                    found = true;
+                    break;
+                }
+            }
+        }
+        blocks.push(block);
+        if found {
+            break;
+        }
+        end = start;
+    }
+    blocks.reverse();
+    Ok(String::from_utf8(blocks.concat())?)
+}
+
 /// Recent agent builds per workspace root, from the tail of the run index.
 fn enough_recent_agent_builds(index: &str, root: &Path, now: f64) -> bool {
     index
         .lines()
         .rev()
-        .take(400)
+        .take(AUTO_HISTORY_LINES)
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .take_while(|e| {
             e["start"]
@@ -301,7 +342,7 @@ pub fn maybe_autostart(cwd: &Path, sub: &str) {
     if crate::procfs::meminfo().is_none_or(|m| m.available_mb < AUTO_MIN_AVAILABLE_MB) {
         return;
     }
-    let Ok(index) = crate::paths::index_file().and_then(|p| Ok(std::fs::read_to_string(p)?)) else {
+    let Ok(index) = crate::paths::index_file().and_then(|p| auto_history_tail(&p)) else {
         return;
     };
     if enough_recent_agent_builds(&index, &root, crate::paths::now()) {
@@ -2091,6 +2132,27 @@ mod tests {
             vec![PathBuf::from("/w/b/z.rs"), PathBuf::from("/w/a/x.rs")]
         );
         assert_eq!(mentioning(&texts, &names, &[], 1).len(), 1);
+    }
+
+    #[test]
+    fn history_tail_counts_physical_lines_and_validates_only_selected_bytes() {
+        let path = std::env::temp_dir().join(format!("jr-auto-tail-{}", std::process::id()));
+        assert!(auto_history_tail(&path.join("missing")).is_err());
+        for ending in ["", "\n"] {
+            let window = format!("{}\r\n{}last{ending}", "é".repeat(70000), "\n".repeat(398));
+            let mut bytes = b"\xff\n".to_vec();
+            bytes.extend_from_slice(window.as_bytes());
+            std::fs::write(&path, &bytes).unwrap();
+            assert_eq!(auto_history_tail(&path).unwrap(), window);
+            bytes[2] = 0xff;
+            std::fs::write(&path, bytes).unwrap();
+            assert!(auto_history_tail(&path).is_err());
+        }
+        for text in ["", "\n", "one", "one\r\n\n"] {
+            std::fs::write(&path, text).unwrap();
+            assert_eq!(auto_history_tail(&path).unwrap(), text);
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
