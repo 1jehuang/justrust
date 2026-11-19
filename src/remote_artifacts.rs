@@ -1014,6 +1014,7 @@ enum Validation<'a> {
     Arm64,
 }
 
+#[cfg(test)]
 fn apply(
     dir: &Path,
     name: &str,
@@ -1021,6 +1022,26 @@ fn apply(
     size: u64,
     from: Option<&Path>,
     data: &[u8],
+    validation: Validation<'_>,
+) -> Result<PathBuf> {
+    apply_frame(
+        dir,
+        name,
+        mode,
+        size,
+        from,
+        data.take(data.len() as u64),
+        validation,
+    )
+}
+
+fn apply_frame(
+    dir: &Path,
+    name: &str,
+    mode: u32,
+    size: u64,
+    from: Option<&Path>,
+    mut frame: std::io::Take<impl Read>,
     validation: Validation<'_>,
 ) -> Result<PathBuf> {
     let patch = from.is_some();
@@ -1036,27 +1057,33 @@ fn apply(
     }
     let file = dst.file_name().context("no file name")?.to_string_lossy();
     let tmp = parent.join(format!(".{file}.jrtmp"));
-    let zst = parent.join(format!(".{file}.zst"));
-    std::fs::write(&zst, data)?;
     let mut c = Command::new("zstd");
     c.args(["-q", "-d", "-f", "--long=31"]);
     if let Some(from) = from {
         c.arg(format!("--patch-from={}", from.display()));
     }
-    let st = c
-        .arg(&zst)
-        .arg("-o")
-        .arg(&tmp)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    let _ = std::fs::remove_file(&zst);
     let res = (|| {
-        if !st.context("zstd")?.success() {
+        let mut child = c
+            .arg("-")
+            .arg("-o")
+            .arg(&tmp)
+            .stdin(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("zstd")?;
+        // Never consume bytes from the following frame. Drop stdin before waiting,
+        // including on a short read, and reap the decoder before touching its output.
+        let copied = std::io::copy(&mut frame, &mut child.stdin.take().expect("piped stdin"));
+        let status = child.wait().context("zstd")?;
+        if !status.success() {
             bail!(
                 "could not decode {name}{}",
                 if patch { " (delta)" } else { "" }
             );
+        }
+        copied.context("copy compressed artifact frame")?;
+        if frame.limit() != 0 {
+            bail!("truncated compressed artifact frame for {name}");
         }
         let got = std::fs::metadata(&tmp)?.len();
         if got != size {
@@ -1362,8 +1389,6 @@ fn fetch_inner(
                     {
                         bail!("unselected test artifact {name:?}");
                     }
-                    let mut data = vec![0; len as usize];
-                    r.read_exact(&mut data)?;
                     let validation = if let Some(target) = windows {
                         if test_run.is_some() {
                             Validation::WindowsTest(target)
@@ -1391,7 +1416,15 @@ fn fetch_inner(
                         (None, true) => Some(dir.join(&name)),
                         (None, false) => None,
                     };
-                    let dst = apply(&dir, &name, mode, size, from.as_deref(), &data, validation)?;
+                    let dst = apply_frame(
+                        &dir,
+                        &name,
+                        mode,
+                        size,
+                        from.as_deref(),
+                        (&mut *r).take(len),
+                        validation,
+                    )?;
                     streamed.insert(name.clone());
                     let m = std::fs::metadata(&dst)?;
                     records.insert(

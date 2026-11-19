@@ -2,6 +2,52 @@
 use super::*;
 
 #[test]
+fn streamed_frame_stops_at_next_header_and_rejects_short_payload_before_install() {
+    if !available() {
+        return;
+    }
+    let fixture = Fixture::new("stream", b"new output");
+    let encoded = Command::new("zstd")
+        .args(["-q", "-c"])
+        .arg(&fixture.saved)
+        .output()
+        .unwrap();
+    assert!(encoded.status.success());
+    let len = encoded.stdout.len() as u64;
+    let mut wire = encoded.stdout.clone();
+    wire.extend_from_slice(b"next header\n");
+    let mut cursor = wire.as_slice();
+    let dest = apply_frame(
+        &fixture.root,
+        "received",
+        0o644,
+        10,
+        None,
+        (&mut cursor).take(len),
+        Validation::NativeBuild,
+    )
+    .unwrap();
+    assert_eq!(cursor, b"next header\n");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new output");
+    std::fs::write(&dest, b"retain this").unwrap();
+    let short = encoded.stdout.as_slice().take(len + 1);
+    assert!(
+        apply_frame(
+            &fixture.root,
+            "received",
+            0o644,
+            10,
+            None,
+            short,
+            Validation::NativeBuild
+        )
+        .is_err()
+    );
+    assert_eq!(std::fs::read(&dest).unwrap(), b"retain this");
+    assert!(!fixture.root.join(".received.jrtmp").exists());
+}
+
+#[test]
 fn exclusive_binary_selection_is_conservative() {
     let args = |values: &[&str]| values.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     assert_eq!(
