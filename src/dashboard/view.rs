@@ -474,9 +474,12 @@ fn version_lines(v: &Versions, width: usize) -> Vec<Line<'static>> {
     lines.push(detail("Service", service, width));
 
     let live = v.live.as_ref();
-    let mut compiler = match live.and_then(|l| l.toolchain.as_deref()) {
-        Some(toolchain) => vec![span(clean(toolchain), VALUE)],
-        None => vec![span("not reported", LABEL)],
+    let mut compiler = match live.and_then(|l| l.toolchain_version.as_deref()) {
+        Some(version) => vec![span(
+            format!("v{}", clean(version.trim_start_matches('v'))),
+            VALUE,
+        )],
+        None => vec![span("version not reported", LABEL)],
     };
     if let Some(protocol) = live.and_then(|l| l.protocol) {
         compiler.push(match v.drives_toolchain() {
@@ -495,10 +498,7 @@ fn version_lines(v: &Versions, width: usize) -> Vec<Line<'static>> {
         v.machine("toolchain"),
     ) && wanted != has
     {
-        compiler.push(span(
-            format!("  ▲ build machine still has {}", clean(has)),
-            WARN,
-        ));
+        compiler.push(span("  ▲ machine toolchain differs", WARN));
     }
     lines.push(detail("Compiler", compiler, width));
     if let Some(rustc) = v.machine("rustc") {
@@ -1524,6 +1524,7 @@ mod tests {
                     0,
                 )
                 .map(|at| at.to_rfc3339()),
+                toolchain_version: Some("0.1.5".into()),
                 toolchain: Some("jr-ac20de5e7921".into()),
                 protocol: Some(1),
                 published: true,
@@ -1570,10 +1571,7 @@ mod tests {
             shown.contains("Service  build.jcode.sh  deployed 3h ago  f0daab20"),
             "{shown}"
         );
-        assert!(
-            shown.contains("Compiler jr-ac20de5e7921  protocol 1"),
-            "{shown}"
-        );
+        assert!(shown.contains("Compiler v0.1.5  protocol 1"), "{shown}");
         assert!(shown.contains("Rustc    rustc 1.99.1"), "{shown}");
         assert!(shown.contains("Machine  3 components reported"), "{shown}");
         assert!(shown.contains("v  full component inventory"), "{shown}");
@@ -1589,10 +1587,7 @@ mod tests {
             shown.contains("source build  ▲ 0.1.0-alpha.26 available: justrust update"),
             "{shown}"
         );
-        assert!(
-            shown.contains("▲ build machine still has jr-000000000000"),
-            "{shown}"
-        );
+        assert!(shown.contains("▲ machine toolchain differs"), "{shown}");
         assert_eq!(status(&behind), "▲ update available");
 
         // A toolchain this client cannot drive outranks everything else.
@@ -1618,7 +1613,7 @@ mod tests {
         unknown.machine_note = Some("no session open to the build machine".into());
         let shown = text(version_lines(&unknown, 120));
         assert!(shown.contains("▲ Could not resolve host"), "{shown}");
-        assert!(shown.contains("Compiler not reported"), "{shown}");
+        assert!(shown.contains("Compiler version not reported"), "{shown}");
         assert!(shown.contains("no session open"), "{shown}");
         assert_eq!(status(&unknown), "● unreachable");
         // Rows are clipped, never wrapped.
@@ -1642,7 +1637,7 @@ mod tests {
             row.contains("Justrust Personal Dashboard") && row.contains("up to date"),
             "{wide}"
         );
-        assert!(wide.contains("jr-ac20de5e7921"), "{wide}");
+        assert!(wide.contains("Compiler v0.1.5"), "{wide}");
         assert!(wide.contains("v versions"), "{wide}");
         let narrow = screen(&state, 90, 32);
         let rows: Vec<&str> = narrow.lines().collect();
@@ -2161,7 +2156,7 @@ mod tests {
         assert!(text.contains("cached-account"), "{text}");
         assert!(text.contains("cached · refreshing"), "{text}");
         assert!(text.contains("cached, refreshing"), "{text}");
-        assert!(text.contains("jr-ac20de5e7921"), "{text}");
+        assert!(text.contains("Compiler v0.1.5"), "{text}");
         state.snapshot.hosted_error = Some("offline".into());
         state.versions.error = Some("offline".into());
         assert!(screen(&state, 180, 55).contains("cached · offline"));

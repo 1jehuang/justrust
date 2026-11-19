@@ -883,6 +883,7 @@ pub(crate) struct Live {
     pub toolchain_dist: Option<bool>,
     /// The compiler hosted builds use when a project pins none.
     pub toolchain: Option<String>,
+    pub toolchain_version: Option<String>,
     pub protocol: Option<u32>,
     pub published: bool,
 }
@@ -902,6 +903,7 @@ pub(crate) fn live(text: &str) -> Option<Live> {
         pool_bundle: text(&v["pool_bundle"]),
         toolchain_dist: v["toolchain_dist"].as_bool(),
         toolchain: text(&v["toolchain"]["toolchain"]),
+        toolchain_version: text(&v["toolchain"]["version"]),
         protocol: v["toolchain"]["protocol"]
             .as_u64()
             .and_then(|p| p.try_into().ok()),

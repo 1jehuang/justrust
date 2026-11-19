@@ -80,6 +80,8 @@ pub struct Probe {
     /// hosted toolchain and its parts, the linkers, the C toolchain, the OS.
     /// Read from the machine itself, never assumed from this client.
     #[serde(default)]
+    pub agent_binary_changed_at: Option<u64>,
+    #[serde(default)]
     pub versions: Vec<Version>,
 }
 
@@ -781,7 +783,11 @@ fi
 w=$(ls -d "$HOME"/.justrust/toolchains/linkers/wild-*/wild 2>/dev/null | tail -1)
 [ -n "$w" ] && v wild "$("$w" --version 2>/dev/null | head -1)"
 a=$(ls -t "$HOME"/.justrust/remote/session-executables/*/justrust 2>/dev/null | head -1)
-[ -n "$a" ] && v agent "$("$a" --version 2>/dev/null | head -1)"
+if [ -n "$a" ]; then
+  v agent "$("$a" --version 2>/dev/null | head -1)"
+  case $(uname -s) in Darwin) mt=$(stat -f %m "$a");; *) mt=$(stat -Lc %Y "$a");; esac
+  printf 'agent-mtime\t%s\n' "$mt"
+fi
 for t in cc clang mold ld.lld ld; do
   command -v $t >/dev/null 2>&1 && v $t "$($t --version 2>/dev/null | head -1)"
 done
@@ -882,6 +888,10 @@ fn fill_probe(p: &mut Probe, res: Result<std::process::Output>) {
             p.region = some(get(10));
             p.spot = get(11) == "spot";
             p.platform = some(get(12));
+            p.agent_binary_changed_at = l
+                .iter()
+                .skip(13)
+                .find_map(|line| line.strip_prefix("agent-mtime\t")?.parse().ok());
             p.versions = l.iter().skip(13).filter_map(|l| version_line(l)).collect();
         }
         Ok(o) => p.error = Some(first_line(&String::from_utf8_lossy(&o.stderr))),
