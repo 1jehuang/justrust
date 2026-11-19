@@ -253,22 +253,41 @@ fn resolve_id(id: Option<&str>) -> Result<String> {
             ))
         }
         Some(prefix) => {
-            let index = load_index();
-            let m: Vec<&IndexEntry> = index.iter().filter(|r| r.id.starts_with(prefix)).collect();
-            match m.len() {
-                0 => {
-                    // Runs that crashed before writing an index line still have a directory.
-                    if paths::runs_dir()?.join(prefix).is_dir() {
-                        Ok(prefix.to_owned())
-                    } else {
-                        bail!("no run matching {prefix}")
-                    }
-                }
-                1 => Ok(m[0].id.clone()),
-                _ => Ok(m.last().unwrap().id.clone()),
+            if let Some(id) = paths::index_file()
+                .ok()
+                .and_then(|p| std::fs::File::open(p).ok())
+                .and_then(|mut f| explicit_index_id(&mut f, prefix).ok().flatten())
+            {
+                return Ok(id);
+            }
+            // A crashed run can have a directory but no index entry.
+            if paths::runs_dir()?.join(prefix).is_dir() {
+                Ok(prefix.to_owned())
+            } else {
+                bail!("no run matching {prefix}")
             }
         }
     }
+}
+
+fn explicit_index_id(
+    reader: &mut (impl std::io::Read + std::io::Seek),
+    prefix: &str,
+) -> std::io::Result<Option<String>> {
+    let needle = memchr::memmem::Finder::new(prefix.as_bytes());
+    Ok(read_recent_records(reader, 1, |line| {
+        // With no escapes a decoded ID prefix must occur literally in the
+        // row, regardless of field order. Hits and escaped rows require full
+        // typed validation, not just matching bytes in an unrelated field.
+        if needle.find(line).is_none() && memchr::memchr(b'\\', line).is_none() {
+            return Ok(None);
+        }
+        Ok(serde_json::from_slice::<IndexEntry>(line)
+            .ok()
+            .filter(|r| r.id.starts_with(prefix))
+            .map(|r| r.id))
+    })?
+    .pop())
 }
 
 fn selection_workspace(cwd: &std::path::Path) -> std::path::PathBuf {
@@ -979,6 +998,90 @@ mod tail_tests {
             ..Default::default()
         })
         .unwrap()
+    }
+
+    #[test]
+    fn explicit_prefix_matches_last_valid_append() {
+        let mut rows = vec![
+            line("x"),
+            line("exact"),
+            line("exact-later"),
+            line("界🦀"),
+            line("escaped\"quote"),
+            line("uni").replace("\"uni\"", r#""\u0075ni""#),
+            format!(" {}", line("spaced")),
+        ];
+        rows.push(line("exact-invalid").replace("\"exit\":0", "\"exit\":false"));
+        rows.push(format!("{}{}", " ".repeat(150_000), line("long")));
+        rows.push(r#"{"id":"exact-torn""#.into());
+        let text = rows.join("\r\n");
+        for prefix in [
+            "",
+            "exact",
+            "exact-later",
+            "界",
+            "escaped\"",
+            "uni",
+            "spaced",
+            "missing",
+            "long",
+            "x",
+        ] {
+            let expected = text
+                .lines()
+                .rev()
+                .filter_map(|l| serde_json::from_str::<IndexEntry>(l).ok())
+                .find(|r| r.id.starts_with(prefix))
+                .map(|r| r.id);
+            assert_eq!(
+                explicit_index_id(&mut std::io::Cursor::new(text.as_bytes()), prefix).unwrap(),
+                expected,
+                "{prefix:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "read-only explicit ID resolution timing on retained history"]
+    fn explicit_index_id_history_diagnostic() {
+        let path = std::env::var_os("JUSTRUST_HISTORY_BENCH_INDEX")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| paths::index_file().unwrap());
+        let full = || {
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .lines()
+                .filter_map(|l| serde_json::from_str::<IndexEntry>(l).ok())
+                .collect::<Vec<_>>()
+        };
+        let ids: Vec<_> = full().into_iter().map(|e| e.id).collect();
+        for (label, prefix) in [
+            ("newest", ids.last().unwrap().as_str()),
+            ("middle", &ids[ids.len() / 2]),
+            ("oldest", &ids[0]),
+            ("ambiguous", ""),
+            ("absent", "nonexistent-run-id"),
+        ] {
+            let mut before = Vec::new();
+            let mut after = Vec::new();
+            for _ in 0..5 {
+                let start = std::time::Instant::now();
+                let expected = full()
+                    .into_iter()
+                    .filter(|r| r.id.starts_with(prefix))
+                    .map(|r| r.id)
+                    .next_back();
+                before.push(start.elapsed().as_micros());
+                let start = std::time::Instant::now();
+                let actual =
+                    explicit_index_id(&mut std::fs::File::open(&path).unwrap(), prefix).unwrap();
+                after.push(start.elapsed().as_micros());
+                assert_eq!(actual, expected);
+            }
+            before.sort_unstable();
+            after.sort_unstable();
+            println!("explicit {label}: full={}us tail={}us", before[2], after[2]);
+        }
     }
 
     #[test]
