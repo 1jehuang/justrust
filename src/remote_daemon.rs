@@ -373,6 +373,8 @@ impl Link {
 }
 
 struct Root {
+    /// True exactly when the committed manifest contains an UNKNOWN stamp.
+    pending_repair: bool,
     manifest: Manifest,
     /// Derived only from manifest paths. Watches are still retried every flush.
     watch_dirs: Option<std::collections::BTreeSet<PathBuf>>,
@@ -421,7 +423,7 @@ impl Sync {
     fn repair_roots(&self) -> Vec<PathBuf> {
         self.roots
             .iter()
-            .filter(|(_, r)| r.manifest.values().any(|stamp| *stamp == UNKNOWN))
+            .filter(|(_, r)| r.pending_repair)
             .map(|(root, _)| root.clone())
             .collect()
     }
@@ -1300,9 +1302,7 @@ fn save_mirrors(d: &Daemon) {
     let clean: Vec<(&Path, &Manifest, &[PathBuf])> = st
         .roots
         .iter()
-        .filter(|(r, root)| {
-            !root.needs_full_sync && r.is_dir() && !root.manifest.values().any(|s| *s == UNKNOWN)
-        })
+        .filter(|(r, root)| !root.needs_full_sync && r.is_dir() && !root.pending_repair)
         .map(|(r, root)| (r.as_path(), &root.manifest, root.oversized.as_slice()))
         .collect();
     let t = Instant::now();
@@ -1325,6 +1325,7 @@ fn mirror_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<us
                 st.roots.insert(
                     root.to_path_buf(),
                     Root {
+                        pending_repair: manifest.values().any(|s| *s == UNKNOWN),
                         manifest,
                         watch_dirs: None,
                         oversized,
@@ -1419,6 +1420,7 @@ fn reverify(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Option<Resul
     // Sent after the checkpoint: the old connection may or may not have
     // applied them. Absent locally means delete, as for a failed delete.
     let resend = r.mark.dirty.len();
+    r.pending_repair |= !r.mark.dirty.is_empty();
     for path in &r.mark.dirty {
         r.manifest.insert(path.clone(), UNKNOWN);
     }
@@ -1556,6 +1558,7 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
     st.roots.insert(
         root.to_path_buf(),
         Root {
+            pending_repair: false,
             manifest: scan.files,
             watch_dirs: Some(watch_dirs),
             oversized: scan.oversized,
@@ -1616,6 +1619,7 @@ fn push_scanned(
 ) -> Result<usize> {
     let diff_started = Instant::now();
     let mut new = scan.files;
+    let mut pending_repair = false;
     let diff = {
         let r = st.roots.get(root).context("unknown root")?;
         remote_sync::diff(&r.manifest, &new)
@@ -1692,6 +1696,7 @@ fn push_scanned(
                     // Gone, grown, or rewritten since the scan: try again
                     // next time.
                     _ => {
+                        pending_repair = true;
                         new.insert(rel.clone(), UNKNOWN);
                     }
                 }
@@ -1728,6 +1733,7 @@ fn push_scanned(
         ));
     }
     if let Some(r) = st.roots.get_mut(root) {
+        r.pending_repair = pending_repair;
         r.manifest = new;
         r.oversized = scan.oversized;
     }
@@ -1771,7 +1777,7 @@ fn repair_sources(d: &Daemon, st: &mut Sync, link: &Link) -> Result<usize> {
         } else {
             files += push_root(d, st, &root)?;
         }
-        if st.roots[&root].manifest.values().any(|s| *s == UNKNOWN) {
+        if st.roots[&root].pending_repair {
             bail!(
                 "cannot read source files needed to repair {}",
                 root.display()
@@ -1840,6 +1846,7 @@ fn check_sync_failures(st: &mut Sync, ack: &SyncAck) -> Result<()> {
             if let Ok(rel) = f.strip_prefix(root) {
                 // Present: rewrite it. Absent (a failed delete): the stale
                 // entry makes the next diff delete it again.
+                r.pending_repair = true;
                 r.manifest.insert(rel.to_path_buf(), UNKNOWN);
             }
         }
@@ -2738,6 +2745,7 @@ mod tests {
         let manifest = remote_sync::scan(&root).unwrap().files;
         let expected = remote_sync::dirs(&root, &manifest);
         let mut tracked = Root {
+            pending_repair: false,
             manifest: manifest.clone(),
             watch_dirs: Some(expected.clone()),
             oversized: Vec::new(),
@@ -2766,6 +2774,7 @@ mod tests {
     fn cached_watch_directories_follow_paths_not_stamps() {
         let root = Path::new("/workspace");
         let mut tracked = Root {
+            pending_repair: true,
             manifest: Manifest::from([(PathBuf::from("src/lib.rs"), UNKNOWN)]),
             watch_dirs: None,
             oversized: Vec::new(),
@@ -2806,6 +2815,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("jr-watch-cache-{}", std::process::id()));
         std::fs::create_dir_all(root.join("src")).unwrap();
         let mut tracked = Root {
+            pending_repair: true,
             manifest: Manifest::from([(PathBuf::from("src/lib.rs"), UNKNOWN)]),
             watch_dirs: None,
             oversized: Vec::new(),
@@ -2836,6 +2846,83 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "repair root lookup microbenchmark"]
+    fn benchmark_repair_root_lookup() {
+        use std::hint::black_box;
+        let manifest: Manifest = (0..8192)
+            .map(|i| {
+                (
+                    PathBuf::from(format!("crates/c{}/src/module{i}.rs", i / 128)),
+                    remote_sync::Stamp {
+                        mtime_ns: i,
+                        size: 8192,
+                        mode: 0o644,
+                    },
+                )
+            })
+            .collect();
+        for count in [1, 20] {
+            let mut sync = Sync {
+                backend: Backend::Hosted,
+                link: None,
+                roots: (0..count)
+                    .map(|i| {
+                        (
+                            PathBuf::from(format!("/workspace/{i}")),
+                            Root {
+                                pending_repair: false,
+                                manifest: manifest.clone(),
+                                watch_dirs: None,
+                                oversized: vec![],
+                                needs_full_sync: false,
+                                mark: Default::default(),
+                            },
+                        )
+                    })
+                    .collect(),
+            };
+            let old = |s: &Sync| {
+                s.roots
+                    .iter()
+                    .filter(|(_, r)| r.manifest.values().any(|v| *v == UNKNOWN))
+                    .map(|(p, _)| p.clone())
+                    .collect::<Vec<_>>()
+            };
+            for rejected in [false, true] {
+                if rejected {
+                    let failed = [0, count - 1]
+                        .map(|i| format!("/workspace/{i}/z-failed-delete"))
+                        .to_vec();
+                    assert!(
+                        check_sync_failures(
+                            &mut sync,
+                            &SyncAck {
+                                failed,
+                                ..Default::default()
+                            }
+                        )
+                        .is_err()
+                    );
+                }
+                assert_eq!(old(&sync), sync.repair_roots());
+                let t = Instant::now();
+                for _ in 0..64 {
+                    black_box(old(black_box(&sync)));
+                }
+                let old_ns = t.elapsed().as_nanos() / 64;
+                let t = Instant::now();
+                for _ in 0..8192 {
+                    black_box(black_box(&sync).repair_roots());
+                }
+                eprintln!(
+                    "{count} roots x 8192 files, rejected={rejected}: old {old_ns} ns, indexed {} ns",
+                    t.elapsed().as_nanos() / 8192
+                );
+            }
+        }
+    }
+
+    #[test]
     fn disk_recovery_resends_other_roots_exact_failed_writes_and_deletes() {
         let base = std::env::temp_dir().join(format!("jr-disk-repair-{}", std::process::id()));
         let a = base.join("a");
@@ -2846,6 +2933,7 @@ mod tests {
         std::fs::write(a.join("unchanged.rs"), b"unchanged A").unwrap();
         std::fs::write(b.join("lib.rs"), b"current B source").unwrap();
         let make_root = |path: &Path| Root {
+            pending_repair: false,
             manifest: remote_sync::scan(path).unwrap().files,
             watch_dirs: None,
             oversized: Vec::new(),
@@ -2973,6 +3061,7 @@ mod tests {
             },
         });
         let tracked = Root {
+            pending_repair: false,
             manifest: remote_sync::scan(&root).unwrap().files,
             watch_dirs: None,
             oversized: Vec::new(),
@@ -3165,6 +3254,7 @@ mod tests {
         link.routes.lock().unwrap().runs.insert(77, run_tx);
         let (watch_tx, watch_rx) = channel();
         let make_root = || Root {
+            pending_repair: true,
             manifest: (0..=remote_sync::RSYNC_ABOVE)
                 .map(|i| (PathBuf::from(format!("gone-{i}")), UNKNOWN))
                 .collect(),
@@ -3236,6 +3326,7 @@ mod tests {
         let other = PathBuf::from("/workspace-other");
         let entry = PathBuf::from("src/lib.rs");
         let make_root = || Root {
+            pending_repair: false,
             manifest: Manifest::from([(entry.clone(), stamp)]),
             watch_dirs: None,
             oversized: Vec::new(),
@@ -3302,6 +3393,7 @@ mod tests {
         std::fs::create_dir_all(&a).unwrap();
         std::fs::create_dir_all(&b).unwrap();
         let make_root = || Root {
+            pending_repair: false,
             manifest: Manifest::new(),
             watch_dirs: None,
             oversized: Vec::new(),
