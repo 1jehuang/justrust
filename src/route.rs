@@ -503,11 +503,24 @@ fn load_entries(cwd: &str) -> Vec<IndexEntry> {
     let Ok(s) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
+    entries_for_cwd(&s, cwd)
+}
+
+fn entries_for_cwd(s: &str, cwd: &str) -> Vec<IndexEntry> {
     let needle = format!("\"cwd\":{}", serde_json::to_string(cwd).unwrap_or_default());
-    s.lines()
-        .filter(|l| l.contains(&needle))
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect()
+    let finder = memchr::memmem::Finder::new(needle.as_bytes());
+    let mut remaining = s.as_bytes();
+    let mut entries = Vec::new();
+    while let Some(hit) = finder.find(remaining) {
+        let start = memchr::memrchr(b'\n', &remaining[..hit]).map_or(0, |i| i + 1);
+        let after = hit + needle.len();
+        let end = memchr::memchr(b'\n', &remaining[after..]).map_or(remaining.len(), |i| after + i);
+        if let Ok(entry) = serde_json::from_slice(&remaining[start..end]) {
+            entries.push(entry);
+        }
+        remaining = remaining.get(end + 1..).unwrap_or_default();
+    }
+    entries
 }
 
 /// What the client waited for a remote run, from its local summary. Sync
@@ -847,11 +860,10 @@ pub fn maybe_remote(full: &[OsString]) {
         }
         if let Ok(cwd_path) = std::env::current_dir() {
             let cwd = cwd_path.to_string_lossy().into_owned();
-            let entries = load_entries(&cwd);
-            if let Some(why) = hosted_stays_local(
-                local_median(&args, &cwd, &entries, now),
-                cold_target(&cwd_path),
-            ) {
+            if !cold_target(&cwd_path)
+                && let Some(why) =
+                    hosted_stays_local(local_median(&args, &cwd, &load_entries(&cwd), now), false)
+            {
                 return say_local(&why);
             }
         }
@@ -867,19 +879,11 @@ pub fn maybe_remote(full: &[OsString]) {
             return;
         };
         let cwd = cwd_path.to_string_lossy().into_owned();
-        let entries = load_entries(&cwd);
-        let mut start_reason = None;
-        if !backend.probably_up() {
-            if backend == Backend::Hosted && crate::remote_hosted::signed_in() {
-                start_reason = hosted_start_worth_it(
-                    local_median(&args, &cwd, &entries, now),
-                    cold_target(&cwd_path),
-                );
-            }
-            if start_reason.is_none() {
-                return say_local("remote machine not running");
-            }
+        let up = backend.probably_up();
+        if !(up || backend == Backend::Hosted && crate::remote_hosted::signed_in()) {
+            return say_local("remote machine not running");
         }
+        let entries = load_entries(&cwd);
         if backend == Backend::Aws {
             let last_remote = entries
                 .iter()
@@ -891,25 +895,31 @@ pub fn maybe_remote(full: &[OsString]) {
             }
         }
         let cold = cold_target(&cwd_path);
-        let choice = cold_rule(
-            decide(&args, &cwd, &entries, &remote_client_wall, now),
-            cold,
-        );
-        match (start_reason, choice) {
-            (Some(why), _) => why,
-            (None, Choice::Local(why)) => {
-                // Staying local: if this build will compile dependencies,
-                // bring the link up so they can come from the machine's
-                // cache instead (peer cache).
-                if cold
-                    || local_median(&args, &cwd, &entries, now)
-                        .is_none_or(|l| l > EXPLORE_LOCAL_SECS)
-                {
-                    warm();
+        if !up {
+            let Some(why) = hosted_start_worth_it(local_median(&args, &cwd, &entries, now), cold)
+            else {
+                return say_local("remote machine not running");
+            };
+            why
+        } else {
+            match cold_rule(
+                decide(&args, &cwd, &entries, &remote_client_wall, now),
+                cold,
+            ) {
+                Choice::Local(why) => {
+                    // Staying local: if this build will compile dependencies,
+                    // bring the link up so they can come from the machine's
+                    // cache instead (peer cache).
+                    if cold
+                        || local_median(&args, &cwd, &entries, now)
+                            .is_none_or(|l| l > EXPLORE_LOCAL_SECS)
+                    {
+                        warm();
+                    }
+                    return say_local(&why);
                 }
-                return say_local(&why);
+                Choice::Remote(why) => why,
             }
-            (None, Choice::Remote(why)) => why,
         }
     };
     eprintln!("justrust: remote ({reason})");
@@ -1289,6 +1299,43 @@ mod tests {
             remote: remote.then(|| "m".to_string()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn cwd_scan_preserves_policy_inputs_in_file_order() {
+        let mut other = e(&["test"], 1.0, true, 0.0);
+        other.cwd = "/other".into();
+        let rows = [
+            e(&["test"], 22.0, false, 50.0),
+            other,
+            e(&["check"], 3.0, true, 0.0),
+            e(&["test"], 1.0, true, 100.0),
+        ];
+        let lines = rows
+            .iter()
+            .map(|r| serde_json::to_string(r).unwrap())
+            .collect::<Vec<_>>();
+        let text = format!(
+            "{}\r\n{{\"cwd\":\"/w\",broken\n{}\n{}\n{}",
+            lines[0], lines[1], lines[2], lines[3]
+        );
+        let entries = entries_for_cwd(&text, CWD);
+        let expected = [&rows[0], &rows[2], &rows[3]].map(Clone::clone);
+        assert_eq!(
+            serde_json::to_value(&entries).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+        assert_eq!(run(&["test"], &entries), run(&["test"], &expected));
+        assert_eq!(local_median(&a(&["test"]), CWD, &entries, NOW), Some(22.0));
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|e| e.remote.is_some())
+                .map(|e| e.start + e.wall)
+                .reduce(f64::max),
+            Some(NOW + 3.0)
+        );
+        assert!(entries_for_cwd(&text, "/missing").is_empty());
     }
 
     fn a(v: &[&str]) -> Vec<String> {
