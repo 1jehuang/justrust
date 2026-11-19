@@ -587,9 +587,43 @@ fn source_stamp_observed(
     env: &[(String, String)],
     phase: impl FnMut(&'static str),
 ) -> (String, usize) {
-    source_stamp_with_sort(roots, cwd, env, phase, sort_stamp_root_entries)
+    let mut phase = phase;
+    stamp_walk(roots, cwd, env, |root, add| {
+        phase("root-start");
+        // Sorted siblings visited depth first produce Path's component order.
+        let mut stack = vec![(root.to_owned(), true)];
+        while let Some((path, directory)) = stack.pop() {
+            if !directory {
+                if let Ok(m) = std::fs::metadata(&path) {
+                    add(&path, &m);
+                }
+                continue;
+            }
+            let Ok(rd) = std::fs::read_dir(&path) else {
+                continue;
+            };
+            let first = stack.len();
+            for entry in rd.flatten() {
+                let Ok(ft) = entry.file_type() else { continue };
+                if ft.is_dir() {
+                    let name = entry.file_name();
+                    let n = name.to_string_lossy();
+                    if n == "target"
+                        || n.starts_with("target-")
+                        || (n.starts_with('.') && n != ".cargo")
+                    {
+                        continue;
+                    }
+                }
+                stack.push((entry.path(), ft.is_dir()));
+            }
+            stack[first..].sort_unstable_by(|a, b| b.0.as_os_str().cmp(a.0.as_os_str()));
+        }
+        phase("walk-hash");
+    })
 }
 
+#[cfg(test)]
 fn source_stamp_with_sort(
     roots: &[PathBuf],
     cwd: &Path,
@@ -597,19 +631,9 @@ fn source_stamp_with_sort(
     mut phase: impl FnMut(&'static str),
     mut sort: impl FnMut(&mut [(PathBuf, std::fs::Metadata)]),
 ) -> (String, usize) {
-    let mut h = crate::depcache::H128::new();
-    let mut files = 0usize;
-    let mut add = |p: &Path, m: &std::fs::Metadata| {
-        h.field(p.as_os_str().as_encoded_bytes());
-        h.field(&m.len().to_le_bytes());
-        let (s, ns) = crate::sys::mtime(m);
-        h.field(&s.to_le_bytes());
-        h.field(&ns.to_le_bytes());
-        h.field(&crate::sys::file_id(m).1.to_le_bytes());
-    };
-    for r in roots {
+    stamp_walk(roots, cwd, env, |r, add| {
         phase("root-start");
-        let mut stack = vec![r.clone()];
+        let mut stack = vec![r.to_owned()];
         let mut entries: Vec<(PathBuf, std::fs::Metadata)> = Vec::new();
         while let Some(d) = stack.pop() {
             let Ok(rd) = std::fs::read_dir(&d) else {
@@ -635,13 +659,36 @@ fn source_stamp_with_sort(
         phase("enumerate-metadata");
         sort(&mut entries);
         phase("sort");
-        files += entries.len();
         for (p, m) in &entries {
             add(p, m);
         }
         phase("hash");
         drop(entries);
         phase("drop-entries");
+    })
+}
+
+fn stamp_walk(
+    roots: &[PathBuf],
+    cwd: &Path,
+    env: &[(String, String)],
+    mut walk: impl FnMut(&Path, &mut dyn FnMut(&Path, &std::fs::Metadata)),
+) -> (String, usize) {
+    let mut h = crate::depcache::H128::new();
+    let mut files = 0usize;
+    let mut add = |p: &Path, m: &std::fs::Metadata| {
+        h.field(p.as_os_str().as_encoded_bytes());
+        h.field(&m.len().to_le_bytes());
+        let (s, ns) = crate::sys::mtime(m);
+        h.field(&s.to_le_bytes());
+        h.field(&ns.to_le_bytes());
+        h.field(&crate::sys::file_id(m).1.to_le_bytes());
+    };
+    for r in roots {
+        walk(r, &mut |p, m| {
+            files += 1;
+            add(p, m);
+        });
     }
     let cargo_home = env
         .iter()
@@ -661,7 +708,6 @@ fn source_stamp_with_sort(
             add(&c, &m);
         }
     }
-    phase("configs");
     (h.hex(), files)
 }
 
@@ -673,6 +719,7 @@ fn source_stamp_with_sort(
 ///
 /// Reuse the owned path buffers, sort raw keys, then restore every byte before
 /// hashing. No metadata is reused between traversals and no path is omitted.
+#[cfg(test)]
 fn sort_stamp_root_entries<T>(entries: &mut [(PathBuf, T)]) {
     #[cfg(unix)]
     {
@@ -1851,6 +1898,32 @@ mod tests {
                     .iter()
                     .map(|(name, time)| (*name, time.as_secs_f64() * 1000.0))
                     .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "paired benchmark on a quiescent checkout"]
+    fn stamp_stream_pair() {
+        let cwd = std::env::current_dir().unwrap();
+        let roots = source_roots(&cwd);
+        let env: Vec<_> = std::env::vars().collect();
+        let scan = |stream| {
+            let t = Instant::now();
+            let result = if stream {
+                source_stamp(&roots, &cwd, &env)
+            } else {
+                source_stamp_with_sort(&roots, &cwd, &env, |_| {}, sort_stamp_root_entries)
+            };
+            (result, t.elapsed().as_millis())
+        };
+        for i in 0..6 {
+            let (a, b) = (scan(i % 2 == 0), scan(i % 2 != 0));
+            assert_eq!(a.0, b.0);
+            let (old, new) = if i % 2 == 0 { (b.1, a.1) } else { (a.1, b.1) };
+            eprintln!(
+                "stamp-stream-pair files={} old_ms={old} new_ms={new}",
+                a.0.1
             );
         }
     }
