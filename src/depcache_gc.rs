@@ -119,7 +119,12 @@ fn dir_bytes(dir: &Path) -> u64 {
         .sum()
 }
 
+/// Inventory committed entries only. Status must not inspect or clean partial stores.
 pub fn scan(root: &Path) -> Scan {
+    inventory(root, |_| {})
+}
+
+fn inventory(root: &Path, mut on_partial: impl FnMut(&std::fs::DirEntry)) -> Scan {
     let mut s = Scan::default();
     for e in std::fs::read_dir(root.join("o"))
         .into_iter()
@@ -128,16 +133,11 @@ pub fn scan(root: &Path) -> Scan {
     {
         let name = e.file_name();
         let name = name.to_string_lossy();
-        let path = e.path();
         if name.starts_with('.') {
-            // Half-written store from a crashed process: collect once stale.
-            if let Ok(m) = e.metadata()
-                && paths::now() - mtime(&m) > 3600.0
-            {
-                let _ = std::fs::remove_dir_all(&path);
-            }
+            on_partial(&e);
             continue;
         }
+        let path = e.path();
         let last_used = std::fs::metadata(path.join("meta.json"))
             .or_else(|_| e.metadata())
             .map(|m| mtime(&m))
@@ -173,7 +173,14 @@ pub struct Pruned {
 /// Evict least recently used entries until the cache is under `LOW_WATER`
 /// of `max` (or everything not in use, when `max` is 0 and `all` is set).
 pub fn prune(root: &Path, max: u64, all: bool) -> Pruned {
-    let mut s = scan(root);
+    let mut s = inventory(root, |e| {
+        // Half-written store from a crashed process: collect once stale.
+        if let Ok(m) = e.metadata()
+            && paths::now() - mtime(&m) > 3600.0
+        {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    });
     let mut out = Pruned::default();
     if !all && (max == 0 || s.bytes <= max) {
         clear_trash(root);
@@ -630,6 +637,36 @@ mod tests {
             .unwrap()
             .set_modified(t)
             .unwrap();
+    }
+
+    #[cfg(unix)] // Open a directory handle to set its mtime.
+    #[test]
+    fn status_ignores_partial_stores_and_only_prune_collects_stale_ones() {
+        let root = std::env::temp_dir().join(format!("jr-gc-status-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let old = root.join("o/.stale");
+        let fresh = root.join("o/.fresh");
+        for dir in [&old, &fresh] {
+            std::fs::create_dir_all(dir.join("nested")).unwrap();
+            std::fs::write(dir.join("nested/data"), b"partial").unwrap();
+        }
+        let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        std::fs::File::open(&old)
+            .unwrap()
+            .set_modified(stale)
+            .unwrap();
+        for _ in 0..2 {
+            let s = scan(&root);
+            assert!(s.entries.is_empty());
+            assert_eq!(s.bytes, 0);
+            for dir in [&old, &fresh] {
+                assert_eq!(std::fs::read(dir.join("nested/data")).unwrap(), b"partial");
+            }
+        }
+        assert_eq!(prune(&root, 0, false), Pruned::default());
+        assert!(!old.exists());
+        assert!(fresh.join("nested/data").is_file());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
