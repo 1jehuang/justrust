@@ -101,6 +101,8 @@ build, status, runs, and show commands retain their agent-friendly behavior.
 For automation use `justrust status --json`, `justrust runs --json`, and
 `justrust show ID --json` instead.
 
+The **Hosted compile reuse** card compares the filtered hosted runs with the selected run. It reports how many listed runs have compiler ledgers, counts reused codegen units and loaded queries, and separates recomputation time by outcome. Missing measurements are not zero reuse. The codegen fraction is a count of units, not a percentage of theoretically avoidable build time.
+
 The dashboard shows active builds observed by this client, recent local runs,
 account-private uploaded recordings, and your signed-in account's build allowance.
 It uses the same credentials as `justrust login`, without operator access or a

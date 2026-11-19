@@ -248,7 +248,7 @@ const LOCAL_CACHE_SCOPE: &str = "00000000000000000000000000000000000000000000000
 /// Only completed display data is restored. Never restore active builds or
 /// mark a cached answer as connected, freshly checked, or authoritative.
 fn restore_cached(state: &mut State, scope: Option<&str>) {
-    if let Some(saved) = cache::load::<Vec<RunRow>>(LOCAL_CACHE_SCOPE, "local") {
+    if let Some(saved) = cache::load::<Vec<RunRow>>(LOCAL_CACHE_SCOPE, "local-v2") {
         state.snapshot.runs = saved.data;
         state.local_cached = !state.snapshot.runs.is_empty();
     }
@@ -271,6 +271,21 @@ fn restore_cached(state: &mut State, scope: Option<&str>) {
 }
 
 impl State {
+    fn reuse_profile(&self) -> (usize, usize, data::ReuseStats) {
+        let mut total = 0;
+        let mut covered = 0;
+        let mut stats = data::ReuseStats::default();
+        for row in self.rows() {
+            if row.place == "hosted" {
+                total += 1;
+                if let Some(r) = row.reuse {
+                    covered += 1;
+                    stats.merge(r);
+                }
+            }
+        }
+        (total, covered, stats)
+    }
     fn rows(&self) -> Vec<&RunRow> {
         self.filtered(true)
     }
@@ -663,7 +678,7 @@ pub(crate) fn run() -> Result<()> {
         .snapshot
         .runs
         .iter()
-        .map(|row| (row.id.clone(), (row.time, row.compile)))
+        .map(|row| (row.id.clone(), (row.time, row.compile, row.reuse)))
         .collect();
     let mut saved_rows = state.snapshot.runs.clone();
     std::thread::spawn(move || {
@@ -673,8 +688,13 @@ pub(crate) fn run() -> Result<()> {
             });
             if local.local_error.is_none()
                 && local.runs != saved_rows
-                && cache::save(LOCAL_CACHE_SCOPE, "local", crate::paths::now(), &local.runs)
-                    .is_some()
+                && cache::save(
+                    LOCAL_CACHE_SCOPE,
+                    "local-v2",
+                    crate::paths::now(),
+                    &local.runs,
+                )
+                .is_some()
             {
                 saved_rows = local.runs.clone();
             }
@@ -1273,7 +1293,7 @@ fn full_dashboard_cached_data_latency_probe() {
     let versions = data::fetch_versions(&data::Versions::local(), |_| {});
     assert!(versions.error.is_none(), "{:?}", versions.error);
     let at = crate::paths::now();
-    cache::save(LOCAL_CACHE_SCOPE, "local", at, &local.runs).expect("private local cache");
+    cache::save(LOCAL_CACHE_SCOPE, "local-v2", at, &local.runs).expect("private local cache");
     cache::save(&scope, "hosted", at, &hosted).expect("private hosted cache");
     cache::save(&scope, "versions", at, &versions).expect("private versions cache");
     for sample in 1..=3 {
@@ -1311,7 +1331,7 @@ fn full_dashboard_cached_data_latency_probe() {
             .snapshot
             .runs
             .iter()
-            .map(|row| (row.id.clone(), (row.time, row.compile)))
+            .map(|row| (row.id.clone(), (row.time, row.compile, row.reuse)))
             .collect();
         let refresh_started = Instant::now();
         let refreshed = data::local_snapshot(&mut times, |_| {});

@@ -34,7 +34,7 @@ pub(crate) type Times = [f64; BUCKETS];
 /// Parsed timings by run ID. A finished run's summary never changes, so each
 /// is read once. `None` records a summary that could not be read.
 pub(crate) type TimeCache =
-    std::collections::HashMap<String, (Option<Times>, Option<CompileTimes>)>;
+    std::collections::HashMap<String, (Option<Times>, Option<CompileTimes>, Option<ReuseStats>)>;
 
 /// What the compiler's time went to, from the units a run recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +53,53 @@ pub(crate) const PARTS: usize = 6;
 /// the sum is compiler time, not time waited.
 pub(crate) type CompileTimes = [f64; PARTS];
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ReuseStats {
+    pub cgu_reused: u64,
+    pub cgu_total: u64,
+    pub loaded: u64,
+    pub ledgers: u64,
+    pub same_secs: f64,
+    pub green_secs: f64,
+    pub changed_secs: f64,
+    pub unknown_secs: f64,
+}
+impl ReuseStats {
+    pub fn merge(&mut self, o: Self) {
+        self.cgu_reused += o.cgu_reused;
+        self.cgu_total += o.cgu_total;
+        self.loaded += o.loaded;
+        self.ledgers += o.ledgers;
+        self.same_secs += o.same_secs;
+        self.green_secs += o.green_secs;
+        self.changed_secs += o.changed_secs;
+        self.unknown_secs += o.unknown_secs;
+    }
+    fn observe(&mut self, rows: &[crate::reuse::Row]) {
+        if rows.is_empty() {
+            return;
+        }
+        self.ledgers += 1;
+        for r in rows {
+            if r.query == "<cgu>" {
+                self.cgu_total += r.count;
+                if r.outcome == "loaded" {
+                    self.cgu_reused += r.count;
+                }
+            } else if !crate::reuse::is_evidence(r) && r.secs.is_finite() && r.secs >= 0. {
+                match crate::reuse::class(&r.outcome) {
+                    crate::reuse::Class::Reused => self.loaded += r.count,
+                    crate::reuse::Class::Avoidable if r.outcome == "green_recompute" => {
+                        self.green_secs += r.secs
+                    }
+                    crate::reuse::Class::Avoidable => self.same_secs += r.secs,
+                    crate::reuse::Class::Necessary => self.changed_secs += r.secs,
+                    crate::reuse::Class::Opaque => self.unknown_secs += r.secs,
+                }
+            }
+        }
+    }
+}
 impl Part {
     pub(crate) const ALL: [Part; PARTS] = [
         Part::Workspace,
@@ -79,6 +126,8 @@ impl Part {
 #[derive(serde::Deserialize)]
 struct UnitTime {
     #[serde(default)]
+    reuse: Vec<crate::reuse::Row>,
+    #[serde(default)]
     crate_types: Vec<String>,
     #[serde(default)]
     test: bool,
@@ -94,13 +143,19 @@ struct UnitTime {
 
 /// Unit seconds by what was compiled. A unit restored from a cache counts as
 /// a restore whatever it is. `None` when no unit has a usable time.
+#[cfg(test)]
 fn compile_times(units: &[u8]) -> Option<CompileTimes> {
+    unit_profiles(units).0
+}
+fn unit_profiles(units: &[u8]) -> (Option<CompileTimes>, Option<ReuseStats>) {
+    let mut reuse = ReuseStats::default();
     let mut out = [0.0; PARTS];
     let mut any = false;
     for row in units.split(|byte| *byte == b'\n') {
         let Ok(unit) = serde_json::from_slice::<UnitTime>(row) else {
             continue;
         };
+        reuse.observe(&unit.reuse);
         if !unit.wall.is_finite() || unit.wall <= 0.0 {
             continue;
         }
@@ -123,7 +178,7 @@ fn compile_times(units: &[u8]) -> Option<CompileTimes> {
         out[part as usize] += unit.wall;
         any = true;
     }
-    any.then_some(out)
+    (any.then_some(out), (reuse.ledgers > 0).then_some(reuse))
 }
 
 impl Bucket {
@@ -243,6 +298,7 @@ pub(crate) struct RunRow {
     pub time: Option<Times>,
     /// What the compiler's time went to. Only for runs with units recorded here.
     pub compile: Option<CompileTimes>,
+    pub reuse: Option<ReuseStats>,
 }
 
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
@@ -273,9 +329,10 @@ pub(crate) fn local_snapshot(
     match rows {
         Ok(mut rows) => {
             for row in &mut rows {
-                if let Some((time, compile)) = cache.get(&row.id) {
+                if let Some((time, compile, reuse)) = cache.get(&row.id) {
                     row.time = *time;
                     row.compile = *compile;
+                    row.reuse = *reuse;
                 }
             }
             // The index is small. Never hold its rows behind a directory scan
@@ -330,16 +387,17 @@ fn enrich_rows(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path) {
                         row.time = read_summary(&run.join("summary.json"))
                             .ok()
                             .and_then(|bytes| times(&bytes));
-                        row.compile = read_summary(&run.join("units.jsonl"))
+                        (row.compile, row.reuse) = read_summary(&run.join("units.jsonl"))
                             .ok()
-                            .and_then(|bytes| compile_times(&bytes));
+                            .map(|bytes| unit_profiles(&bytes))
+                            .unwrap_or_default();
                     }
                 });
             }
         });
     }
     for row in rows.iter() {
-        cache.insert(row.id.clone(), (row.time, row.compile));
+        cache.insert(row.id.clone(), (row.time, row.compile, row.reuse));
     }
     let ids: std::collections::HashSet<_> = rows.iter().map(|row| row.id.as_str()).collect();
     cache.retain(|id, _| ids.contains(id.as_str()));
@@ -532,6 +590,7 @@ fn index_rows(tail: &str) -> Vec<RunRow> {
             compile_failed: entry.compile_failed,
             time: None,
             compile: None,
+            reuse: None,
         })
         .collect()
 }
@@ -571,6 +630,7 @@ fn hosted_row(value: &Value) -> Option<RunRow> {
         compile_failed: summary["compile_failed"].as_bool().unwrap_or(false),
         time: None,
         compile: None,
+        reuse: None,
     })
 }
 
@@ -1019,6 +1079,30 @@ mod tests {
     }
 
     #[test]
+    fn reuse_ledger_is_independent_of_wall_and_excludes_credit_sidecars() {
+        let rows = crate::reuse::parse(
+            "loaded\t<cgu>\t0\t255\nchanged\t<cgu>\t0\t1\nloaded\tquery\t0.1\t17\neval_always_same\tquery\t1.5\t2\ngreen_recompute\tquery\t2\t1\nnew\tquery\t3\t1\nnohash\tquery\t4\t1\nloaded_avoided\tquery\t10\t1",
+        );
+        let units = serde_json::to_vec(&serde_json::json!({"reuse":rows})).unwrap();
+        let (compile, stats) = unit_profiles(&units);
+        assert!(compile.is_none());
+        assert_eq!(
+            stats.unwrap(),
+            ReuseStats {
+                ledgers: 1,
+                cgu_reused: 255,
+                cgu_total: 256,
+                loaded: 17,
+                same_secs: 1.5,
+                green_secs: 2.,
+                changed_secs: 3.,
+                unknown_secs: 4.
+            }
+        );
+        assert!(unit_profiles(b"{\"wall\":1}").1.is_none());
+    }
+
+    #[test]
     fn cached_profile_rows_need_no_summary_or_unit_files() {
         let time = Some([1.0; BUCKETS]);
         let compile = Some([2.0; PARTS]);
@@ -1029,8 +1113,8 @@ mod tests {
             ..Default::default()
         }];
         let mut cache = TimeCache::from([
-            ("saved".into(), (time, compile)),
-            ("expired".into(), (None, None)),
+            ("saved".into(), (time, compile, None)),
+            ("expired".into(), (None, None, None)),
         ]);
         enrich_rows(
             &mut rows,
@@ -1040,7 +1124,7 @@ mod tests {
         assert_eq!(rows[0].time, time);
         assert_eq!(rows[0].compile, compile);
         assert_eq!(cache.len(), 1);
-        assert_eq!(cache["saved"], (time, compile));
+        assert_eq!(cache["saved"], (time, compile, None));
     }
 
     #[test]

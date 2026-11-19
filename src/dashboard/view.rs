@@ -730,6 +730,78 @@ fn active_row(run: &crate::status::Active, wide: bool, command_width: usize) -> 
     spans
 }
 
+fn reuse_lines(
+    state: &State,
+    width: usize,
+    profile: (usize, usize, super::data::ReuseStats),
+) -> Vec<Line<'static>> {
+    let (total, covered, stats) = profile;
+    let rows = state.rows();
+    let run = rows.get(state.selected);
+    let selected = run.filter(|r| r.place == "hosted").and_then(|r| r.reuse);
+    let mut lines = vec![line(
+        format!("Your runs: {covered}/{total} hosted measured"),
+        LABEL,
+        width,
+    )];
+    if covered == 0 {
+        lines.push(line("No hosted measurements", DIM, width));
+    }
+    if selected.is_none() {
+        let why = match run {
+            None => "No run selected",
+            Some(r) if r.place != "hosted" => "Not hosted",
+            _ => "Unavailable",
+        };
+        lines.push(detail("Selected", vec![span(why, DIM)], width));
+    }
+    if covered > 0 {
+        let metrics = |s: super::data::ReuseStats| {
+            [
+                if s.cgu_total > 0 {
+                    format!("{}/{}", s.cgu_reused, s.cgu_total)
+                } else {
+                    "n/a".into()
+                },
+                s.loaded.to_string(),
+                crate::status::dur(s.same_secs),
+                crate::status::dur(s.green_secs),
+                crate::status::dur(s.changed_secs),
+                crate::status::dur(s.unknown_secs),
+            ]
+        };
+        let all = metrics(stats);
+        let one = selected.map(metrics);
+        let labels = [
+            "CGUs reused",
+            "Queries loaded",
+            "Same result",
+            "Not persisted",
+            "New/changed",
+            "Unclassified",
+        ];
+        let col = ((width.saturating_sub(14)) / 2).clamp(1, 20);
+        let table_row = |key: &str, a: &str, b: &str| {
+            fit(
+                vec![
+                    span(pad(key, 14), LABEL),
+                    strong(pad_left(a, col), ACCENT),
+                    span(pad_left(b, col), VALUE),
+                ],
+                width,
+            )
+        };
+        lines.push(table_row("", "Listed", "Selected"));
+        for (i, key) in labels.iter().enumerate() {
+            if i == 2 {
+                lines.push(line("Recomputed query time", LABEL, width));
+            }
+            lines.push(table_row(key, &all[i], one.as_ref().map_or("·", |v| &v[i])));
+        }
+    }
+    lines
+}
+
 fn selected_lines(state: &State, width: usize) -> Vec<Line<'static>> {
     let rows = state.rows();
     let Some(run) = rows.get(state.selected) else {
@@ -1181,18 +1253,59 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
         (false, h) if h < 40 => (overall_h, 0),
         (false, _) => (overall_h, compile_h),
     };
-    let selected = selected_lines(state, width);
+    let selected = selected_lines(state, card_width);
+    let measured = state.reuse_profile();
+    let reuse = reuse_lines(state, card_width, measured);
+    let reuse_h = reuse.len() as u16 + 2;
     let selected_h = if area.height >= 24 {
-        selected.len() as u16 + 2
+        (selected.len() as u16 + 2).max(if beside { reuse_h } else { 0 })
     } else {
         0
     };
-    let [top, versions, first, second, selection, runs, footer] = Layout::vertical([
+    let stacked_reuse_h = if !beside && area.height >= 24 && (measured.0 > 0 || area.height >= 40) {
+        reuse_h
+    } else {
+        0
+    };
+    // When measured rows need the space, keep the comparison and at least
+    // one actionable run row before optional profile and selection details.
+    let mut versions_h = versions_h;
+    let mut second_h = second_h;
+    let mut first_h = first_h;
+    let mut selected_h = selected_h;
+    if stacked_reuse_h > 0 && measured.0 > 0 {
+        let mut need =
+            (account_h + versions_h + first_h + second_h + selected_h + stacked_reuse_h + 6)
+                .saturating_sub(area.height);
+        for panel in [
+            &mut versions_h,
+            &mut second_h,
+            &mut first_h,
+            &mut selected_h,
+        ] {
+            if need == 0 {
+                break;
+            }
+            need = need.saturating_sub(*panel);
+            *panel = 0;
+        }
+    }
+    let [
+        top,
+        versions,
+        first,
+        second,
+        selection,
+        stacked_reuse,
+        runs,
+        footer,
+    ] = Layout::vertical([
         Constraint::Length(account_h.min(area.height.saturating_sub(6))),
         Constraint::Length(versions_h),
         Constraint::Length(first_h),
         Constraint::Length(second_h),
         Constraint::Length(selected_h),
+        Constraint::Length(stacked_reuse_h),
         Constraint::Min(3),
         Constraint::Length(1),
     ])
@@ -1222,7 +1335,21 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
             compile_card(&compile).draw(f, second, compile_lines);
         }
     }
+    if stacked_reuse.height > 0 {
+        Card::new("Hosted compile reuse").draw(f, stacked_reuse, reuse.clone());
+    }
     if selection.height > 0 {
+        let (selection, reuse_area) = if beside {
+            let [left, right] =
+                Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .areas(selection);
+            (left, right)
+        } else {
+            (selection, stacked_reuse)
+        };
+        if beside && reuse_area.height > 0 {
+            Card::new("Hosted compile reuse").draw(f, reuse_area, reuse);
+        }
         let note = state
             .rows()
             .get(state.selected)
@@ -1506,6 +1633,71 @@ mod tests {
                     + "\n"
             })
             .collect()
+    }
+
+    #[test]
+    fn hosted_reuse_compares_only_measured_listed_runs() {
+        let run = |id: &str, start, reuse| RunRow {
+            id: id.into(),
+            start,
+            place: "hosted".into(),
+            reuse,
+            ..Default::default()
+        };
+        let mut state = State::default();
+        state.snapshot.runs = vec![
+            run(
+                "measured",
+                3.,
+                Some(super::super::data::ReuseStats {
+                    cgu_reused: 3,
+                    cgu_total: 8,
+                    same_secs: 2.5,
+                    loaded: 10,
+                    ledgers: 1,
+                    ..Default::default()
+                }),
+            ),
+            run(
+                "zero",
+                2.,
+                Some(super::super::data::ReuseStats {
+                    cgu_total: 2,
+                    ledgers: 1,
+                    ..Default::default()
+                }),
+            ),
+            run("unknown", 1., None),
+        ];
+        state.selected = 1;
+        for (w, h) in [(140, 40), (40, 24)] {
+            let text = screen(&state, w, h);
+            assert!(text.contains("2/3 hosted measured"), "{text}");
+            let row = text.lines().find(|r| r.contains("CGUs reused")).unwrap();
+            assert!(row.contains("3/10") && row.contains("0/2"), "{text}");
+            let row = text.lines().find(|r| r.contains("Same result")).unwrap();
+            assert!(row.contains("2.5s") && row.contains("0.0s"), "{text}");
+            assert!(
+                text.contains("Unclassified") && text.contains("─ Runs"),
+                "{text}"
+            );
+        }
+        state.selected = 2;
+        assert!(screen(&state, 100, 40).contains("Selected Unavailable"));
+    }
+
+    #[test]
+    fn hosted_reuse_is_readable_beside_or_below_selection() {
+        for (w, h, beside) in [(150, 40, true), (40, 50, false)] {
+            let text = screen(&State::default(), w, h);
+            let title = text
+                .lines()
+                .find(|row| row.contains("Hosted compile reuse"))
+                .unwrap_or_else(|| panic!("{text}"));
+            assert_eq!(title.contains("Selected run"), beside, "{text}");
+            assert!(text.contains("No hosted measurements"), "{text}");
+            assert!(text.contains("Selected No run selected"), "{text}");
+        }
     }
 
     #[test]
