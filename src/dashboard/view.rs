@@ -664,6 +664,103 @@ fn filter_status(state: &State) -> Vec<Span<'static>> {
 
 const RESULT_WIDTH: usize = 18;
 const WHERE_WIDTH: usize = 7;
+
+// Same release-distance scale as the fleet history. Pins, future releases,
+// and missing references have no known age and stay neutral.
+fn version_color(actual: Option<&str>, current: Option<&str>) -> Color {
+    type Release<'a> = ([u64; 3], Option<(&'a str, u64)>);
+    fn release(s: &str) -> Option<Release<'_>> {
+        fn number(s: &str) -> Option<u64> {
+            s.bytes()
+                .all(|b| b.is_ascii_digit())
+                .then(|| s.parse().ok())
+                .flatten()
+        }
+        let s = s.strip_prefix('v').unwrap_or(s);
+        let (core, pre) = match s.split_once('-') {
+            Some((core, pre)) => {
+                let (tag, num) = pre.split_once('.')?;
+                if !matches!(tag, "alpha" | "beta" | "rc") {
+                    return None;
+                }
+                (core, Some((tag, number(num)?)))
+            }
+            None => (s, None),
+        };
+        let mut parts = core.split('.');
+        let core = [
+            number(parts.next()?)?,
+            number(parts.next()?)?,
+            number(parts.next()?)?,
+        ];
+        parts.next().is_none().then_some((core, pre))
+    }
+    let (Some((a, ap)), Some((b, bp))) = (actual.and_then(release), current.and_then(release))
+    else {
+        return DIM;
+    };
+    if a == b && ap == bp {
+        return GOOD;
+    }
+    if a > b {
+        return DIM;
+    }
+    let gap = if a[..2] != b[..2] {
+        u64::MAX
+    } else if a != b {
+        b[2] - a[2]
+    } else {
+        match (ap, bp) {
+            (Some((x, i)), Some((y, j))) if x == y && i < j => j - i,
+            (Some((x, _)), Some((y, _))) if x < y => u64::MAX,
+            (Some(_), None) => u64::MAX,
+            _ => return DIM,
+        }
+    };
+    if gap <= 2 { WARN } else { BAD }
+}
+
+fn run_versions(
+    run: &RunRow,
+    uploaded: Option<&RunRow>,
+    latest: &Versions,
+    width: usize,
+) -> Line<'static> {
+    let live = latest.live.as_ref();
+    let recorded = run.toolchain_version.as_deref();
+    let tool = recorded
+        .filter(|v| !v.starts_with("jr-"))
+        .or_else(|| uploaded.and_then(|r| r.toolchain_version.as_deref()))
+        .or(recorded);
+    let tool = match (tool, live) {
+        (Some(v), Some(l)) if Some(v) == l.toolchain.as_deref() => {
+            l.toolchain_version.as_deref().or(Some(v))
+        }
+        _ => tool,
+    };
+    let actual_client = run
+        .client_version
+        .as_deref()
+        .or_else(|| uploaded.and_then(|r| r.client_version.as_deref()));
+    let tc = clean(tool.unwrap_or("-"));
+    let client = clean(actual_client.unwrap_or("-"));
+    let available = width.saturating_sub(3);
+    let client_width = client
+        .width()
+        .min(available.saturating_sub(tc.width().min(available / 2)));
+    Line::from(vec![
+        span(
+            clip(&tc, available - client_width),
+            version_color(tool, live.and_then(|l| l.toolchain_version.as_deref())),
+        ),
+        span(" / ", DIM),
+        span(
+            clip(&client, client_width),
+            version_color(actual_client, live.and_then(|l| l.release.as_deref())),
+        ),
+    ])
+}
+
 /// Builds in progress pinned above the recorded runs, at most.
 const ACTIVE_ROWS: usize = 4;
 
@@ -687,7 +784,12 @@ fn banded(mut l: Line<'static>, width: usize, bg: Option<Color>) -> Line<'static
 }
 
 /// A build in progress, in the columns of the recorded runs.
-fn active_row(run: &crate::status::Active, wide: bool, command_width: usize) -> Vec<Span<'static>> {
+fn active_row(
+    run: &crate::status::Active,
+    wide: bool,
+    command_width: usize,
+    version_width: usize,
+) -> Vec<Span<'static>> {
     let mut detail = Vec::new();
     if let Some(e) = &run.estimate {
         detail.push(format!("~{} left", crate::status::dur(e.remaining)));
@@ -719,6 +821,7 @@ fn active_row(run: &crate::status::Active, wide: bool, command_width: usize) -> 
                 format!(" {elapsed:>7}     -     -  "),
                 wall_color(run.elapsed),
             ),
+            span(pad("- / -", version_width), DIM),
             span(label, VALUE),
             span(format!("  {detail}"), DIM),
             span(pad_left("now", 9), LABEL),
@@ -938,18 +1041,28 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
     let width = inner.width as usize;
     let wide = width >= 84;
     // REUSE and OPT each take five cells plus a separator.
-    let command_width = width.saturating_sub(RESULT_WIDTH + WHERE_WIDTH + 7 + 9 + 4 + 6 + 6);
+    let remaining = width.saturating_sub(RESULT_WIDTH + WHERE_WIDTH + 7 + 9 + 4 + 6 + 6);
+    let version_width = remaining.saturating_sub(10).min(34);
+    let command_width = remaining.saturating_sub(version_width);
     let header = if wide {
         format!(
-            "  {} {} {:>7} REUSE   OPT  {}{:>9}",
+            "  {} {} {:>7} REUSE   OPT  {}{}{:>9}",
             pad("RESULT", RESULT_WIDTH - 2),
             pad("WHERE", WHERE_WIDTH),
             "WALL",
+            pad(
+                if version_width < 19 {
+                    "TC / CLIENT"
+                } else {
+                    "TOOLCHAIN / CLIENT"
+                },
+                version_width
+            ),
             pad("COMMAND", command_width),
             "WHEN"
         )
     } else {
-        "  RESULT · WHEN · REUSE · OPT · COMMAND".into()
+        "  RESULT · WHEN · REUSE · OPT · COMMAND · TC / CLIENT".into()
     };
     let mut lines = vec![
         kind_bar(state, width),
@@ -960,7 +1073,7 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
     // Builds in progress lead the list and never crowd out the history.
     let pinned = active.len().min(ACTIVE_ROWS).min(body / 2);
     for (i, run) in active.iter().take(pinned).enumerate() {
-        let l = fit(active_row(run, wide, command_width), width);
+        let l = fit(active_row(run, wide, command_width, version_width), width);
         lines.push(banded(l, width, (i % 2 == 1).then_some(BAND)));
     }
     let visible = body - pinned;
@@ -990,6 +1103,20 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
             },
         );
         let opt = run.opt_level.as_deref().unwrap_or("-");
+        let versions = run_versions(
+            run,
+            if run.origin == "local" {
+                state.hosted_runs.iter().find(|r| r.id == run.id)
+            } else {
+                None
+            },
+            &state.versions,
+            if wide {
+                version_width.saturating_sub(1)
+            } else {
+                32
+            },
+        );
         let mut spans = vec![span("● ", color)];
         if wide {
             let command = clip(&command, command_width.saturating_sub(2));
@@ -1007,6 +1134,11 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
                     },
                 ),
                 span(format!(" {reuse:>5} {opt:>5}  "), LABEL),
+            ]);
+            let padding = version_width.saturating_sub(versions.width());
+            spans.extend(versions.spans);
+            spans.extend([
+                span(" ".repeat(padding), DIM),
                 span(command, VALUE),
                 span(format!("  {project}"), DIM),
                 span(pad_left(&when(run.start), 9), LABEL),
@@ -1018,9 +1150,14 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
                     format!(" · {} · {reuse} · {opt} · ", when(run.start)),
                     LABEL,
                 ),
-                span(command, VALUE),
-                span(format!("  {project}"), DIM),
             ]);
+            let used = spans.iter().map(Span::width).sum::<usize>();
+            let room = width.saturating_sub(used);
+            let command_width = room.saturating_sub(versions.width() + 3).max(room.min(8));
+            spans.push(span(clip(&command, command_width), VALUE));
+            spans.push(span(" · ", DIM));
+            spans.extend(versions.spans);
+            spans.push(span(format!("  {project}"), DIM));
         }
         let mut l = fit(spans, width);
         if i == state.selected {
@@ -1500,6 +1637,56 @@ mod tests {
     use super::super::data::Bucket;
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn recorded_versions_have_independent_freshness_colors() {
+        let latest = versions("0.0.1", "0.1.0-alpha.26");
+        let mut row = RunRow {
+            toolchain_version: Some("jr-ac20de5e7921".into()),
+            ..Default::default()
+        };
+        let uploaded = RunRow {
+            client_version: Some("0.1.0-alpha.22".into()),
+            ..Default::default()
+        };
+        let line = run_versions(&row, Some(&uploaded), &latest, 32);
+        assert_eq!(line.spans[0].style.fg, Some(GOOD));
+        assert_eq!(line.spans[2].style.fg, Some(BAD));
+        row.client_version = Some("0.1.0-alpha.25".into());
+        assert_eq!(
+            run_versions(&row, Some(&uploaded), &latest, 32).spans[2]
+                .style
+                .fg,
+            Some(WARN)
+        );
+        assert_eq!(version_color(Some("0.1.6"), Some("0.1.5")), DIM);
+        assert_eq!(version_color(Some("0.1.4"), None), DIM);
+        assert_eq!(version_color(Some("jr-private"), Some("0.1.5")), DIM);
+    }
+
+    #[test]
+    fn run_versions_are_labeled_in_wide_and_compact_history() {
+        let mut state = State::default();
+        state.snapshot.runs = vec![RunRow {
+            id: "old-build".into(),
+            args: vec!["test".into()],
+            exit: Some(0),
+            toolchain_version: Some("0.4.2".into()),
+            client_version: Some("1.2.3".into()),
+            ..Default::default()
+        }];
+        for (width, header) in [(140, "TOOLCHAIN / CLIENT"), (78, "TC / CLIENT")] {
+            let text = screen(&state, width, 40);
+            let history = text.split_once("─ Runs").unwrap().1;
+            assert!(history.contains(header), "{history}");
+            assert!(
+                history
+                    .lines()
+                    .any(|l| l.contains("0.4.2 / 1.2.3") && l.contains("test")),
+                "{history}"
+            );
+        }
+    }
 
     #[test]
     fn half_screen_and_smaller_keep_a_browsable_history() {
@@ -2003,8 +2190,12 @@ mod tests {
         let text = screen(&state, 140, 30);
         assert!(text.contains("tests failed"), "{text}");
         assert!(text.contains("5m ago"), "{text}");
-        assert!(text.contains("REUSE   OPT  COMMAND"));
-        assert!(text.contains("-     z  test -p ui"), "{text}");
+        assert!(text.contains("REUSE   OPT  TOOLCHAIN / CLIENT"));
+        let row = text.lines().find(|l| l.contains("● tests failed")).unwrap();
+        assert!(
+            row.contains("-     z  - / -") && row.contains("test -p ui"),
+            "{row}"
+        );
         assert!(screen(&state, 70, 30).contains(" · - · z · test -p ui"));
         assert!(text.contains("WHEN"));
         // The wide layout shows the age in place of the run ID.

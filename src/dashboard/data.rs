@@ -52,6 +52,7 @@ pub(crate) type TimeCache = std::collections::HashMap<
         Option<ReuseStats>,
         Option<Timeline>,
         Option<String>,
+        Option<String>,
     ),
 >;
 
@@ -401,6 +402,7 @@ impl Bucket {
 /// other shapes elsewhere still parse.
 #[derive(serde::Deserialize)]
 struct Timing {
+    toolchain: Option<String>,
     #[serde(default)]
     wall: f64,
     #[serde(default)]
@@ -411,8 +413,12 @@ struct Timing {
 
 /// End-to-end segments when recorded, otherwise the coarser cargo phases with
 /// the unattributed remainder of the wall time as `Other`.
+#[cfg(test)]
 fn times(summary: &[u8]) -> Option<Times> {
-    let timing: Timing = serde_json::from_slice(summary).ok()?;
+    measured_times(serde_json::from_slice(summary).ok()?)
+}
+
+fn measured_times(timing: Timing) -> Option<Times> {
     let mut out = [0.0; BUCKETS];
     let mut add = |bucket: Bucket, secs: f64| {
         if secs.is_finite() && secs > 0.0 {
@@ -453,6 +459,8 @@ pub(crate) struct Snapshot {
 #[derive(Debug, Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RunRow {
     pub id: String,
+    pub toolchain_version: Option<String>,
+    pub client_version: Option<String>,
     pub start: f64,
     pub cwd: String,
     pub args: Vec<String>,
@@ -505,12 +513,15 @@ pub(crate) fn local_snapshot(
     match rows {
         Ok(mut rows) => {
             for row in &mut rows {
-                if let Some((time, compile, reuse, timeline, opt)) = cache.get(&row.id) {
+                if let Some((time, compile, reuse, timeline, opt, toolchain)) = cache.get(&row.id) {
                     row.time = *time;
                     row.compile = *compile;
                     row.reuse = *reuse;
                     row.timeline.clone_from(timeline);
                     row.opt_level.clone_from(opt);
+                    if row.toolchain_version.is_none() {
+                        row.toolchain_version.clone_from(toolchain);
+                    }
                 }
             }
             // The index is small. Never hold its rows behind a directory scan
@@ -563,7 +574,16 @@ fn enrich_rows(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path) {
                         }
                         let run = dir.join(&row.id);
                         let summary = read_summary(&run.join("summary.json")).unwrap_or_default();
-                        row.time = times(&summary);
+                        if let Ok(mut timing) = serde_json::from_slice::<Timing>(&summary) {
+                            if row.toolchain_version.is_none() {
+                                row.toolchain_version = timing
+                                    .toolchain
+                                    .take()
+                                    .as_deref()
+                                    .map(crate::summary::recorded_toolchain_label);
+                            }
+                            row.time = measured_times(timing);
+                        }
                         let units = read_summary(&run.join("units.jsonl")).unwrap_or_default();
                         (row.compile, row.reuse, row.timeline, row.opt_level) =
                             timeline_profiles(&summary, &units, row.place == "local", || {
@@ -583,6 +603,7 @@ fn enrich_rows(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path) {
                 row.reuse,
                 row.timeline.clone(),
                 row.opt_level.clone(),
+                row.toolchain_version.clone(),
             ),
         );
     }
@@ -764,6 +785,8 @@ fn index_rows(tail: &str) -> Vec<RunRow> {
         .filter(|entry| valid_id(&entry.id))
         .map(|entry| RunRow {
             id: entry.id,
+            toolchain_version: entry.toolchain_version,
+            client_version: entry.client_version,
             start: entry.start,
             cwd: entry.cwd,
             args: entry.args,
@@ -784,6 +807,10 @@ fn index_rows(tail: &str) -> Vec<RunRow> {
         .collect()
 }
 
+fn text(v: &Value) -> Option<String> {
+    v.as_str().filter(|s| !s.is_empty()).map(str::to_owned)
+}
+
 fn hosted_row(value: &Value) -> Option<RunRow> {
     let id = value["id"].as_str()?;
     if !valid_id(id) {
@@ -794,6 +821,9 @@ fn hosted_row(value: &Value) -> Option<RunRow> {
     let summary = &value["summary"];
     Some(RunRow {
         id: id.into(),
+        toolchain_version: text(&summary["toolchain_version"])
+            .or_else(|| text(&summary["toolchain_pin"])),
+        client_version: text(&summary["client_version"]),
         start: summary["start"]
             .as_f64()
             .filter(|n| n.is_finite())
@@ -821,7 +851,10 @@ fn hosted_row(value: &Value) -> Option<RunRow> {
         compile: None,
         reuse: None,
         timeline: None,
-        opt_level: None,
+        opt_level: summary["opt_level"]
+            .as_str()
+            .filter(|level| matches!(*level, "0" | "1" | "2" | "3" | "s" | "z" | "mixed"))
+            .map(str::to_owned),
     })
 }
 
@@ -926,10 +959,9 @@ pub(crate) struct Live {
 }
 
 /// Parse the service's answer. `None` when it is not the version document.
-pub(crate) fn live(text: &str) -> Option<Live> {
-    let v: Value = serde_json::from_str(text).ok()?;
+pub(crate) fn live(document: &str) -> Option<Live> {
+    let v: Value = serde_json::from_str(document).ok()?;
     v.get("release")?.as_object()?;
-    let text = |v: &Value| v.as_str().filter(|s| !s.is_empty()).map(str::to_owned);
     Some(Live {
         release: text(&v["release"]["version"]),
         held: v["release"]["held"].as_bool().unwrap_or(false),
@@ -1377,9 +1409,9 @@ mod tests {
         let mut cache = TimeCache::from([
             (
                 "saved".into(),
-                (time, compile, None, None, Some("s".into())),
+                (time, compile, None, None, Some("s".into()), None),
             ),
-            ("expired".into(), (None, None, None, None, None)),
+            ("expired".into(), (None, None, None, None, None, None)),
         ]);
         enrich_rows(
             &mut rows,
@@ -1391,7 +1423,7 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(
             cache["saved"],
-            (time, compile, None, None, Some("s".into()))
+            (time, compile, None, None, Some("s".into()), None)
         );
     }
 
@@ -1643,6 +1675,25 @@ mod tests {
         assert_eq!(Part::ALL.map(|p| p as usize), [0, 1, 2, 3, 4, 5]);
         assert!(compile_times(b"").is_none());
         assert!(compile_times(b"{}\nnot json").is_none());
+    }
+
+    #[test]
+    fn index_and_hosted_history_preserve_each_runs_versions() {
+        let entry = crate::summary::IndexEntry {
+            id: "versioned".into(),
+            toolchain_version: Some("0.4.2".into()),
+            client_version: Some("0.2.7".into()),
+            ..Default::default()
+        };
+        let summary = serde_json::to_value(entry).unwrap();
+        let local = index_rows(&summary.to_string()).pop().unwrap();
+        let hosted = hosted_row(&serde_json::json!({"id":"versioned", "summary":summary})).unwrap();
+        for row in [local, hosted] {
+            assert_eq!(row.toolchain_version.as_deref(), Some("0.4.2"));
+            assert_eq!(row.client_version.as_deref(), Some("0.2.7"));
+        }
+        let old = hosted_row(&serde_json::json!({"id":"old"})).unwrap();
+        assert_eq!((old.toolchain_version, old.client_version), (None, None));
     }
 
     #[test]
