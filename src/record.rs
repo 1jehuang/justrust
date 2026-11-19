@@ -1502,8 +1502,8 @@ struct Tracked {
     last_cpu_ticks: u64,
 }
 
-fn sampled_tree_cpu_delta(
-    tree: &[procfs::ProcStat],
+fn sampled_tree_cpu_delta<'a>(
+    tree: impl IntoIterator<Item = &'a procfs::ProcStat>,
     tracked: &mut HashMap<(i32, u64), Tracked>,
 ) -> u64 {
     // Keep each process identity's last observation after it exits. Subtracting
@@ -1594,20 +1594,17 @@ fn sample_loop(
             .into_iter()
             .filter_map(procfs::read_stat)
             .collect();
-        let mut tree = tree_of(root, &all);
         if daemon.is_none() {
             daemon = std::fs::read_to_string(daemon_pid)
                 .ok()
                 .and_then(|s| s.trim().parse().ok());
         }
-        if let Some(d) = daemon {
-            tree.extend(tree_of(d, &all));
-        }
-        // Test binaries the pool runs are our children, not cargo's.
-        for p in crate::test_pool::live_pids() {
-            tree.extend(tree_of(p, &all));
-        }
-        let tree_delta_ticks = sampled_tree_cpu_delta(&tree, &mut tracked);
+        // Pool children and the daemon may overlap cargo's process tree.
+        let roots = std::iter::once(root)
+            .chain(daemon)
+            .chain(crate::test_pool::live_pids());
+        let (tree, in_tree) = process_forest(roots, &all);
+        let tree_delta_ticks = sampled_tree_cpu_delta(tree.iter().copied(), &mut tracked);
         let mut rss = 0u64;
         let mut rustc_procs = 0;
         for p in &tree {
@@ -1637,7 +1634,6 @@ fn sample_loop(
             }
             rss += p.rss_pages;
         }
-        let in_tree: std::collections::HashSet<i32> = tree.iter().map(|p| p.pid).collect();
         let foreign = all
             .iter()
             .filter(|p| p.comm == "rustc" && !in_tree.contains(&p.pid))
@@ -1719,35 +1715,44 @@ fn sample_loop(
     (samples, procs)
 }
 
-fn tree_of(root: i32, all: &[procfs::ProcStat]) -> Vec<procfs::ProcStat> {
-    let mut children: HashMap<i32, Vec<usize>> = HashMap::new();
-    for (i, s) in all.iter().enumerate() {
-        children.entry(s.ppid).or_default().push(i);
+fn process_forest(
+    roots: impl IntoIterator<Item = i32>,
+    all: &[procfs::ProcStat],
+) -> (Vec<&procfs::ProcStat>, std::collections::HashSet<i32>) {
+    let mut children: HashMap<i32, Vec<&procfs::ProcStat>> = HashMap::new();
+    let mut by_pid = HashMap::with_capacity(all.len());
+    for p in all {
+        children.entry(p.ppid).or_default().push(p);
+        // Use the first observation for root output and the last start time
+        // for creator validation, even if enumeration repeated a PID.
+        by_pid.entry(p.pid).or_insert((p, p.start_ticks)).1 = p.start_ticks;
     }
     let mut out = Vec::new();
-    if let Some(r) = all.iter().find(|s| s.pid == root) {
-        out.push(r.clone());
-    }
-    // Windows retains historical creator PIDs. Reuse can produce cycles
-    // or attach an older process to an unrelated new parent.
-    let mut seen = std::collections::HashSet::from([root]);
-    let starts: HashMap<i32, u64> = all.iter().map(|p| (p.pid, p.start_ticks)).collect();
-    let mut stack = vec![root];
-    while let Some(pid) = stack.pop() {
-        for &i in children.get(&pid).into_iter().flatten() {
-            let child = &all[i];
-            if starts
-                .get(&pid)
-                .is_some_and(|start| *start > child.start_ticks)
-                || !seen.insert(child.pid)
-            {
-                continue;
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = Vec::new();
+    for root in roots {
+        if !seen.insert(root) {
+            continue;
+        }
+        let observed = by_pid.get(&root);
+        if let Some(&(p, _)) = observed {
+            out.push(p);
+        }
+        // An exited root can still have live children in this snapshot.
+        stack.push((root, observed.map(|p| p.1)));
+        while let Some((pid, start)) = stack.pop() {
+            for &child in children.get(&pid).into_iter().flatten() {
+                // Windows retains historical creator PIDs. Reject reused
+                // parents before claiming membership for this root.
+                if start.is_some_and(|s| s > child.start_ticks) || !seen.insert(child.pid) {
+                    continue;
+                }
+                out.push(child);
+                stack.push((child.pid, Some(by_pid[&child.pid].1)));
             }
-            out.push(child.clone());
-            stack.push(child.pid);
         }
     }
-    out
+    (out, seen)
 }
 
 fn git_info() -> GitInfo {
@@ -2339,7 +2344,7 @@ mod tests {
                 tree_stat(2, 1, 11),
             ],
         ] {
-            let tree = tree_of(1, &all);
+            let tree = process_forest([1], &all).0;
             let pids: std::collections::HashSet<_> = tree.iter().map(|p| p.pid).collect();
             assert_eq!(tree.len(), pids.len());
             assert_eq!(
@@ -2369,12 +2374,64 @@ mod tests {
             tree_stat(6, 0, 1),
         ];
         assert_eq!(
-            tree_of(1, &all).iter().map(|p| p.pid).collect::<Vec<_>>(),
+            process_forest([1], &all)
+                .0
+                .iter()
+                .map(|p| p.pid)
+                .collect::<Vec<_>>(),
             [1, 4, 5]
         );
-        assert!(tree_of(99, &all).is_empty());
+        assert!(process_forest([99], &all).0.is_empty());
         // A root may exit between enumeration and reading process stats.
-        assert_eq!(tree_of(1, &[tree_stat(2, 1, 10)]).len(), 1);
+        assert_eq!(process_forest([1], &[tree_stat(2, 1, 10)]).0.len(), 1);
+    }
+
+    #[test]
+    fn forest_matches_first_seen_union_of_independent_walks() {
+        let all = [
+            tree_stat(2, 1, 20),
+            tree_stat(3, 2, 21),
+            tree_stat(4, 2, 21),
+            tree_stat(5, 3, 22),
+            tree_stat(6, 2, 10),
+            tree_stat(7, 6, 11),
+            tree_stat(8, 9, 12),
+            tree_stat(9, 8, 12),
+            tree_stat(10, 0, 1),
+        ];
+        // Independent per-root reference, scanning rows rather than using the index.
+        for a in 1..=10 {
+            for b in 1..=10 {
+                let roots = [a, b, a];
+                let mut expected = Vec::new();
+                for root in roots {
+                    let mut walk = vec![root];
+                    let mut visited = std::collections::HashSet::from([root]);
+                    if all.iter().any(|s| s.pid == root) {
+                        expected.push(root);
+                    }
+                    while let Some(pid) = walk.pop() {
+                        let parent = all.iter().find(|p| p.pid == pid);
+                        for p in all.iter().filter(|p| p.ppid == pid) {
+                            if parent.is_some_and(|s| s.start_ticks > p.start_ticks)
+                                || !visited.insert(p.pid)
+                            {
+                                continue;
+                            }
+                            expected.push(p.pid);
+                            walk.push(p.pid);
+                        }
+                    }
+                }
+                let mut unique = std::collections::HashSet::new();
+                expected.retain(|pid| unique.insert(*pid));
+                let (tree, members) = process_forest(roots, &all);
+                assert_eq!(tree.iter().map(|p| p.pid).collect::<Vec<_>>(), expected);
+                for p in &all {
+                    assert_eq!(members.contains(&p.pid), unique.contains(&p.pid));
+                }
+            }
+        }
     }
 
     #[test]
