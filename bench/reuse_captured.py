@@ -98,10 +98,35 @@ for up in files:
             b['unknown'] += cpu; why[('unknown', 'compiled unit without reuse ledger')] += cpu
             continue
         warm = any(x['outcome'] == 'loaded' for x in r)
+        sess = next((x['outcome'] for x in r if x['query'] == '<session>'), None)
+        sib = any(x['query'] == '<sibling_state>' for x in r)
+        native = any(x['outcome'].startswith('loaded_') for x in r)
+        if sess:
+            warm = sess == 'warm'
         led = 0.0
         for x in r:
-            o, t = x['outcome'], x['secs']; led += t
+            o, t, q = x['outcome'], x['secs'], x['query']
+            if q == '<cgu>' or q == '<session>' or q == '<sibling_state>':
+                continue
+            if q == '<cgu_avoided>':
+                if o == 'measured':
+                    b['actual'] += t; ev['cgu reuse, measured CPU'] += x['count']
+                else:
+                    ev['cgu reuse, unmeasured'] += x['count']
+                continue
+            if q in ('<cgu_cpu>', '<link>'):
+                led += t
+                b['necessary'] += t; why[('necessary', f'{q} {o}')] += t
+                continue
+            if o == 'loaded_avoided':
+                b['actual'] += t; ev['load credited from crate cost history'] += x['count']; continue
+            if o == 'loaded_unmeasured':
+                ev['load without cost history'] += x['count']; continue
+            led += t
             if o == 'loaded':
+                if native:
+                    b['necessary'] += t; why[('necessary', 'cache load cost')] += t
+                    continue
                 m = mean(x['query'])
                 if m is None:
                     why[('unknown', 'load of query never seen executing')] += 0
@@ -109,18 +134,36 @@ for up in files:
                 else:
                     b['actual'] += m * x['count']; ev['loaded, avoided CPU est. from mean execution'] += x['count']
                 b['necessary'] += t; why[('necessary', 'cache load cost')] += t
-            elif o in ('green_recompute', 'same'):
+            elif o in ('green_recompute', 'same', 'eval_always_same'):
                 b['missed'] += t; why[('missed', o)] += t
-            elif o == 'changed':
+            elif o in ('changed', 'eval_always_changed'):
                 b['necessary'] += t; why[('necessary', 'changed')] += t
             elif o == 'new':
-                c = 'necessary' if warm else 'unknown'
-                b[c] += t; why[(c, 'new (warm session)' if warm else 'new (cold session: prior state may have existed elsewhere)')] += t
+                if warm or (sess and not sib):
+                    c, rs = 'necessary', 'new (warm session)' if warm else f'new ({sess}, no sibling state)'
+                elif sib:
+                    c, rs = 'missed', 'new (cold beside finalized sibling state)'
+                else:
+                    c, rs = 'unknown', 'new (cold session: prior state may have existed elsewhere)'
+                b[c] += t; why[(c, rs)] += t
             else:  # nohash, eval_always
                 b['unknown'] += t; why[('unknown', o)] += t
         rest = max(cpu - led, 0.0)
         b['unknown'] += rest; why[('unknown', 'CPU outside query ledger (LLVM threads, link, metadata)')] += rest
     fresh = (s.get('units') or {}).get('fresh') or 0
+    fp = up.replace('units.jsonl', 'fresh.jsonl')
+    if os.path.exists(fp):
+        for l in open(fp):
+            try:
+                x = json.loads(l)
+            except Exception:
+                continue
+            fresh -= 1
+            if x.get('cpu_secs') is not None:
+                b['actual'] += x['cpu_secs']; ev[f"cargo fresh, cost basis {x.get('basis')}"] += 1
+            else:
+                ev['cargo fresh, no cost sidecar'] += 1
+        fresh = max(fresh, 0)
     builds.append((rid, s, b, why, ev, fresh))
 
 def cap(b):

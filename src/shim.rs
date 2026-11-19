@@ -561,6 +561,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             unit.depcache = "local".into();
             unit.depcache_saved_secs = Some(hit.saved_secs);
             unit.cache_hit_overhead_secs = Some(hit_started.elapsed().as_secs_f64());
+            write_unit_cost(args, hit.saved_secs, "wall");
             if let Ok(line) = serde_json::to_string(&unit) {
                 let _ = paths::append_line(&run_dir.join("units.jsonl"), &line);
             }
@@ -607,6 +608,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             unit.depcache_saved_secs = Some(hit.saved_secs);
             let _ = crate::buildscript::wrap(&plan.out_dir, &plan.crate_name, &plan.extra);
             unit.cache_hit_overhead_secs = Some(hit_started.elapsed().as_secs_f64());
+            write_unit_cost(args, hit.saved_secs, "wall");
             if let Ok(line) = serde_json::to_string(&unit) {
                 let _ = paths::append_line(&run_dir.join("units.jsonl"), &line);
             }
@@ -671,6 +673,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
         unit.keyed_env = crate::depcache::user_keyed_env(&env);
         let (reason, ticket) = why.unwrap_or_default();
         unit.depcache_why = match exit {
+            0 if reason.is_empty() => "unexplained: no miss ledger for this toolchain".into(),
             0 => reason,
             _ => "compile-failed".into(),
         };
@@ -749,10 +752,59 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             let _ = std::fs::remove_file(&reuse_path);
         }
     }
+    if exit == 0 {
+        write_unit_cost(args, user + sys, "cpu");
+    }
     if let Ok(line) = serde_json::to_string(&unit) {
         let _ = paths::append_line(&run_dir.join("units.jsonl"), &line);
     }
     Some(exit)
+}
+
+/// Leave what this unit cost beside its outputs
+/// (`<out-dir>/.jr-cost-<crate><extra-filename>`: `<secs> <basis>`), so
+/// jr-cargo can credit the CPU a later fresh (skipped) build of it avoided.
+/// `cpu` is measured compile CPU; on a cache hit the cost stays the compile
+/// CPU already recorded there, else the original wall time (`wall`).
+fn write_unit_cost(args: &[OsString], secs: f64, basis: &str) {
+    let Some(path) = unit_cost_path(args) else {
+        return;
+    };
+    if basis != "cpu"
+        && std::fs::read_to_string(&path).is_ok_and(|t| t.trim_end().ends_with(" cpu"))
+    {
+        return;
+    }
+    if secs.is_finite() {
+        let _ = std::fs::write(&path, format!("{secs:.6} {basis}\n"));
+    }
+}
+
+fn unit_cost_path(args: &[OsString]) -> Option<PathBuf> {
+    let (mut out, mut name, mut extra) = (None, None, String::new());
+    let mut it = args.iter().map(|a| a.to_str());
+    while let Some(a) = it.next() {
+        let a = a?;
+        match a {
+            "--out-dir" => out = it.next().flatten().map(PathBuf::from),
+            "--crate-name" => name = it.next().flatten().map(str::to_owned),
+            "-C" => {
+                if let Some(e) = it
+                    .next()
+                    .flatten()
+                    .and_then(|v| v.strip_prefix("extra-filename="))
+                {
+                    extra = e.to_owned();
+                }
+            }
+            _ => {
+                if let Some(e) = a.strip_prefix("-Cextra-filename=") {
+                    extra = e.to_owned();
+                }
+            }
+        }
+    }
+    Some(out?.join(format!(".jr-cost-{}{extra}", name?)))
 }
 
 fn forward_stderr(
@@ -894,6 +946,41 @@ pub fn invoked_as_shim(argv0: &OsStr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unit_cost_sits_beside_outputs() {
+        let a = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
+        assert_eq!(
+            unit_cost_path(&a(&[
+                "--crate-name",
+                "foo",
+                "--out-dir",
+                "/t/deps",
+                "-C",
+                "extra-filename=-ab12"
+            ])),
+            Some(PathBuf::from("/t/deps/.jr-cost-foo-ab12"))
+        );
+        assert_eq!(
+            unit_cost_path(&a(&[
+                "--crate-name",
+                "foo",
+                "-Cextra-filename=-cd",
+                "--out-dir",
+                "/o"
+            ])),
+            Some(PathBuf::from("/o/.jr-cost-foo-cd"))
+        );
+        assert_eq!(unit_cost_path(&a(&["--crate-name", "foo"])), None);
+        let d = std::env::temp_dir().join(format!("jr-unit-cost-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let args = a(&["--crate-name", "x", "--out-dir", d.to_str().unwrap()]);
+        write_unit_cost(&args, 2.5, "cpu");
+        write_unit_cost(&args, 9.0, "wall");
+        let t = std::fs::read_to_string(d.join(".jr-cost-x")).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(t, "2.500000 cpu\n", "a hit keeps the measured CPU");
+    }
 
     #[test]
     fn slot_incremental_maps_to_shared_dir() {

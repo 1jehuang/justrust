@@ -65,10 +65,18 @@ pub enum Class {
 pub fn class(outcome: &str) -> Class {
     match outcome {
         "loaded" => Class::Reused,
-        "same" | "green_recompute" => Class::Avoidable,
-        "changed" | "new" => Class::Necessary,
+        "same" | "green_recompute" | "eval_always_same" => Class::Avoidable,
+        "changed" | "new" | "eval_always_changed" => Class::Necessary,
         _ => Class::Opaque,
     }
+}
+
+/// Rows that are evidence about the unit, not query execution time:
+/// `<cgu>` counts, `<session>`, `<sibling_state>`, `<cgu_cpu>`,
+/// `<cgu_avoided>`, `<link>`, and the `loaded_avoided`/`loaded_unmeasured`
+/// credit of loads (jr-rustc). Kept out of the query time classes.
+pub fn is_evidence(r: &Row) -> bool {
+    r.query.starts_with('<') || r.outcome.starts_with("loaded_")
 }
 
 /// A unit with a ledger that loaded nothing from incremental state: a first
@@ -108,6 +116,9 @@ impl Totals {
                 }
                 continue;
             }
+            if is_evidence(r) {
+                continue;
+            }
             match class(&r.outcome) {
                 Class::Reused => {
                     self.reused_secs += r.secs;
@@ -136,7 +147,7 @@ impl Totals {
             self.cold_units += 1;
             self.cold_secs += rows
                 .iter()
-                .filter(|r| r.query != "<cgu>" && class(&r.outcome) != Class::Reused)
+                .filter(|r| !is_evidence(r) && class(&r.outcome) != Class::Reused)
                 .map(|r| r.secs)
                 .sum::<f64>();
         }
@@ -271,7 +282,7 @@ fn by_query<'a>(rows: impl Iterator<Item = &'a [Row]>) -> Vec<QueryTotals> {
     let mut m: BTreeMap<&str, QueryTotals> = BTreeMap::new();
     for rs in rows {
         for r in rs {
-            if r.query == "<cgu>" {
+            if is_evidence(r) {
                 continue;
             }
             let q = m.entry(r.query.as_str()).or_insert_with(|| QueryTotals {

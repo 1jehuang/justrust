@@ -33,6 +33,7 @@ pub const RUN_FILES: &[&str] = &[
     "samples.jsonl",
     "processes.json",
     "scripts.jsonl",
+    "fresh.jsonl",
 ];
 /// Run metadata, not a Cargo environment input: caller Unix file creation mask.
 pub const CLIENT_UMASK: &str = "JUSTRUST_CLIENT_UMASK";
