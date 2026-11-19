@@ -1,0 +1,12 @@
+[package]
+name = "lazy-elf-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+sha2 = "0.10"
+object = { version = "=0.37.3", default-features = false, features = ["read_core", "elf", "std", "unaligned"] }
