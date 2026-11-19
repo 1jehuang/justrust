@@ -371,9 +371,7 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
         raise ValueError("bench: identity demand cannot reuse unaudited resumed samples")
     gen._locked()
     pts, info = gen.sample(seed, points)
-    plans = [gen.plan(p, seed) for p in pts]
-    if only:
-        plans = [p for p in plans if p.point.i in only]
+    plans = [gen.plan(p, seed) for p in pts if not only or p.i in only]
     binding = checkpoint_identity(stacks, quiet_wait, only, retry_noisy) if partial else None
     if binding is not None and retry_infra:
         binding["retry_infra"] = retry_infra
