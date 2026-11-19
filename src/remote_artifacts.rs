@@ -30,6 +30,9 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
+#[path = "remote_artifact_prediction.rs"]
+mod prediction;
+
 /// Hidden subcommand the machine runs (`justrust __artifacts`).
 pub const ARG: &str = "__artifacts";
 /// Clock slack between this machine and the build machine.
@@ -50,6 +53,9 @@ struct Request {
     /// stream (`Frame::File::base`). Older hosts ignore it.
     #[serde(default)]
     anchors: bool,
+    /// Client understands aligned 8 KiB residual blocks with an output digest.
+    #[serde(default)]
+    prediction_v1: bool,
 }
 
 /// An artifact the client already has.
@@ -79,6 +85,8 @@ enum Frame {
         mode: u32,
         size: u64,
         patch: bool,
+        #[serde(default)]
+        prediction_v1: bool,
         len: u64,
         /// Delta base: an earlier file of this stream (its name), when there
         /// is no previous copy of this one. Test binaries of one crate share
@@ -689,7 +697,11 @@ fn serve_selected_dir(
         };
         // Older zstd versions and memory-constrained hosts keep the existing
         // compatible encoder. No frame is emitted until compression succeeds.
-        if !encode(dense)? && (!dense || !encode(false)?) {
+        let predicted = dense
+            && req.prediction_v1
+            && m.len() <= prediction::MAX
+            && prediction::compress(&sent, &snap, m.len(), &zst).is_ok();
+        if !predicted && !encode(dense)? && (!dense || !encode(false)?) {
             bail!("zstd failed on {name}");
         }
         let data = std::fs::read(&zst)?;
@@ -702,6 +714,7 @@ fn serve_selected_dir(
                 mode: crate::sys::mode(&m, &path) & 0o7777,
                 size: m.len(),
                 patch,
+                prediction_v1: predicted,
                 len: data.len() as u64,
                 base: base.map(|(n, _, _)| n.clone()),
             },
@@ -1051,10 +1064,16 @@ fn apply(
         name,
         mode,
         size,
-        from,
+        from.map(Basis::Zstd),
         data.take(data.len() as u64),
         validation,
     )
+}
+
+#[derive(Clone, Copy)]
+enum Basis<'a> {
+    Zstd(&'a Path),
+    Predicted(&'a Path),
 }
 
 fn apply_frame(
@@ -1062,7 +1081,7 @@ fn apply_frame(
     name: &str,
     mode: u32,
     size: u64,
-    from: Option<&Path>,
+    from: Option<Basis<'_>>,
     mut frame: std::io::Take<impl Read>,
     validation: Validation<'_>,
 ) -> Result<PathBuf> {
@@ -1078,34 +1097,46 @@ fn apply_frame(
         bail!("selected test destination escapes target directory");
     }
     let file = dst.file_name().context("no file name")?.to_string_lossy();
-    let tmp = parent.join(format!(".{file}.jrtmp"));
+    let scratch = matches!(from, Some(Basis::Predicted(_)))
+        .then(|| TestScratch::new(parent))
+        .transpose()?;
+    let tmp = scratch.as_ref().map_or_else(
+        || parent.join(format!(".{file}.jrtmp")),
+        |s| s.0.join("output"),
+    );
     let mut c = Command::new("zstd");
     c.args(["-q", "-d", "-f", "--long=31"]);
-    if let Some(from) = from {
+    if let Some(Basis::Zstd(from)) = from {
         c.arg(format!("--patch-from={}", from.display()));
     }
     let res = (|| {
-        let mut child = c
-            .arg("-")
-            .arg("-o")
-            .arg(&tmp)
-            .stdin(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("zstd")?;
-        // Never consume bytes from the following frame. Drop stdin before waiting,
-        // including on a short read, and reap the decoder before touching its output.
-        let copied = std::io::copy(&mut frame, &mut child.stdin.take().expect("piped stdin"));
-        let status = child.wait().context("zstd")?;
-        if !status.success() {
-            bail!(
-                "could not decode {name}{}",
-                if patch { " (delta)" } else { "" }
-            );
-        }
-        copied.context("copy compressed artifact frame")?;
-        if frame.limit() != 0 {
-            bail!("truncated compressed artifact frame for {name}");
+        if let Some(Basis::Predicted(old)) = from {
+            let file = std::fs::File::create_new(&tmp)?;
+            prediction::expand(old, size, frame, file)
+                .context("could not decode artifact (delta)")?;
+        } else {
+            let mut child = c
+                .arg("-")
+                .arg("-o")
+                .arg(&tmp)
+                .stdin(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .context("zstd")?;
+            // Never consume bytes from the following frame. Drop stdin before waiting,
+            // including on a short read, and reap the decoder before touching its output.
+            let copied = std::io::copy(&mut frame, &mut child.stdin.take().expect("piped stdin"));
+            let status = child.wait().context("zstd")?;
+            if !status.success() {
+                bail!(
+                    "could not decode {name}{}",
+                    if patch { " (delta)" } else { "" }
+                );
+            }
+            copied.context("copy compressed artifact frame")?;
+            if frame.limit() != 0 {
+                bail!("truncated compressed artifact frame for {name}");
+            }
         }
         let got = std::fs::metadata(&tmp)?.len();
         if got != size {
@@ -1303,6 +1334,8 @@ fn fetch_inner(
         start,
         have,
         test_run: test_run.map(str::to_owned),
+        prediction_v1: !FORCE_FULL.load(std::sync::atomic::Ordering::Relaxed)
+            && crate::procfs::meminfo().is_some_and(|mem| mem.available_mb >= 1024),
         anchors: !FORCE_FULL.load(std::sync::atomic::Ordering::Relaxed),
     };
     let command = artifact_command(std::env::var("JUSTRUST_TOOLCHAIN").ok().as_deref());
@@ -1399,6 +1432,7 @@ fn fetch_inner(
                     mode,
                     size,
                     patch,
+                    prediction_v1,
                     len,
                     base,
                 } => {
@@ -1438,12 +1472,26 @@ fn fetch_inner(
                         (None, true) => Some(dir.join(&name)),
                         (None, false) => None,
                     };
+                    if prediction_v1
+                        && (!req.prediction_v1
+                            || !patch
+                            || base.is_some()
+                            || !req.have.iter().any(|h| h.name == name && h.id.is_some()))
+                    {
+                        bail!("unnegotiated or unoffered artifact prediction (delta)");
+                    }
                     let dst = apply_frame(
                         &dir,
                         &name,
                         mode,
                         size,
-                        from.as_deref(),
+                        from.as_deref().map(|p| {
+                            if prediction_v1 {
+                                Basis::Predicted(p)
+                            } else {
+                                Basis::Zstd(p)
+                            }
+                        }),
                         (&mut *r).take(len),
                         validation,
                     )?;
@@ -2190,6 +2238,7 @@ mod tests {
                     + 60.0,
                 have,
                 test_run: None,
+                prediction_v1: false,
                 anchors: true,
             };
             let mut out = Vec::new();
@@ -2209,6 +2258,7 @@ mod tests {
                         mode,
                         size,
                         patch,
+                        prediction_v1: _,
                         len,
                         base,
                     } => {
@@ -2311,6 +2361,7 @@ mod tests {
             start: 0.0,
             have: vec![],
             test_run: None,
+            prediction_v1: false,
             anchors: true,
         };
         let mut out = Vec::new();

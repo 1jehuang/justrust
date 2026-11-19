@@ -48,6 +48,119 @@ fn streamed_frame_stops_at_next_header_and_rejects_short_payload_before_install(
 }
 
 #[test]
+fn prediction_reconstructs_exactly_and_rejects_a_changed_base_before_install() {
+    if !available() {
+        return;
+    }
+    let mut bytes: Vec<u8> = (0..40_001usize)
+        .map(|i| ((i.wrapping_mul(31) ^ (i >> 5)) & 255) as u8)
+        .collect();
+    let fixture = Fixture::new("prediction-round-trip", &bytes);
+    let old = fixture.root.join("old");
+    let new = fixture.root.join("new");
+    let wire = fixture.root.join("wire.zst");
+    std::fs::write(&old, &bytes).unwrap();
+    bytes.splice(8192..8192, [7, 9, 11]);
+    bytes[30_000] ^= 0x81;
+    std::fs::write(&new, &bytes).unwrap();
+    prediction::compress(&old, &new, bytes.len() as u64, &wire).unwrap();
+    let mut data = std::fs::read(&wire).unwrap();
+    let len = data.len() as u64;
+    data.extend_from_slice(b"next frame");
+    let apply_prediction = |input: &mut &[u8]| {
+        apply_frame(
+            &fixture.root,
+            "out",
+            0o644,
+            bytes.len() as u64,
+            Some(Basis::Predicted(&old)),
+            input.take(len),
+            Validation::NativeBuild,
+        )
+    };
+    let mut input = data.as_slice();
+    let dst = apply_prediction(&mut input).unwrap();
+    assert_eq!(input, b"next frame");
+    assert_eq!(std::fs::read(&dst).unwrap(), bytes);
+    std::fs::write(&old, vec![0; 40_001]).unwrap();
+    std::fs::write(&dst, b"previous valid output").unwrap();
+    assert!(is_delta_failure(
+        &apply_prediction(&mut data.as_slice()).unwrap_err()
+    ));
+    assert_eq!(std::fs::read(&dst).unwrap(), b"previous valid output");
+}
+
+#[test]
+fn legacy_request_and_frame_do_not_negotiate_prediction() {
+    let req: Request =
+        serde_json::from_str(r#"{"cwd":"/p","args":[],"start":0,"have":[],"anchors":true}"#)
+            .unwrap();
+    assert!(!req.prediction_v1);
+    let frame: Frame = serde_json::from_str(
+        r#"{"t":"File","name":"x","id":"i","mode":420,"size":1,"patch":true,"len":1}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        frame,
+        Frame::File {
+            prediction_v1: false,
+            ..
+        }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "uses a 256 MiB source and basis to exercise the real encoder-selection threshold"]
+fn large_negotiated_prediction_reaches_verified_install() {
+    const SIZE: u64 = 256 << 20;
+    let mut f = Fixture::new("negotiated-large", b"before");
+    f.req.prediction_v1 = true;
+    let src = f.remote.join("app");
+    let basis = f.root.join("basis");
+    for p in [&src, &f.saved] {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(p)
+            .unwrap()
+            .set_len(SIZE)
+            .unwrap();
+    }
+    std::fs::copy(&f.saved, &basis).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&src)
+        .unwrap()
+        .write_all(b"after!")
+        .unwrap();
+    let frames = f.frames();
+    let (
+        Frame::File {
+            prediction_v1: true,
+            patch: true,
+            base: None,
+            size,
+            ..
+        },
+        bytes,
+    ) = &frames[1]
+    else {
+        panic!("expected negotiated prediction (requires a host with at least 1.5 GiB available)");
+    };
+    let dst = apply_frame(
+        &f.root,
+        "installed",
+        0o755,
+        *size,
+        Some(Basis::Predicted(&basis)),
+        bytes.as_slice().take(bytes.len() as u64),
+        Validation::NativeBuild,
+    )
+    .unwrap();
+    assert!(identical_artifact(&src, &dst).unwrap());
+}
+
+#[test]
 fn exclusive_binary_selection_is_conservative() {
     let args = |values: &[&str]| values.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     assert_eq!(
@@ -257,6 +370,7 @@ impl Fixture {
                 mtime: 0.0,
             }],
             test_run: None,
+            prediction_v1: false,
             anchors: false,
         };
         Self {
