@@ -184,17 +184,18 @@ def rs_files(p: Pkg, ws: Workspace) -> list[Path]:
     """Source files of a package (not of packages nested inside it). Build
     scripts are left out: a probe there fails the script and hides every
     other probe. Examples and benches are not built by the commands agents run."""
-    nested = [q.dir for q in ws.pkgs.values() if q.dir != p.dir and p.dir in q.dir.parents]
+    nested = {q.dir for q in ws.pkgs.values() if q.dir != p.dir and p.dir in q.dir.parents}
     skip = {Path(t["src_path"]) for t in p.targets if set(t["kind"]) & {"custom-build", "example", "bench"}}
+    ignored = {"target", "examples", "benches"}
     out = []
-    for f in sorted(p.dir.rglob("*.rs")):
-        parts = f.relative_to(p.dir).parts
-        if "target" in parts or "examples" in parts or "benches" in parts or f in skip:
-            continue
-        if any(n in f.parents for n in nested):
-            continue
-        out.append(f)
-    return out
+    for base, dirs, files in os.walk(p.dir, followlinks=False):
+        root = Path(base)
+        # rglob matches directory and symlink names too, even when it does
+        # not descend into them. Keep those matches (and later read errors).
+        out.extend(f for name in dirs + files if name.endswith(".rs")
+                   and (f := root / name) not in skip)
+        dirs[:] = [name for name in dirs if name not in ignored and root / name not in nested]
+    return sorted(out)
 
 
 def candidates(f: Path) -> list[int]:
