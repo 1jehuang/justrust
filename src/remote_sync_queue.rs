@@ -6,6 +6,7 @@ use std::sync::{LockResult, Mutex, MutexGuard, TryLockResult};
 
 pub(super) struct SyncQueue<T> {
     inner: Mutex<T>,
+    foreground_epoch: AtomicUsize,
     foreground_waiters: AtomicUsize,
 }
 
@@ -13,6 +14,7 @@ impl<T> SyncQueue<T> {
     pub(super) fn new(value: T) -> Self {
         Self {
             inner: Mutex::new(value),
+            foreground_epoch: AtomicUsize::new(0),
             foreground_waiters: AtomicUsize::new(0),
         }
     }
@@ -41,9 +43,14 @@ impl<T> SyncQueue<T> {
         Ok(guard)
     }
 
+    pub(super) fn foreground_epoch(&self) -> usize {
+        self.foreground_epoch.load(Ordering::SeqCst)
+    }
+
     pub(super) fn foreground_lock(&self) -> LockResult<MutexGuard<'_, T>> {
         self.foreground_waiters.fetch_add(1, Ordering::SeqCst);
         let guard = self.inner.lock();
+        self.foreground_epoch.fetch_add(1, Ordering::SeqCst);
         self.foreground_waiters.fetch_sub(1, Ordering::SeqCst);
         guard
     }
@@ -165,6 +172,48 @@ mod tests {
             control_wait.as_secs_f64() * 1000.0,
             priority_wait.as_secs_f64() * 1000.0,
         );
+    }
+
+    #[test]
+    #[ignore = "diagnostic: scans the current workspace twice"]
+    fn watcher_scan_contention() {
+        for speculative in [false, true] {
+            let queue = Arc::new(SyncQueue::new(()));
+            let guard = queue.background_lock().unwrap();
+            let epoch = queue.foreground_epoch();
+            let other = queue.clone();
+            let foreground = std::thread::spawn(move || {
+                let start = std::time::Instant::now();
+                let _guard = other.foreground_lock().unwrap();
+                start.elapsed()
+            });
+            while queue.foreground_waiters.load(Ordering::SeqCst) == 0 {
+                std::thread::yield_now();
+            }
+            let guard = if speculative {
+                drop(guard);
+                None
+            } else {
+                Some(guard)
+            };
+            let scan = crate::remote_sync::scan(&std::env::current_dir().unwrap()).unwrap();
+            if !speculative {
+                assert_eq!(epoch, queue.foreground_epoch());
+            }
+            drop(guard);
+            let wait = foreground.join().unwrap();
+            let _commit = queue.background_lock().unwrap();
+            assert_ne!(
+                epoch,
+                queue.foreground_epoch(),
+                "stale scan must be rejected"
+            );
+            eprintln!(
+                "watcher scan contention speculative={speculative} paths={} foreground_wait_ms={:.3}",
+                scan.files.len(),
+                wait.as_secs_f64() * 1000.0
+            );
+        }
     }
 
     #[test]

@@ -754,22 +754,28 @@ fn push_loop(d: &Daemon, rx: Receiver<PathBuf>) {
         if d.draining.load(Ordering::SeqCst) {
             continue;
         }
-        let roots: Vec<PathBuf> = {
+        let (roots, mut epoch, mut observed_link) = {
             let Ok(st) = d.sync.background_lock() else {
                 return;
             };
             if !st.link.as_ref().is_some_and(|l| l.alive()) {
                 continue;
             }
-            st.roots
+            let roots: Vec<PathBuf> = st
+                .roots
                 .keys()
                 .filter(|r| {
                     !st.roots[*r].needs_full_sync && touched.iter().any(|t| t.starts_with(r))
                 })
                 .cloned()
-                .collect()
+                .collect();
+            (roots, d.sync.foreground_epoch(), st.link.clone().unwrap())
         };
         for r in roots {
+            // Only discovery is speculative. No mirror operation runs unlocked.
+            let total = Instant::now();
+            let scan = remote_sync::scan(&r);
+            let scanned = total.elapsed();
             // One complete root remains atomic. Yield the mirror lock between
             // roots so a queued foreground build need not wait for the batch.
             let Ok(mut st) = d.sync.background_lock() else {
@@ -790,7 +796,20 @@ fn push_loop(d: &Daemon, rx: Receiver<PathBuf>) {
                 log(&format!("forgot {} (deleted)", r.display()));
                 continue;
             }
-            if let Err(e) = push_root(d, &mut st, &r) {
+            let result = if epoch == d.sync.foreground_epoch()
+                && st
+                    .link
+                    .as_ref()
+                    .is_some_and(|link| Arc::ptr_eq(link, &observed_link))
+            {
+                scan.and_then(|scan| push_scanned(d, &mut st, &r, scan, total, scanned))
+            } else {
+                // Never compare an older scan to a newer foreground manifest.
+                epoch = d.sync.foreground_epoch();
+                observed_link = st.link.clone().unwrap();
+                push_root(d, &mut st, &r)
+            };
+            if let Err(e) = result {
                 log(&format!("push {}: {e:#}", r.display()));
                 st.source_sync_failed(&r);
                 if st.link.as_ref().is_some_and(|l| !l.alive()) {
@@ -1584,12 +1603,24 @@ fn snapshot_hashes(
 fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
     let total = Instant::now();
     let scan = remote_sync::scan(root)?;
-    let scanned = total.elapsed();
+    push_scanned(d, st, root, scan, total, total.elapsed())
+}
+
+fn push_scanned(
+    d: &Daemon,
+    st: &mut Sync,
+    root: &Path,
+    scan: remote_sync::Scan,
+    total: Instant,
+    scanned: Duration,
+) -> Result<usize> {
+    let diff_started = Instant::now();
     let mut new = scan.files;
     let diff = {
         let r = st.roots.get(root).context("unknown root")?;
         remote_sync::diff(&r.manifest, &new)
     };
+    let comparison = diff_started.elapsed();
     let compared = total.elapsed();
     let link = st.link.clone().context("not connected")?;
     let mut bulk = false;
@@ -1689,7 +1720,7 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
             scanned.as_secs_f64(),
             new.len(),
             scan.oversized.len(),
-            (compared - scanned).as_secs_f64(),
+            comparison.as_secs_f64(),
             (sent - compared).as_secs_f64(),
             diff.changed.len(),
             diff.deleted.len(),
