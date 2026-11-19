@@ -318,9 +318,24 @@ fn cost_of(root: &Path, base: &str, key: &str) -> Option<(u64, u64)> {
         }
     }
     let text = std::fs::read_to_string(&p).ok()?;
-    let line = text.lines().find(|l| l.starts_with(key))?;
+    let line = cost_line(&text, key)?;
     let mut it = line.split(' ').skip(1);
     Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+}
+
+// Search for a row boundary and prefix together. Do not assume the table is
+// sorted or unique. Keep whole-file UTF-8 validation in the caller.
+fn cost_line<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    if text.len() < 4096 || key.is_empty() || key.contains(['\r', '\n']) {
+        return text.lines().find(|line| line.starts_with(key));
+    }
+    let start = if text.starts_with(key) {
+        0
+    } else {
+        let prefix = format!("\n{key}");
+        memchr::memmem::find(text.as_bytes(), prefix.as_bytes())? + 1
+    };
+    text[start..].lines().next()
 }
 
 fn rate_path(root: &Path) -> PathBuf {
@@ -936,6 +951,22 @@ mod tests {
         assert!(fetch_from(&base, &p5, &mut Vec::new()).is_none());
         assert!(p5.restore(&mut Vec::new()).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cost_lookup_matches_first_line_prefix() {
+        for pad in [0, 5000] {
+            let text = format!(
+                "z 3 4\n{}xkey 4 5\nkeylong bad 9\r\nkey 7 8\nλ 1 2",
+                "x".repeat(pad)
+            );
+            for key in ["z", "key", "keylong", "λ", "", "\n", "9\r", "missing"] {
+                assert_eq!(
+                    cost_line(&text, key),
+                    text.lines().find(|l| l.starts_with(key))
+                );
+            }
+        }
     }
 
     #[test]
