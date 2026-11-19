@@ -33,8 +33,27 @@ pub fn cli() -> Command {
 }
 
 pub fn exec(gctx: &mut GlobalContext, args: &ArgMatches) -> CliResult {
-    let ws = args.workspace(gctx)?;
+    // The justrust client also supports stock Cargo, which ignores this private
+    // request and emits the full v1 document with the same directory fields.
+    if args.flag("no-deps")
+        && std::env::var_os("JUSTRUST_METADATA_DIRECTORIES_V1").as_deref()
+            == Some(std::ffi::OsStr::new("1"))
+    {
+        let (target, build) =
+            cargo::workspace::Workspace::output_directories(&args.root_manifest(gctx)?, gctx)?;
+        #[derive(serde::Serialize)]
+        struct Directories {
+            target_directory: std::path::PathBuf,
+            build_directory: std::path::PathBuf,
+        }
+        gctx.shell().print_json(&Directories {
+            target_directory: target,
+            build_directory: build,
+        })?;
+        return Ok(());
+    }
 
+    let ws = args.workspace(gctx)?;
     let version = match args.get_one::<String>("format-version") {
         None => {
             gctx.shell().warn(

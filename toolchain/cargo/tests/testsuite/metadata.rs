@@ -4254,6 +4254,36 @@ fn dep_kinds_workspace() {
 }
 
 #[cargo_test]
+fn private_directory_lookup_matches_configured_member_metadata() -> anyhow::Result<()> {
+    let p = project()
+        .file("Cargo.toml", "[workspace]\nmembers = ['member']\n")
+        .file("member/Cargo.toml", &basic_lib_manifest("member"))
+        .file("member/src/lib.rs", "")
+        .file(
+            ".cargo/config.toml",
+            "[build]\nbuild-dir = '{workspace-root}/separate'\n",
+        )
+        .build();
+    let args = "metadata --offline --format-version 1 --no-deps --manifest-path member/Cargo.toml";
+    let run = |compact| -> anyhow::Result<serde_json::Value> {
+        let mut command = p.cargo(args);
+        command.env("CARGO_TARGET_DIR", "custom-target");
+        if compact {
+            command.env("JUSTRUST_METADATA_DIRECTORIES_V1", "1");
+        }
+        Ok(serde_json::from_slice(&command.exec_with_output()?.stdout)?)
+    };
+    let full = run(false)?;
+    assert!(full["packages"].is_array());
+    assert_ne!(full["target_directory"], full["build_directory"]);
+    assert_eq!(
+        run(true)?,
+        json!({"target_directory": full["target_directory"], "build_directory": full["build_directory"]})
+    );
+    Ok(())
+}
+
+#[cargo_test]
 fn build_dir() {
     let p = project()
         .file("src/main.rs", r#"fn main() { println!("Hello, World!") }"#)

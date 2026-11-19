@@ -218,6 +218,19 @@ impl<'gctx> Workspace<'gctx> {
     /// root and all member packages. It will then validate the workspace
     /// before returning it, so `Ok` is only returned for valid workspaces.
     pub fn new(manifest_path: &Path, gctx: &'gctx GlobalContext) -> CargoResult<Workspace<'gctx>> {
+        let mut ws = Self::directory_workspace(manifest_path, gctx)?;
+        ws.custom_metadata = ws
+            .load_workspace_config()?
+            .and_then(|cfg| cfg.custom_metadata);
+        ws.find_members()?;
+        ws.set_resolve_behavior()?;
+        ws.validate()?;
+        Ok(ws)
+    }
+
+    // Directory resolution precedes workspace member enumeration. Share that
+    // exact prefix with the private lookup, without exposing a partial Workspace.
+    fn directory_workspace(manifest_path: &Path, gctx: &'gctx GlobalContext) -> CargoResult<Self> {
         let mut ws = Workspace::new_default(manifest_path.to_path_buf(), gctx);
 
         if manifest_path.is_relative() {
@@ -231,14 +244,22 @@ impl<'gctx> Workspace<'gctx> {
 
         ws.target_dir = gctx.target_dir()?;
         ws.build_dir = gctx.build_dir(ws.root_manifest())?;
-
-        ws.custom_metadata = ws
-            .load_workspace_config()?
-            .and_then(|cfg| cfg.custom_metadata);
-        ws.find_members()?;
-        ws.set_resolve_behavior()?;
-        ws.validate()?;
         Ok(ws)
+    }
+
+    /// Resolve output directories without loading unrelated workspace members.
+    pub fn output_directories(
+        manifest_path: &Path,
+        gctx: &'gctx GlobalContext,
+    ) -> CargoResult<(PathBuf, PathBuf)> {
+        let mut ws = Self::directory_workspace(manifest_path, gctx)?;
+        // An explicit package.workspace can point outside the ancestor chain.
+        let root = ws.root_manifest().to_owned();
+        ws.packages.load(&root)?;
+        Ok((
+            ws.target_dir().into_path_unlocked(),
+            ws.build_dir().into_path_unlocked(),
+        ))
     }
 
     fn new_default(current_manifest: PathBuf, gctx: &'gctx GlobalContext) -> Workspace<'gctx> {

@@ -275,18 +275,24 @@ fn shared_target_dir(args: &[OsString]) -> Option<PathBuf> {
     shared_target_from_metadata(&metadata)
 }
 
-fn shared_target_from_metadata(metadata: &serde_json::Value) -> Option<PathBuf> {
-    let target = metadata.get("target_directory")?.as_str()?;
+#[derive(serde::Deserialize)]
+struct CargoDirectories {
+    target_directory: Option<PathBuf>,
+    build_directory: Option<PathBuf>,
+}
+
+fn shared_target_from_metadata(metadata: &CargoDirectories) -> Option<PathBuf> {
+    let target = metadata.target_directory.as_ref()?;
     // A configured separate build dir would still serialize all targets and
     // makes the target-profile lock an invalid snapshot guard.
     if metadata
-        .get("build_directory")
-        .and_then(|value| value.as_str())
+        .build_directory
+        .as_ref()
         .is_some_and(|build| build != target)
     {
         return None;
     }
-    Some(PathBuf::from(target))
+    Some(target.clone())
 }
 
 /// Resolve Cargo's output root, retaining causal diagnostics for artifact
@@ -295,13 +301,11 @@ pub fn target_dir_in_result(cwd: &Path, args: &[OsString]) -> anyhow::Result<Pat
     use anyhow::Context;
     let metadata = directory_metadata(cwd, args)?;
     metadata
-        .get("target_directory")
-        .and_then(|value| value.as_str())
-        .map(PathBuf::from)
+        .target_directory
         .context("Cargo metadata returned no target_directory")
 }
 
-fn directory_metadata(cwd: &Path, args: &[OsString]) -> anyhow::Result<serde_json::Value> {
+fn directory_metadata(cwd: &Path, args: &[OsString]) -> anyhow::Result<CargoDirectories> {
     use anyhow::{Context, bail};
     // Artifact commands run outside the recorded-build environment. Managed-only
     // hosted machines intentionally have no system Cargo on PATH, so honor the
@@ -316,7 +320,8 @@ fn directory_metadata(cwd: &Path, args: &[OsString]) -> anyhow::Result<serde_jso
     if let Some(tc) = managed {
         cmd.env("RUSTC", tc.bin("rustc"));
     }
-    cmd.current_dir(cwd);
+    cmd.current_dir(cwd)
+        .env("JUSTRUST_METADATA_DIRECTORIES_V1", "1");
     cmd.args([
         "metadata",
         "--no-deps",
@@ -338,7 +343,7 @@ fn directory_metadata(cwd: &Path, args: &[OsString]) -> anyhow::Result<serde_jso
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    let mut v: serde_json::Value =
+    let mut v: CargoDirectories =
         serde_json::from_slice(&out.stdout).context("decoding Cargo metadata target directory")?;
     // `metadata` has no --target-dir option. The build's explicit selector
     // takes precedence over environment and config, relative to its cwd.
@@ -348,13 +353,7 @@ fn directory_metadata(cwd: &Path, args: &[OsString]) -> anyhow::Result<serde_jso
         } else {
             cwd.join(target)
         };
-        let object = v
-            .as_object_mut()
-            .context("Cargo metadata returned no object")?;
-        object.insert(
-            "target_directory".into(),
-            serde_json::Value::String(target.to_string_lossy().into_owned()),
-        );
+        v.target_directory = Some(target);
     }
     Ok(v)
 }
@@ -2081,7 +2080,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                shared_target_from_metadata(&metadata),
+                shared_target_from_metadata(&serde_json::from_value(metadata).unwrap()),
                 expected.map(PathBuf::from)
             );
         }
