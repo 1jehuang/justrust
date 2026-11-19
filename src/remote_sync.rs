@@ -268,14 +268,22 @@ fn skip(rel: &Path) -> bool {
 /// has `tests/testsuite/cargo_add/target/`); only a real cargo target dir,
 /// marked by its `CACHEDIR.TAG`, is build output.
 fn skip_listed(root: &Path, rel: &Path) -> bool {
-    let mut dir = PathBuf::new();
-    for c in rel.parent().into_iter().flat_map(|p| p.components()) {
-        dir.push(c);
+    let Some(parent) = rel.parent() else {
+        return false;
+    };
+    // Borrow prefixes from the listed path. Ordinary source paths need no
+    // allocation, and only an actual target component requires a stat.
+    for c in parent.components() {
         let name = c.as_os_str();
         if name == ".git" || name == ".justrust" {
             return true;
         }
-        if name == "target" && root.join(&dir).join("CACHEDIR.TAG").is_file() {
+        if name == "target"
+            && parent.ancestors().any(|p| {
+                p.file_name().is_some_and(|n| n == "target")
+                    && root.join(p).join("CACHEDIR.TAG").is_file()
+            })
+        {
             return true;
         }
     }
