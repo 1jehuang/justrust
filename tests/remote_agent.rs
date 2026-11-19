@@ -258,16 +258,19 @@ fn completed_run_reports_exit_while_another_roots_registration_is_blocked() {
         a.send(Msg::Synced { path: path.into() }, &[]);
     }
     assert!(a.barrier(40).is_empty());
-    let lock_path = |root: &Path| {
-        let hash = root
-            .as_os_str()
+    let root_hash = |root: &Path| {
+        root.as_os_str()
             .as_encoded_bytes()
             .iter()
             .fold(0xcbf29ce484222325u64, |h, b| {
                 (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)
-            });
-        a.dir
-            .join(format!("home/remote/evict-locks/{hash:016x}.lock"))
+            })
+    };
+    let lock_path = |root: &Path| {
+        a.dir.join(format!(
+            "home/remote/evict-locks/{:016x}.lock",
+            root_hash(root)
+        ))
     };
     let other = std::fs::File::open(lock_path(&a.at("/other"))).unwrap();
     let own = std::fs::File::open(lock_path(&a.at("/p"))).unwrap();
@@ -300,7 +303,30 @@ fn completed_run_reports_exit_while_another_roots_registration_is_blocked() {
     );
     // The following barrier stays queued behind the unrelated exclusive flock.
     a.send(Msg::Barrier { id: 42 }, &[]);
-    std::thread::sleep(Duration::from_millis(50));
+    // A Linux write lease on the real receipt blocks end() opening it, not
+    // the run or result stream. Suppress lease-break signals to the test
+    // process. Explicit unlock also handles concurrent fork inheritance.
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::PermissionsExt;
+    let scope = std::fs::read_dir(a.dir.join("home/remote/evict-registry"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let receipt = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(scope.join(format!("{:016x}.json", root_hash(&a.at("/p")))))
+        .unwrap();
+    let fcntl = |cmd, arg: libc::c_int| {
+        // SAFETY: receipt owns this fd and these fcntl commands take integers.
+        let rc = unsafe { libc::fcntl(receipt.as_raw_fd(), cmd, arg) };
+        assert_eq!(rc, 0, "{}", std::io::Error::last_os_error());
+    };
+    fcntl(libc::F_SETLEASE, libc::F_WRLCK as i32);
+    fcntl(libc::F_SETOWN, 0);
+    assert_ne!(receipt.metadata().unwrap().permissions().mode() & 0o100, 0);
     std::fs::write(a.at("/p/go"), b"").unwrap();
     loop {
         match a.recv().0 {
@@ -313,8 +339,19 @@ fn completed_run_reports_exit_while_another_roots_registration_is_blocked() {
     }
     assert!(
         own.try_lock().is_err(),
-        "result delivery must not drop protection early"
+        "Exit precedes activity finalization"
     );
+    fcntl(libc::F_SETLEASE, libc::F_UNLCK as i32);
+    // The independent root clears its durable activity marker even though
+    // the Synced handler is still waiting on the other root's exclusive lock.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while receipt.metadata().unwrap().permissions().mode() & 0o100 != 0 {
+        assert!(
+            Instant::now() < deadline,
+            "unrelated enrollment blocked finalization"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
     drop(other);
     assert!(matches!(a.recv().0, Msg::BarrierAck { id: 42, .. }));
     drop(a.w.take());

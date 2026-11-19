@@ -28,6 +28,9 @@ impl Fixture {
         std::fs::write(root.join("target/debug/artifact"), [1u8; 4096]).unwrap();
         root
     }
+    fn registry(&self) -> ev::Shared {
+        std::sync::Mutex::new(ev::Registry::from_store(self.store()).unwrap()).into()
+    }
     fn store(&self) -> Store {
         Store::at(&self.0.join("receipts"), "").unwrap()
     }
@@ -110,10 +113,10 @@ fn restart_retains_unclean_lease_until_successful_idle_completion() {
     }
     let f = Fixture::new();
     let root = f.root("build");
-    let mut first = ev::Registry::from_store(f.store()).unwrap();
-    first.register(&root).unwrap();
+    let first = f.registry();
+    ev::Registry::enroll(&first, &root).unwrap();
     let lock = ev::build_lock(&root).unwrap();
-    first.begin(&root).unwrap();
+    first.lock().unwrap().begin(&root).unwrap();
     age(&f.store(), &root);
     drop(first);
     let mut next = ev::Registry::from_store(f.store()).unwrap();
@@ -155,14 +158,15 @@ fn concurrent_agents_cannot_clear_each_others_lease() {
     }
     let f = Fixture::new();
     let root = f.root("parallel");
-    let mut a = ev::Registry::from_store(f.store()).unwrap();
-    a.register(&root).unwrap();
+    let shared = f.registry();
+    ev::Registry::enroll(&shared, &root).unwrap();
     let mut b = ev::Registry::from_store(f.store()).unwrap();
     let la = ev::build_lock(&root).unwrap();
-    a.begin(&root).unwrap();
+    shared.lock().unwrap().begin(&root).unwrap();
     let lb = ev::build_lock(&root).unwrap();
     b.begin(&root).unwrap();
-    a.register(&root).unwrap();
+    ev::Registry::enroll(&shared, &root).unwrap();
+    let mut a = shared.lock().unwrap();
     assert_eq!(a.roots[&root].leases, 1);
     a.end(&root, ev::System.now()).unwrap();
     drop(la);
@@ -335,8 +339,9 @@ fn authenticated_monorepo_root_does_not_require_a_root_manifest() {
     let f = Fixture::new();
     let root = f.root("monorepo");
     std::fs::remove_file(root.join("Cargo.toml")).unwrap();
-    let mut registry = ev::Registry::from_store(f.store()).unwrap();
-    registry.register(&root).unwrap();
+    let shared = f.registry();
+    ev::Registry::enroll(&shared, &root).unwrap();
+    let mut registry = shared.lock().unwrap();
     let lock = ev::build_lock(&root).unwrap();
     registry.begin(&root).unwrap();
     registry.end(&root, ev::System.now()).unwrap();
@@ -355,11 +360,71 @@ fn enrollment_failure_cannot_bypass_future_build_protection() {
     let f = Fixture::new();
     let root = f.root("invalid");
     std::fs::remove_dir_all(&root).unwrap();
-    let mut registry = ev::Registry::from_store(f.store()).unwrap();
-    assert!(registry.register(&root).is_err());
+    let shared = f.registry();
+    assert!(ev::Registry::enroll(&shared, &root).is_err());
+    let mut registry = shared.lock().unwrap();
     assert_eq!(registry.root_of(&root), Some(root.clone()));
     assert!(registry.begin(&root).is_err());
     assert_eq!(collect(&registry, ev::Mode::On).0, 0);
+}
+
+#[test]
+fn failed_lock_enrollment_remembers_root_and_retry_advances_epoch() {
+    let f = Fixture::new();
+    let root = f.root(".cache/lock-refused");
+    let target = root.join("target");
+    std::fs::write(
+        target.join("CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55\n# cargo\n",
+    )
+    .unwrap();
+    for p in [
+        target.clone(),
+        target.join("CACHEDIR.TAG"),
+        target.join("debug"),
+        target.join("debug/artifact"),
+    ] {
+        File::open(p)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(100))
+            .unwrap();
+    }
+    let shared = f.registry();
+    let dry_orphans = || {
+        ev::collect_shared(
+            &shared,
+            &f.0,
+            ev::Mode::Dry,
+            ev::DEFAULT_GRACE,
+            &LowDisk,
+            &mut |_| {},
+        )
+    };
+    assert!(
+        dry_orphans() > 0,
+        "the unregistered target would be selected"
+    );
+    // A directory at this scratch root's lock path cannot be flocked by the agent.
+    let lock = ev::lock_path(&root).unwrap();
+    std::fs::create_dir(&lock).unwrap();
+    assert!(ev::Registry::enroll(&shared, &root).is_err());
+    std::fs::remove_dir(&lock).unwrap();
+    assert_eq!(
+        dry_orphans(),
+        0,
+        "no orphan authority over a remembered root"
+    );
+    {
+        let mut registry = shared.lock().unwrap();
+        assert_eq!(registry.root_of(&root), Some(root.clone()));
+        assert!(registry.begin(&root).is_err());
+        assert_eq!(registry.enrollment_version, 1);
+        assert!(!registry.snapshot().unwrap().0.contains_key(&root));
+    }
+    ev::Registry::enroll(&shared, &root).unwrap();
+    let registry = shared.lock().unwrap();
+    assert_eq!(registry.enrollment_version, 2);
+    assert!(registry.snapshot().unwrap().0.contains_key(&root));
 }
 
 #[test]
@@ -377,8 +442,9 @@ fn benchmark_sources_record_activity_without_granting_private_tree_gc_authority(
         "target/project",
     ] {
         let root = f.root(name);
-        let mut registry = ev::Registry::from_store(f.store()).unwrap();
-        registry.register(&root).unwrap();
+        let shared = f.registry();
+        ev::Registry::enroll(&shared, &root).unwrap();
+        let mut registry = shared.lock().unwrap();
         assert_eq!(registry.root_of(&root), Some(root.clone()));
         let lock = ev::build_lock(&root).unwrap();
         registry.begin(&root).unwrap();

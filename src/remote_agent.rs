@@ -384,9 +384,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                 let _ = std::fs::create_dir_all(at(&path));
             }
             Msg::Synced { path } => {
-                if let Ok(mut r) = roots.lock()
-                    && let Err(e) = r.register(&at(&path))
-                {
+                if let Err(e) = crate::remote_evict::Registry::enroll(&roots, &at(&path)) {
                     eprintln!("justrust agent: target GC enrollment refused for {path}: {e}");
                 }
                 let under = format!("{}/", path.trim_end_matches('/'));

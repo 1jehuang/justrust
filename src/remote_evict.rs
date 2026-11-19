@@ -265,22 +265,35 @@ impl Registry {
         }
     }
 
-    pub fn register(&mut self, root: &Path) -> std::io::Result<()> {
-        self.enrollment_version = self.enrollment_version.wrapping_add(1);
-        // Remember synchronization roots even if durable enrollment fails, so
-        // a subsequent run cannot bypass the cross-agent lock/record checks.
-        self.roots.entry(root.to_path_buf()).or_default();
-        #[cfg(unix)]
-        if let Some(store) = &self.store {
-            let _lock = build_lock(root)?;
-            store.register(root)?;
-            self.roots
-                .entry(root.to_path_buf())
-                .or_default()
-                .last_build_end = store.state(root)?.last_build_end;
-            return Ok(());
+    /// The protocol loop is the only enrollment writer. Remember the path before
+    /// waiting so in-flight Run workers cannot bypass receipt checks. Publish
+    /// the receipt, cached state and epoch together under both locks.
+    #[cfg(unix)]
+    pub fn enroll(shared: &Shared, root: &Path) -> std::io::Result<()> {
+        let lock_registry = || {
+            shared
+                .lock()
+                .map_err(|_| std::io::Error::other("activity registry poisoned"))
+        };
+        {
+            let mut registry = lock_registry()?;
+            registry.touch(root);
+            if registry.store.is_none() {
+                registry.enrollment_version = registry.enrollment_version.wrapping_add(1);
+                return Ok(());
+            }
         }
-        self.touch(root);
+        let lock = build_lock(root);
+        let mut registry = lock_registry()?;
+        registry.enrollment_version = registry.enrollment_version.wrapping_add(1);
+        let _lock = lock?;
+        let store = registry.store.as_ref().expect("durable enrollment");
+        store.register(root)?;
+        registry
+            .roots
+            .get_mut(root)
+            .expect("remembered root")
+            .last_build_end = store.state(root)?.last_build_end;
         Ok(())
     }
 
@@ -798,7 +811,9 @@ fn collect_with<R: std::ops::Deref<Target = Registry>>(
                 chosen.clear();
             } else {
                 chosen.retain(|o| {
-                    !latest.keys().any(|r| {
+                    // Locally known roots also include enrollment waiting on a
+                    // flock or refused a receipt. They confer no deletion authority.
+                    !latest.keys().chain(registry.roots.keys()).any(|r| {
                         let t = r.join("target");
                         o.dir.starts_with(&t) || t.starts_with(&o.dir)
                     })
@@ -1218,11 +1233,12 @@ mod tests {
             }
             fn size(&self, p: &Path) -> u64 {
                 assert_eq!(p, self.1.join("target"));
-                self.0
-                    .try_lock()
-                    .expect("orphan sizing must not block admission")
-                    .register(self.1)
-                    .unwrap();
+                drop(
+                    self.0
+                        .try_lock()
+                        .expect("orphan sizing must not block admission"),
+                );
+                Registry::enroll(self.0, self.1).unwrap();
                 self.2.set(true);
                 64 * GIB
             }
