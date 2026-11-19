@@ -1,0 +1,303 @@
+diff --git a/toolchain/rustc/compiler/rustc_data_structures/src/profiling.rs b/toolchain/rustc/compiler/rustc_data_structures/src/profiling.rs
+index 33768b219..5301ebd01 100644
+--- a/toolchain/rustc/compiler/rustc_data_structures/src/profiling.rs
++++ b/toolchain/rustc/compiler/rustc_data_structures/src/profiling.rs
+@@ -881,7 +881,8 @@ struct JrPhaseLedger {
+     /// Set once the file is written: an early reply writes it before the
+     /// process ends, and the reader may already have consumed it by then.
+     written: std::sync::atomic::AtomicBool,
+-    phases: parking_lot::Mutex<FxHashMap<&'static str, (Duration, u64)>>,
++    phases: parking_lot::Mutex<JrPhaseRows>,
++    indexed_expansion: bool,
+     /// The reuse ledger: per (outcome, query) the exclusive provider or load
+     /// time and count. See `jr_reuse_finish`.
+     reuse: parking_lot::Mutex<FxHashMap<(&'static str, &'static str), (Duration, u64)>>,
+@@ -1226,13 +1227,45 @@ fn jr_phase_ledger() -> Option<&'static JrPhaseLedger> {
+                 path: path.into(),
+                 start: *JR_PHASES_START.get_or_init(Instant::now),
+                 written: std::sync::atomic::AtomicBool::new(false),
+-                phases: parking_lot::Mutex::new(FxHashMap::default()),
++                phases: parking_lot::Mutex::default(),
++                indexed_expansion: std::env::var_os("JUSTRUST_EXPERIMENT_INDEXED_PHASES").as_deref()
++                    == Some(std::ffi::OsStr::new("1")),
+                 reuse: parking_lot::Mutex::new(FxHashMap::default()),
+             })
+         })
+         .as_ref()
+ }
+ 
++mod expansion_rows;
++use expansion_rows::{JrExpansionSlot, JrPhaseRows};
++
++/// Keep the existing map arm for paired measurements, using the same clocks in both arms.
++#[must_use]
++pub struct JrExpansionGuard(Option<(&'static JrPhaseLedger, JrExpansionSlot, Instant)>);
++
++#[inline]
++pub fn jr_expansion_phase(label: &'static str) -> JrExpansionGuard {
++    JrExpansionGuard(jr_phase_ledger().map(|ledger| {
++        let slot = JrExpansionSlot::for_label(label);
++        (ledger, slot, Instant::now())
++    }))
++}
++
++impl Drop for JrExpansionGuard {
++    #[inline]
++    fn drop(&mut self) {
++        if let Some((ledger, slot, start)) = self.0 {
++            let elapsed = start.elapsed();
++            let mut rows = ledger.phases.lock();
++            if ledger.indexed_expansion {
++                rows.add_slot(slot, elapsed);
++            } else {
++                rows.add(slot.label(), elapsed);
++            }
++        }
++    }
++}
++
+ /// Accounts the time until it is dropped to `label` in the phase ledger.
+ #[must_use]
+ pub struct JrPhaseGuard(Option<(&'static str, Instant)>);
+@@ -1255,10 +1288,7 @@ pub fn jr_phase(label: &'static str) -> JrPhaseGuard {
+ /// Add an already measured duration to `label` in the phase ledger.
+ pub fn jr_phase_add(label: &'static str, dur: Duration) {
+     if let Some(ledger) = jr_phase_ledger() {
+-        let mut phases = ledger.phases.lock();
+-        let entry = phases.entry(label).or_insert((Duration::ZERO, 0));
+-        entry.0 += dur;
+-        entry.1 += 1;
++        ledger.phases.lock().add(label, dur);
+     }
+ }
+ 
+@@ -1273,8 +1303,7 @@ pub fn jr_phases_write(total: Duration) {
+     }
+     let mut out = String::new();
+     {
+-        let phases = ledger.phases.lock();
+-        let mut rows: Vec<_> = phases.iter().map(|(label, v)| (*label, *v)).collect();
++        let mut rows: Vec<_> = ledger.phases.lock().snapshot().into_iter().collect();
+         rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(b.0)));
+         for (label, (dur, count)) in rows {
+             let _ = writeln!(out, "{label}\t{:.6}\t{count}", dur.as_secs_f64());
+diff --git a/toolchain/rustc/compiler/rustc_data_structures/src/profiling/expansion_rows.rs b/toolchain/rustc/compiler/rustc_data_structures/src/profiling/expansion_rows.rs
+new file mode 100644
+index 000000000..a08f8b1f6
+--- /dev/null
++++ b/toolchain/rustc/compiler/rustc_data_structures/src/profiling/expansion_rows.rs
+@@ -0,0 +1,85 @@
++use std::time::Duration;
++
++use super::FxHashMap;
++
++const LABELS: [&str; 6] = [
++    "expand_resolve_dollar_crates",
++    "expand_collect_invocations",
++    "expand_build_reduced_graph",
++    "expand_declarative_bang",
++    "expand_declarative_attr",
++    "expand_declarative_derive",
++];
++
++#[derive(Clone, Copy)]
++pub(super) struct JrExpansionSlot(usize);
++
++impl JrExpansionSlot {
++    #[inline(always)]
++    pub(super) fn for_label(label: &str) -> Self {
++        Self(LABELS.iter().position(|&name| name == label).expect("unknown expansion phase"))
++    }
++
++    pub(super) fn label(self) -> &'static str {
++        LABELS[self.0]
++    }
++}
++
++#[derive(Default)]
++pub(super) struct JrPhaseRows {
++    indexed: [(Duration, u64); LABELS.len()],
++    other: FxHashMap<&'static str, (Duration, u64)>,
++}
++
++impl JrPhaseRows {
++    #[inline]
++    pub(super) fn add_slot(&mut self, slot: JrExpansionSlot, duration: Duration) {
++        let entry = &mut self.indexed[slot.0];
++        entry.0 += duration;
++        entry.1 += 1;
++    }
++
++    #[inline]
++    pub(super) fn add(&mut self, label: &'static str, duration: Duration) {
++        let entry = self.other.entry(label).or_default();
++        entry.0 += duration;
++        entry.1 += 1;
++    }
++
++    /// A write is a snapshot, not a flush: a rearmed final write must retain all early rows.
++    pub(super) fn snapshot(&self) -> FxHashMap<&'static str, (Duration, u64)> {
++        let mut rows = self.other.clone();
++        for (label, (duration, count)) in LABELS.into_iter().zip(self.indexed) {
++            if count != 0 {
++                let entry = rows.entry(label).or_default();
++                entry.0 += duration;
++                entry.1 += count;
++            }
++        }
++        rows
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn early_and_rearmed_snapshots_match_map_exactly() {
++        let mut candidate = JrPhaseRows::default();
++        let mut reference = FxHashMap::default();
++        for i in 0..120 {
++            let label = LABELS[(i % 6) as usize];
++            let duration = Duration::from_nanos(i * 100000001);
++            let entry = reference.entry(label).or_insert((Duration::ZERO, 0));
++            entry.0 += duration;
++            entry.1 += 1;
++            if i % 7 == 0 {
++                candidate.add(label, duration);
++            } else {
++                candidate.add_slot(JrExpansionSlot::for_label(label), duration);
++            }
++            assert_eq!(candidate.snapshot(), reference);
++        }
++    }
++}
+diff --git a/toolchain/rustc/compiler/rustc_data_structures/src/profiling/tests.rs b/toolchain/rustc/compiler/rustc_data_structures/src/profiling/tests.rs
+index 2b09de085..b4a512831 100644
+--- a/toolchain/rustc/compiler/rustc_data_structures/src/profiling/tests.rs
++++ b/toolchain/rustc/compiler/rustc_data_structures/src/profiling/tests.rs
+@@ -1,5 +1,100 @@
+ use super::JsonTimePassesEntry;
+ 
++#[test]
++fn expansion_recorder_early_rearm() {
++    use super::*;
++    const CHILD: &str = "JR_TEST_EARLY_PHASE_REARM";
++    if std::env::var_os(CHILD).is_none() {
++        let dir = tempfile::tempdir().unwrap();
++        let status = std::process::Command::new(std::env::current_exe().unwrap())
++            .args(["--exact", "profiling::tests::expansion_recorder_early_rearm"])
++            .env(CHILD, "1")
++            .env("JUSTRUST_RUSTC_PHASES_FILE", dir.path().join("test.tsv"))
++            .env("JUSTRUST_EXPERIMENT_INDEXED_PHASES", "1")
++            .status()
++            .unwrap();
++        assert!(status.success());
++        assert!(dir.path().join("test.tsv").is_file());
++        return;
++    }
++    let path = std::env::var_os("JUSTRUST_RUSTC_PHASES_FILE").unwrap();
++    let label = "expand_declarative_bang";
++    std::thread::scope(|scope| {
++        for _ in 0..4 {
++            scope.spawn(|| {
++                for _ in 0..100 {
++                    drop(jr_expansion_phase(label));
++                }
++            });
++        }
++    });
++    jr_phases_write_now();
++    let early = fs::read_to_string(&path).unwrap();
++    let check = |text: &str, count: &str| {
++        let mut lines = text.lines();
++        let fields: Vec<_> = lines.next().unwrap().split('\t').collect();
++        assert_eq!(fields.len(), 3);
++        assert_eq!(fields[0], label);
++        assert!(fields[1].parse::<f64>().unwrap() >= 0.0);
++        assert_eq!(fields[2], count);
++        assert!(lines.next().unwrap().starts_with("total\t"));
++        assert!(lines.next().is_none());
++    };
++    check(&early, "400");
++    jr_phase_add(label, Duration::from_secs(1));
++    jr_phases_write(Duration::from_secs(2));
++    assert_eq!(fs::read_to_string(&path).unwrap(), early);
++    jr_phases_rearm();
++    jr_phases_write(Duration::from_secs(2));
++    let final_rows = fs::read_to_string(&path).unwrap();
++    check(&final_rows, "401");
++    assert!(final_rows.ends_with("total\t2.000000\t1\n"));
++}
++
++#[test]
++#[ignore = "paired phase-recorder microbenchmark; run explicitly"]
++fn six_label_guard_cost() {
++    use super::*;
++    const NAME: &str = "profiling::tests::six_label_guard_cost";
++    let iterations = 1_200_000;
++    let Ok(arm) = std::env::var("JR_TEST_PHASE_ARM") else {
++        let dir = tempfile::tempdir().unwrap();
++        for i in 0..16 {
++            let arms = if i % 2 == 0 { ["map", "indexed"] } else { ["indexed", "map"] };
++            for arm in arms {
++                let status = std::process::Command::new(std::env::current_exe().unwrap())
++                    .args(["--exact", NAME, "--ignored", "--nocapture"])
++                    .env("JR_TEST_PHASE_ARM", arm)
++                    .env("JUSTRUST_RUSTC_PHASES_FILE", dir.path().join("micro.tsv"))
++                    .env("JUSTRUST_EXPERIMENT_INDEXED_PHASES", "1")
++                    .status()
++                    .unwrap();
++                assert!(status.success());
++            }
++        }
++        return;
++    };
++    macro_rules! run {
++        ($guard:ident) => {{
++            let start = Instant::now();
++            for _ in 0..iterations / 6 {
++                drop($guard("expand_resolve_dollar_crates"));
++                drop($guard("expand_collect_invocations"));
++                drop($guard("expand_build_reduced_graph"));
++                drop($guard("expand_declarative_bang"));
++                drop($guard("expand_declarative_attr"));
++                drop($guard("expand_declarative_derive"));
++            }
++            start.elapsed()
++        }};
++    }
++    let elapsed = if arm == "map" { run!(jr_phase) } else { run!(jr_expansion_phase) };
++    let rows = jr_phase_ledger().unwrap().phases.lock().snapshot();
++    assert_eq!(rows.len(), 6);
++    assert!(rows.values().all(|&(_, count)| count == iterations / 6));
++    println!("phase_guard_ns {arm} {:.3}", elapsed.as_nanos() as f64 / iterations as f64);
++}
++
+ #[test]
+ fn with_rss() {
+     let entry =
+diff --git a/toolchain/rustc/compiler/rustc_expand/src/lib.rs b/toolchain/rustc/compiler/rustc_expand/src/lib.rs
+index 5bd24edb8..cd900f2f4 100644
+--- a/toolchain/rustc/compiler/rustc_expand/src/lib.rs
++++ b/toolchain/rustc/compiler/rustc_expand/src/lib.rs
+@@ -26,13 +26,16 @@
+ pub mod proc_macro;
+ pub mod proc_macro_client;
+ 
+-use rustc_data_structures::profiling::{JrPhaseGuard, SelfProfilerRef, TimingGuard, jr_phase};
++use rustc_data_structures::profiling::{
++    JrExpansionGuard, SelfProfilerRef, TimingGuard, jr_expansion_phase,
++};
+ 
+ /// Static labels keep disabled instrumentation off the allocation and clock paths.
+ /// Unlike verbose activities these high-frequency phases never print per invocation.
++#[inline(always)]
+ fn expansion_phase<'a>(
+     prof: &'a SelfProfilerRef,
+     label: &'static str,
+-) -> (TimingGuard<'a>, JrPhaseGuard) {
+-    (prof.generic_activity(label), jr_phase(label))
++) -> (TimingGuard<'a>, JrExpansionGuard) {
++    (prof.generic_activity(label), jr_expansion_phase(label))
+ }
