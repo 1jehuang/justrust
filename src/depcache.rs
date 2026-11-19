@@ -1704,6 +1704,7 @@ pub fn entry_out(line: &str) -> Option<String> {
 /// Source paths and env var names from a rustc dep-info file.
 pub(crate) fn parse_dep_info(d: &str) -> (Vec<String>, Vec<String>) {
     let mut files = Vec::new();
+    let mut seen = None::<std::collections::HashSet<String>>;
     let mut env = Vec::new();
     for line in d.lines() {
         if let Some(e) = line.strip_prefix("# env-dep:") {
@@ -1721,8 +1722,18 @@ pub(crate) fn parse_dep_info(d: &str) -> (Vec<String>, Vec<String>) {
             continue;
         };
         for dep in split_escaped(&line[idx + 1..]) {
-            if !files.contains(&dep) {
+            // Small crates need no extra allocation. Larger crates repeat the
+            // same inputs across output rules, making linear scans quadratic.
+            if let Some(index) = &mut seen {
+                if !index.contains(&dep) {
+                    index.insert(dep.clone());
+                    files.push(dep);
+                }
+            } else if !files.contains(&dep) {
                 files.push(dep);
+                if files.len() == 16 {
+                    seen = Some(files.iter().cloned().collect());
+                }
             }
         }
     }
@@ -2626,6 +2637,21 @@ mod tests {
         let (files, env) = parse_dep_info(d);
         assert_eq!(files, vec!["src/lib.rs", "/t/debug/build/x-2/out/gen x.rs"]);
         assert_eq!(env, vec!["CARGO_PKG_NAME", "FOO"]);
+    }
+
+    #[test]
+    fn dep_info_keeps_first_seen_order_across_index_transition() {
+        let names: Vec<_> = (0..23).rev().map(|i| format!("src/{i} x.rs")).collect();
+        let escaped: Vec<_> = names.iter().map(|s| s.replace(' ', "\\ ")).collect();
+        let d = format!(
+            "a: {}\nb: {}\nc: {}\n# env-dep:B=first\n# env-dep:A\n# env-dep:B=last\n",
+            escaped[..15].join(" "),
+            escaped.join(" "),
+            escaped.iter().rev().cloned().collect::<Vec<_>>().join(" ")
+        );
+        let (files, env) = parse_dep_info(&d);
+        assert_eq!(files, names);
+        assert_eq!(env, ["B", "A"]);
     }
 
     #[test]
