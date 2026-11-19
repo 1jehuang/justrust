@@ -274,11 +274,11 @@ fn restore_cached(state: &mut State, scope: Option<&str>) {
 }
 
 impl State {
-    fn reuse_profile(&self) -> (usize, usize, data::ReuseStats) {
+    fn reuse_profile(rows: &[&RunRow]) -> (usize, usize, data::ReuseStats) {
         let mut total = 0;
         let mut covered = 0;
         let mut stats = data::ReuseStats::default();
-        for row in self.rows() {
+        for row in rows {
             if row.place == "hosted" {
                 total += 1;
                 if let Some(r) = row.reuse.filter(|s| s.measured()) {
@@ -295,9 +295,9 @@ impl State {
 
     /// Runs per kind under every other filter, so the kind bar shows what
     /// choosing each kind would list.
-    fn kind_counts(&self) -> [usize; Kind::ALL.len()] {
+    fn kind_counts(rows: &[&RunRow]) -> [usize; Kind::ALL.len()] {
         let mut counts = [0; Kind::ALL.len()];
-        for row in self.filtered(false) {
+        for row in rows {
             counts[Kind::of(&row.args) as usize] += 1;
         }
         counts
@@ -386,8 +386,7 @@ impl State {
     }
 
     /// Where the wait went for the listed runs, so it follows the filters.
-    fn profile(&self) -> Profile {
-        let rows = self.rows();
+    fn profile(rows: &[&RunRow]) -> Profile {
         let mut sums = [0.0; data::BUCKETS];
         let mut timed = 0;
         for time in rows.iter().filter_map(|row| row.time) {
@@ -411,10 +410,10 @@ impl State {
     }
 
     /// What the compiler's time went to for the listed runs.
-    fn compile_profile(&self) -> CompileProfile {
+    fn compile_profile(rows: &[&RunRow]) -> CompileProfile {
         let mut sums = [0.0; data::PARTS];
         let mut timed = 0;
-        for time in self.rows().iter().filter_map(|row| row.compile) {
+        for time in rows.iter().filter_map(|row| row.compile) {
             timed += 1;
             for (sum, secs) in sums.iter_mut().zip(time) {
                 *sum += secs;
@@ -1052,16 +1051,16 @@ mod tests {
             timed("b", &["test"], 10.0, 1.0),
             run_with("c", &["test"], "remote", 0),
         ];
-        let p = s.profile();
+        let p = State::profile(&s.rows());
         assert_eq!((p.runs, p.timed, p.total), (3, 2, 19.0));
         assert_eq!(p.buckets, [(Bucket::Compile, 12.0), (Bucket::Sync, 7.0)]);
         s.kind = Some(Kind::Check);
-        let p = s.profile();
+        let p = State::profile(&s.rows());
         assert_eq!((p.runs, p.timed, p.total), (1, 1, 8.0));
         assert_eq!(p.buckets[0], (Bucket::Sync, 6.0));
         s.query = "nothing matches".into();
-        assert_eq!(s.profile(), Profile::default());
-        assert_eq!(s.compile_profile(), CompileProfile::default());
+        assert_eq!(State::profile(&s.rows()), Profile::default());
+        assert_eq!(State::compile_profile(&s.rows()), CompileProfile::default());
 
         use data::Part;
         let mut s = State::default();
@@ -1070,7 +1069,7 @@ mod tests {
         a.compile = Some([4.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
         b.compile = Some([2.0, 9.0, 0.0, 0.0, 0.0, 0.0]);
         s.snapshot.runs = vec![a, b, run_with("c", &["test"], "remote", 0)];
-        let p = s.compile_profile();
+        let p = State::compile_profile(&s.rows());
         assert_eq!((p.timed, p.total), (2, 16.0));
         assert_eq!(
             p.parts,
@@ -1081,7 +1080,10 @@ mod tests {
             ]
         );
         s.kind = Some(Kind::Check);
-        assert_eq!(s.compile_profile().parts[0], (Part::Workspace, 4.0));
+        assert_eq!(
+            State::compile_profile(&s.rows()).parts[0],
+            (Part::Workspace, 4.0)
+        );
     }
 
     fn run_with(id: &str, args: &[&str], place: &str, exit: i32) -> RunRow {
@@ -1136,17 +1138,26 @@ mod tests {
         };
         assert!(!s.filters_active());
         assert_eq!(ids(&s), "abcde");
-        assert_eq!(s.kind_counts(), [1, 2, 0, 1, 0, 0, 1]);
+        assert_eq!(
+            State::kind_counts(&s.filtered(false)),
+            [1, 2, 0, 1, 0, 0, 1]
+        );
 
         s.kind = Some(Kind::Test);
         assert_eq!(ids(&s), "bd");
         s.place = Place::Hosted;
         assert_eq!(ids(&s), "b");
         // Counts ignore the kind filter but respect the others.
-        assert_eq!(s.kind_counts(), [0, 1, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            State::kind_counts(&s.filtered(false)),
+            [0, 1, 0, 0, 0, 0, 0]
+        );
         s.place = Place::Remote;
         assert_eq!(ids(&s), "");
-        assert_eq!(s.kind_counts(), [1, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            State::kind_counts(&s.filtered(false)),
+            [1, 0, 0, 0, 0, 0, 0]
+        );
         s.place = Place::Local;
         assert_eq!(ids(&s), "d");
         s.place = Place::Any;

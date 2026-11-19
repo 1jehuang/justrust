@@ -559,8 +559,13 @@ fn versions_card(v: &Versions) -> Card {
 }
 
 /// The kind filter as a row of chips with the run count behind each choice.
-fn kind_bar(state: &State, width: usize) -> Line<'static> {
-    let counts = state.kind_counts();
+fn kind_bar(state: &State, width: usize, rows: &[&RunRow]) -> Line<'static> {
+    // With a kind selected, deduplication must be repeated without that filter.
+    let counts = if state.kind.is_some() {
+        State::kind_counts(&state.filtered(false))
+    } else {
+        State::kind_counts(rows)
+    };
     let mut chips = vec![(None, counts.iter().sum::<usize>())];
     chips.extend(Kind::ALL.iter().map(|k| (Some(*k), counts[*k as usize])));
     let mut spans = Vec::new();
@@ -860,11 +865,11 @@ fn reuse_duration(secs: f64) -> String {
 
 fn reuse_lines(
     state: &State,
+    rows: &[&RunRow],
     width: usize,
     profile: (usize, usize, super::data::ReuseStats),
 ) -> Vec<Line<'static>> {
     let (total, covered, stats) = profile;
-    let rows = state.rows();
     let run = rows.get(state.selected);
     let selected = run.filter(|r| r.place == "hosted").and_then(|r| r.reuse);
     let mut lines = vec![line(
@@ -970,8 +975,7 @@ fn reuse_lines(
     lines
 }
 
-fn selected_lines(state: &State, width: usize) -> Vec<Line<'static>> {
-    let rows = state.rows();
+fn selected_lines(state: &State, rows: &[&RunRow], width: usize) -> Vec<Line<'static>> {
     let Some(run) = rows.get(state.selected) else {
         return vec![line(
             "No run selected. Move through Runs with ↑/↓.",
@@ -1081,8 +1085,7 @@ fn selected_lines(state: &State, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-fn history(f: &mut Frame, area: Rect, state: &State) {
-    let rows = state.rows();
+fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
     let active = &state.snapshot.active;
     let mut note = match active.len() {
         0 => count(rows.len() as i64),
@@ -1129,7 +1132,7 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
         "  RESULT · WHEN · REUSE · OPT · COMMAND · TC  CLIENT".into()
     };
     let mut lines = vec![
-        kind_bar(state, width),
+        kind_bar(state, width, rows),
         Line::default(),
         line(header, DIM, width),
     ];
@@ -1374,7 +1377,7 @@ fn profile_card(profile: &Profile) -> Card {
 }
 
 /// The filter menu, drawn over the dashboard.
-fn menu(f: &mut Frame, area: Rect, state: &State, at: usize) {
+fn menu(f: &mut Frame, area: Rect, state: &State, at: usize, matches: usize) {
     let width = area.width.saturating_sub(4).min(60);
     let height = (MenuRow::ALL.len() as u16 + 4).min(area.height);
     let popup = Rect {
@@ -1418,7 +1421,7 @@ fn menu(f: &mut Frame, area: Rect, state: &State, at: usize) {
     }
     f.render_widget(Clear, popup);
     Card::new("Filters")
-        .footer(format!("{} runs match", count(state.rows().len() as i64)))
+        .footer(format!("{} runs match", count(matches as i64)))
         .draw(f, popup, lines);
 }
 
@@ -1501,8 +1504,9 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
     } else {
         versions_h
     };
-    let profile = state.profile();
-    let compile = state.compile_profile();
+    let rows = state.rows();
+    let profile = State::profile(&rows);
+    let compile = State::compile_profile(&rows);
     let time_lines = profile_lines(&profile, card_width);
     let compile_lines = compile_lines(&compile, card_width);
     let (overall_h, compile_h) = (time_lines.len() as u16 + 2, compile_lines.len() as u16 + 2);
@@ -1512,9 +1516,9 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
         (false, h) if h < 40 => (overall_h, 0),
         (false, _) => (overall_h, compile_h),
     };
-    let selected = selected_lines(state, card_width);
-    let measured = state.reuse_profile();
-    let reuse = reuse_lines(state, card_width, measured);
+    let selected = selected_lines(state, &rows, card_width);
+    let measured = State::reuse_profile(&rows);
+    let reuse = reuse_lines(state, &rows, card_width, measured);
     let reuse_h = reuse.len() as u16 + 2;
     // Geometry belongs to the viewport, not the highlighted record. In
     // particular a wrapped timeline must not push the Runs list down.
@@ -1532,8 +1536,7 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
     };
     // Budget the list first: two borders, three header lines, and room to
     // browse several records. Empty history need not displace useful cards.
-    let body = state
-        .rows()
+    let body = rows
         .len()
         .saturating_add(state.snapshot.active.len())
         .clamp(1, 10) as u16;
@@ -1634,8 +1637,7 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
         if beside && reuse_area.height > 0 {
             Card::new("Hosted compile reuse").draw(f, reuse_area, reuse);
         }
-        let note = state
-            .rows()
+        let note = rows
             .get(state.selected)
             .map(|r| r.id.clone())
             .unwrap_or_default();
@@ -1643,9 +1645,9 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
             .note(note)
             .draw(f, selection, selected);
     }
-    history(f, runs, state);
+    history(f, runs, state, &rows);
     if let Some(at) = state.menu {
-        menu(f, area, state, at);
+        menu(f, area, state, at, rows.len());
     }
     let footer_width = footer.width as usize;
     let help = if state.searching {
@@ -2108,7 +2110,8 @@ mod tests {
             ),
         ];
         let card = |state: &State| {
-            reuse_lines(state, 64, state.reuse_profile())
+            let rows = state.rows();
+            reuse_lines(state, &rows, 64, State::reuse_profile(&rows))
                 .into_iter()
                 .map(|l| {
                     l.spans
@@ -2200,12 +2203,12 @@ mod tests {
             text.find("Selected run").unwrap() < text.find("─ Runs").unwrap(),
             "{text}"
         );
-        let wrapped = selected_lines(&state, 36);
+        let wrapped = selected_lines(&state, &state.rows(), 36);
         assert!(wrapped[3].to_string().contains("timeline unavailable"));
         assert_eq!(wrapped[4].to_string(), "Timing   compiling 8.0s (80%)");
         assert_eq!(wrapped[5].to_string(), "         running tests 2.0s (20%)");
         state.selected = 1;
-        let lines = selected_lines(&state, 120);
+        let lines = selected_lines(&state, &state.rows(), 120);
         let text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
@@ -2217,7 +2220,7 @@ mod tests {
         assert!(text.contains("breakdown not recorded"), "{text}");
         state.snapshot.runs.clear();
         assert!(
-            selected_lines(&state, 100)[0].spans[0]
+            selected_lines(&state, &state.rows(), 100)[0].spans[0]
                 .content
                 .contains("No run selected")
         );
@@ -2247,6 +2250,19 @@ mod tests {
         // Kinds with no runs are not listed.
         assert!(!text.contains("clippy 0"), "{text}");
         assert!(text.contains("anywhere"));
+
+        // Filtering by kind precedes same-source dedup. The all-kinds chip
+        // uses the first local row, the list the matching local duplicate.
+        state.snapshot.runs.push(run("r1", &["clippy"]));
+        state.hosted_runs.push(run("r1", &["run"]));
+        state.kind = Some(Kind::Clippy);
+        let rows = state.rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].args[0], "clippy");
+        let chips = kind_bar(&state, 140, &rows).to_string();
+        assert!(chips.contains("all 4") && chips.contains("clippy 0"));
+        state.kind = Some(Kind::Run);
+        assert!(state.rows().is_empty()); // cloud duplicate cannot resurface
 
         state.kind = Some(Kind::Clippy);
         state.query = "zzz".into();
@@ -2381,14 +2397,14 @@ mod tests {
             "{text}"
         );
         // Wide cards put the parts side by side, narrow ones stack them.
-        assert_eq!(profile_lines(&state.profile(), 134).len(), 1);
-        assert_eq!(profile_lines(&state.profile(), 30).len(), 2);
+        assert_eq!(profile_lines(&State::profile(&state.rows()), 134).len(), 1);
+        assert_eq!(profile_lines(&State::profile(&state.rows()), 30).len(), 2);
 
         state.kind = Some(Kind::Check);
         let text = screen(&state, 140, 40);
         assert!(text.contains("40s waited over 1 run "), "{text}");
         for width in [0, 1, 10, 30] {
-            let lines = profile_lines(&state.profile(), width);
+            let lines = profile_lines(&State::profile(&state.rows()), width);
             assert!(lines.len() <= PROFILE_ROWS, "{width}");
             assert!(lines.iter().all(|l| l.width() <= width), "{width}");
         }
