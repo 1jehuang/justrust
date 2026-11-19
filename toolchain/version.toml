@@ -1,2 +1,2 @@
 # Bump before committing the source for the next toolchain release candidate.
-version = "0.1.5"
+version = "0.1.6"
