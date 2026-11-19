@@ -1761,12 +1761,27 @@ fn git_info() -> GitInfo {
             .success()
             .then(|| String::from_utf8_lossy(&o.stdout).trim().to_owned())
     };
+    let (root, head) = git_root_head(run);
     GitInfo {
-        root: run(&["rev-parse", "--show-toplevel"]),
-        head: run(&["rev-parse", "--short=12", "HEAD"]),
+        root,
+        head,
         dirty_files: run(&["status", "--porcelain", "--untracked-files=no"])
             .map(|s| s.lines().count()),
     }
+}
+
+fn git_root_head(run: impl Fn(&[&str]) -> Option<String>) -> (Option<String>, Option<String>) {
+    if let Some(both) = run(&["rev-parse", "--show-toplevel", "--short=12", "HEAD"])
+        && let Some((root, head)) = both.rsplit_once('\n')
+    {
+        return (Some(root.trim().to_owned()), Some(head.trim().to_owned()));
+    }
+    // An unborn repository still has a root. A bare repository can have a
+    // valid HEAD without a working tree. Keep those independent observations.
+    (
+        run(&["rev-parse", "--show-toplevel"]),
+        run(&["rev-parse", "--short=12", "HEAD"]),
+    )
 }
 
 /// Opt-in workspace-wide feature resolution can enable defaults of dependencies
@@ -1846,6 +1861,30 @@ fn resident_recording_compiler<'a>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn combined_git_metadata_retains_newline_paths_and_partial_results() {
+        assert_eq!(
+            super::git_root_head(|args| {
+                assert_eq!(args.len(), 4);
+                Some("/a\nb\n0123456789ab".into())
+            }),
+            (Some("/a\nb".into()), Some("0123456789ab".into()))
+        );
+        for (root, head) in [
+            (Some("/empty"), None),
+            (None, Some("0123456789ab")),
+            (None, None),
+        ] {
+            assert_eq!(
+                super::git_root_head(|args| match args {
+                    ["rev-parse", "--show-toplevel"] => root.map(str::to_owned),
+                    ["rev-parse", "--short=12", "HEAD"] => head.map(str::to_owned),
+                    _ => None,
+                }),
+                (root.map(str::to_owned), head.map(str::to_owned))
+            );
+        }
+    }
     #[test]
     fn native_recording_omits_only_unused_shim_destinations_at_cargo_boundary() {
         use std::ffi::OsStr;
