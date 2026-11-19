@@ -730,6 +730,22 @@ fn active_row(run: &crate::status::Active, wide: bool, command_width: usize) -> 
     spans
 }
 
+// The general run formatter rounds to tenths of a second. Query work on a
+// small hosted build is often measured in milliseconds or microseconds.
+fn reuse_duration(secs: f64) -> String {
+    if secs == 0.0 {
+        "0s".into()
+    } else if secs < 0.000_001 {
+        "<1µs".into()
+    } else if secs < 0.001 {
+        format!("{:.0}µs", secs * 1e6)
+    } else if secs < 0.1 {
+        format!("{:.0}ms", secs * 1e3)
+    } else {
+        crate::status::dur(secs)
+    }
+}
+
 fn reuse_lines(
     state: &State,
     width: usize,
@@ -751,9 +767,16 @@ fn reuse_lines(
         let why = match run {
             None => "No run selected",
             Some(r) if r.place != "hosted" => "Not hosted",
-            _ => "Unavailable",
+            Some(r) if r.origin == "hosted" => "Summary only (no ledger)",
+            _ => "No recorded reuse ledger",
         };
         lines.push(detail("Selected", vec![span(why, DIM)], width));
+    } else if selected.is_some_and(|s| s.loaded == 0 && s.cgu_total > 0 && s.cgu_reused == 0) {
+        lines.push(detail(
+            "Selected",
+            vec![span("No incremental reuse recorded", LABEL)],
+            width,
+        ));
     }
     if covered > 0 {
         let metrics = |s: super::data::ReuseStats| {
@@ -764,10 +787,10 @@ fn reuse_lines(
                     "n/a".into()
                 },
                 s.loaded.to_string(),
-                crate::status::dur(s.same_secs),
-                crate::status::dur(s.green_secs),
-                crate::status::dur(s.changed_secs),
-                crate::status::dur(s.unknown_secs),
+                reuse_duration(s.same_secs),
+                reuse_duration(s.green_secs),
+                reuse_duration(s.changed_secs),
+                reuse_duration(s.unknown_secs),
             ]
         };
         let all = metrics(stats);
@@ -1675,6 +1698,8 @@ mod tests {
                 "zero",
                 2.,
                 Some(super::super::data::ReuseStats {
+                    changed_secs: 0.01487,
+                    unknown_secs: 0.000042,
                     cgu_total: 2,
                     ledgers: 1,
                     ..Default::default()
@@ -1689,14 +1714,16 @@ mod tests {
             let row = text.lines().find(|r| r.contains("CGUs reused")).unwrap();
             assert!(row.contains("3/10") && row.contains("0/2"), "{text}");
             let row = text.lines().find(|r| r.contains("Same result")).unwrap();
-            assert!(row.contains("2.5s") && row.contains("0.0s"), "{text}");
+            assert!(row.contains("2.5s") && row.contains("0s"), "{text}");
+            assert!(text.contains("15ms") && text.contains("42µs"), "{text}");
+            assert!(text.contains("No incremental reuse"), "{text}");
             assert!(
                 text.contains("Unclassified") && text.contains("─ Runs"),
                 "{text}"
             );
         }
         state.selected = 2;
-        assert!(screen(&state, 100, 40).contains("Selected Unavailable"));
+        assert!(screen(&state, 100, 40).contains("Selected No recorded reuse ledger"));
     }
 
     #[test]
