@@ -260,7 +260,7 @@ fn touch_used(dir: &Path) {
 }
 
 /// Recent agent builds per workspace root, from the tail of the run index.
-fn recent_agent_builds(index: &str, root: &Path, now: f64) -> usize {
+fn enough_recent_agent_builds(index: &str, root: &Path, now: f64) -> bool {
     index
         .lines()
         .rev()
@@ -278,7 +278,10 @@ fn recent_agent_builds(index: &str, root: &Path, now: f64) -> usize {
                 .and_then(|c| workspace_root(Path::new(c)))
                 .is_some_and(|r| r == root)
         })
-        .count()
+        // The caller needs a threshold, not the total. Once reached, parsing
+        // older entries and walking their manifest ancestors cannot change it.
+        .nth(AUTO_MIN_BUILDS - 1)
+        .is_some()
 }
 
 /// Auto mode, after an agent build of `cwd` finished: start the workspace's
@@ -301,7 +304,7 @@ pub fn maybe_autostart(cwd: &Path, sub: &str) {
     let Ok(index) = crate::paths::index_file().and_then(|p| Ok(std::fs::read_to_string(p)?)) else {
         return;
     };
-    if recent_agent_builds(&index, &root, crate::paths::now()) >= AUTO_MIN_BUILDS {
+    if enough_recent_agent_builds(&index, &root, crate::paths::now()) {
         let _ = spawn_daemon(&root, &dir);
     }
 }
@@ -2108,7 +2111,13 @@ mod tests {
             line(5300.0, &ws, false), // not an agent
         ]
         .join("\n");
-        assert_eq!(recent_agent_builds(&index, &ws, 5400.0), 2);
+        assert!(!enough_recent_agent_builds(&index, &ws, 5400.0));
+        let busy = format!(
+            "{index}\nmalformed\n{}\n{}",
+            line(5350.0, &ws, true),
+            line(5375.0, &ws, true)
+        );
+        assert!(enough_recent_agent_builds(&busy, &ws, 5400.0));
         let _ = std::fs::remove_dir_all(&d);
     }
 
