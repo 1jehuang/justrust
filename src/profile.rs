@@ -385,6 +385,30 @@ fn trunc(s: &str, n: usize) -> String {
     }
 }
 
+// Keep only matching IDs, in file order. Validate the full IndexEntry so a
+// damaged unused field still disqualifies a row. A read/UTF-8 error rejects
+// the entire index, as load_index's read_to_string did.
+fn matching_ids(
+    mut reader: impl std::io::BufRead,
+    matches: impl Fn(&crate::summary::IndexEntry) -> bool,
+) -> std::io::Result<Vec<String>> {
+    let mut ids = Vec::new();
+    let mut seen = HashSet::new();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            return Ok(ids);
+        }
+        if let Ok(entry) = serde_json::from_str::<crate::summary::IndexEntry>(&line)
+            && matches(&entry)
+            && seen.insert(entry.id.clone())
+        {
+            ids.push(entry.id);
+        }
+    }
+}
+
 pub fn command(
     days: Option<f64>,
     here: bool,
@@ -397,20 +421,24 @@ pub fn command(
     let root = paths::runs_dir()?;
     let cwd = std::env::current_dir()?;
     let cutoff = days.map(|d| paths::now() - d * 86400.0);
-    let mut seen = HashSet::new();
+    let ids = paths::index_file()
+        .ok()
+        .and_then(|path| {
+            let reader = std::io::BufReader::new(std::fs::File::open(path).ok()?);
+            matching_ids(reader, |entry| {
+                !cutoff.is_some_and(|c| entry.start < c)
+                    && (!here || Path::new(&entry.cwd).starts_with(&cwd))
+                    && (!remote_only || entry.remote.is_some())
+                    && (!local_only || entry.remote.is_none())
+            })
+            .ok()
+        })
+        .unwrap_or_default();
     let mut runs = Vec::new();
     let mut keys = Vec::new();
     let mut unavailable = 0;
-    for entry in crate::runs::load_index() {
-        if cutoff.is_some_and(|c| entry.start < c)
-            || (here && !Path::new(&entry.cwd).starts_with(&cwd))
-            || (remote_only && entry.remote.is_none())
-            || (local_only && entry.remote.is_some())
-            || !seen.insert(entry.id.clone())
-        {
-            continue;
-        }
-        let Some(s) = std::fs::read(root.join(&entry.id).join("summary.json"))
+    for id in ids {
+        let Some(s) = std::fs::read(root.join(&id).join("summary.json"))
             .ok()
             .and_then(|b| serde_json::from_slice::<crate::summary::Summary>(&b).ok())
         else {
@@ -427,7 +455,7 @@ pub fn command(
         if !by.is_empty() {
             keys.push(group_key(&s, by));
         }
-        runs.push((entry.id, format!("cargo {}", s.args.join(" ")), e));
+        runs.push((id, format!("cargo {}", s.args.join(" ")), e));
     }
     let mut report = aggregate(&runs, 10);
     report.unavailable = unavailable;
@@ -458,6 +486,34 @@ pub fn command(
 mod tests {
     use super::*;
     use crate::e2e::Segment;
+
+    #[test]
+    fn index_scan_filters_before_dedup_and_validates_entire_input() {
+        let row = |id: &str, start: f64| {
+            serde_json::to_string(&crate::summary::IndexEntry {
+                id: id.into(),
+                start,
+                ..Default::default()
+            })
+            .unwrap()
+        };
+        let malformed = row("bad", 3.0).replace("\"args\":[]", "\"args\":42");
+        let lines = [
+            row("a", 0.0),
+            malformed,
+            row("b", 4.0),
+            row("a", 2.0),
+            row("b", 3.0),
+        ]
+        .join("\r\n");
+        assert_eq!(
+            matching_ids(lines.as_bytes(), |e| e.start >= 2.0).unwrap(),
+            ["b", "a"]
+        );
+        let mut bytes = lines.into_bytes();
+        bytes.extend_from_slice(b"\n\xff");
+        assert!(matching_ids(&bytes[..], |_| true).is_err());
+    }
 
     fn run(id: &str, segs: &[(&str, f64)], derived: bool) -> (String, String, E2e) {
         (
