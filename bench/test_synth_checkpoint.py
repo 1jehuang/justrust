@@ -32,11 +32,12 @@ class CheckpointTests(unittest.TestCase):
         # The cargo role also uses fixture bytes, without invoking any tool.
         self.ctx.enter_context(mock.patch.object(runner.shutil, "which", side_effect=lambda command, **kw: str(self.binary) if command == "cargo" else None))
         self.ctx.enter_context(mock.patch.object(runner.gen, "_locked"))
-        self.ctx.enter_context(mock.patch.object(runner.gen, "sample", return_value=([0], {})))
+        point = runner.gen.Point(0, {"command": "check"}, 1)
+        self.ctx.enter_context(mock.patch.object(runner.gen, "sample", return_value=([point], {})))
         self.ctx.enter_context(mock.patch.object(runner.gen, "fingerprint", return_value="generator"))
-        plan = SimpleNamespace(point=SimpleNamespace(i=0), snap="fixture", cmd=["check"],
+        plan = SimpleNamespace(point=point, snap="fixture", cmd=["check"],
                                to_json=lambda: {"i": 0})
-        self.ctx.enter_context(mock.patch.object(runner.gen, "plan", return_value=plan))
+        self.plan = self.ctx.enter_context(mock.patch.object(runner.gen, "plan", return_value=plan))
         self.restore = self.ctx.enter_context(mock.patch.object(runner.gen, "restore_all"))
         self.measure = self.ctx.enter_context(mock.patch.object(runner, "run_point", return_value={"error": "retained failure"}))
         self.ctx.enter_context(contextlib.redirect_stderr(io.StringIO()))
@@ -47,20 +48,26 @@ class CheckpointTests(unittest.TestCase):
     def test_matching_identity_accepts_and_retains_failed_point(self):
         original = self.run_fixture()
         self.measure.reset_mock()
+        self.plan.reset_mock()
+        self.restore.reset_mock()
         resumed = self.run_fixture(resume=True)
         self.assertEqual(original["results"], resumed["results"])
         self.assertEqual(resumed["results"][0]["errors"], {"fixture": "retained failure"})
         self.measure.assert_not_called()
+        self.plan.assert_called_once()
+        self.assertEqual(self.restore.call_args_list, [mock.call("fixture")] * 2)
 
-    def assert_rejected(self):
+    def assert_rejected(self, reason="provenance"):
         saved = self.partial.read_bytes()
         self.restore.reset_mock()
         self.measure.reset_mock()
-        with self.assertRaisesRegex(ValueError, "provenance"):
+        self.plan.reset_mock()
+        with self.assertRaisesRegex(ValueError, reason):
             self.run_fixture(resume=True)
         self.assertEqual(saved, self.partial.read_bytes())
         self.restore.assert_not_called()
         self.measure.assert_not_called()
+        self.plan.assert_not_called()
 
     def test_same_path_changed_binary_rejected(self):
         self.run_fixture()
@@ -201,12 +208,17 @@ class CheckpointTests(unittest.TestCase):
     def test_malformed_results_rejected_without_overwrite(self):
         self.run_fixture()
         old = json.loads(self.partial.read_text())
-        old["results"].append(old["results"][0])
-        self.partial.write_text(json.dumps(old))
-        saved = self.partial.read_bytes()
-        with self.assertRaisesRegex(ValueError, "malformed"):
-            self.run_fixture(resume=True)
-        self.assertEqual(saved, self.partial.read_bytes())
+        row, = old["results"]
+        for results in ([row, row], [dict(row, i=1)], [dict(row, samples=[])], None):
+            with self.subTest(results=results):
+                self.partial.write_text(json.dumps(dict(old, results=results)))
+                self.assert_rejected("malformed")
+
+    def test_changed_workload_rejected_before_planning(self):
+        self.run_fixture()
+        old = json.loads(self.partial.read_text())
+        self.partial.write_text(json.dumps(dict(old, seed=2)))
+        self.assert_rejected("workload")
 
     def test_interrupted_before_point_zero_replaces_old_checkpoint(self):
         self.run_fixture()

@@ -371,7 +371,7 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
         raise ValueError("bench: identity demand cannot reuse unaudited resumed samples")
     gen._locked()
     pts, info = gen.sample(seed, points)
-    plans = [gen.plan(p, seed) for p in pts if not only or p.i in only]
+    selected = [p for p in pts if not only or p.i in only]
     binding = checkpoint_identity(stacks, quiet_wait, only, retry_noisy) if partial else None
     if binding is not None and retry_infra:
         binding["retry_infra"] = retry_infra
@@ -379,14 +379,17 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
     res_points = []
     if resume and partial and partial.exists():
         old = json.loads(partial.read_text())
+        if not isinstance(old, dict):
+            raise ValueError("bench: malformed resume checkpoint")
         if binding is None or old.get("checkpoint_identity") != binding:
             raise ValueError("bench: resume checkpoint provenance missing or changed; use a new --out")
         if (old.get("seed"), old.get("points"), old.get("reps"), old.get("generator"), old.get("stack_names")) == \
                 (seed, points, reps, gen.fingerprint(), [s.name for s in stacks]):
             res_points = old.get("results")
+            selected_ids = {p.i for p in selected}
             if (not isinstance(res_points, list)
                     or any(not isinstance(p, dict) or type(p.get("i")) is not int
-                           or p["i"] not in {plan.point.i for plan in plans}
+                           or p["i"] not in selected_ids
                            or not isinstance(p.get("samples"), dict)
                            or not isinstance(p.get("errors"), dict) for p in res_points)
                     or len({p["i"] for p in res_points}) != len(res_points)):
@@ -395,6 +398,9 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
         else:
             raise ValueError("bench: resume checkpoint workload changed; use a new --out")
     done = {p["i"] for p in res_points}
+    # Discovery can probe live snapshots. Validate before planning, but retain
+    # all selected plans on success so completed snapshots are restored too.
+    plans = [gen.plan(p, seed) for p in selected]
     t_start = time.monotonic()
     stopped = {}
     retry_metadata = ({"retry_infra": retry_infra,
