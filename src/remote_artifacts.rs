@@ -653,28 +653,43 @@ fn serve_selected_dir(
         let base = (!patch && req.anchors)
             .then(|| anchor(&streamed, m.len()))
             .flatten();
-        let mut c = Command::new("zstd");
-        c.args(["-q", "-f", "-T0"]);
-        if !patch && base.is_none() && m.len() >= 32 * 1024 * 1024 {
-            // Large standalone binaries benefit from a denser ordinary window.
-            // Keep the large reference window for both kinds of delta.
-            c.arg("-9");
+        let reference = if patch {
+            Some(sent.as_path())
         } else {
-            c.args(["-3", "--long=31"]);
-        }
-        if patch {
-            c.arg(format!("--patch-from={}", sent.display()));
-        } else if let Some((_, _, from)) = base {
-            c.arg(format!("--patch-from={}", from.display()));
-        }
-        let st = c
-            .arg(&snap)
-            .arg("-o")
-            .arg(&zst)
-            .stdin(Stdio::null())
-            .status()
-            .context("zstd on the build machine")?;
-        if !st.success() {
+            base.map(|(_, _, from)| from.as_path())
+        };
+        // A short match table forgets much of a large previous executable.
+        // Limit the denser encoder to measured same-file deltas. Two workers
+        // bound its per-worker tables even on very wide hosted machines.
+        let dense = patch
+            && m.len() >= 256 * 1024 * 1024
+            && crate::procfs::meminfo().is_some_and(|mem| {
+                mem.available_mb > (m.len() / (1024 * 1024)).saturating_mul(2) + 1024
+            });
+        let encode = |dense: bool| -> Result<bool> {
+            let mut c = Command::new("zstd");
+            c.args(["-q", "-f"]);
+            if dense {
+                c.args(["-3", "-T2", "--long=31", "--zstd=chainLog=25"]);
+            } else if reference.is_none() && m.len() >= 32 * 1024 * 1024 {
+                c.args(["-9", "-T0"]);
+            } else {
+                c.args(["-3", "-T0", "--long=31"]);
+            }
+            if let Some(from) = reference {
+                c.arg(format!("--patch-from={}", from.display()));
+            }
+            Ok(c.arg(&snap)
+                .arg("-o")
+                .arg(&zst)
+                .stdin(Stdio::null())
+                .status()
+                .context("zstd on the build machine")?
+                .success())
+        };
+        // Older zstd versions and memory-constrained hosts keep the existing
+        // compatible encoder. No frame is emitted until compression succeeds.
+        if !encode(dense)? && (!dense || !encode(false)?) {
             bail!("zstd failed on {name}");
         }
         let data = std::fs::read(&zst)?;
