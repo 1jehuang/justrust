@@ -715,7 +715,7 @@ fn active_row(run: &crate::status::Active, wide: bool, command_width: usize) -> 
         spans.extend([
             strong(pad("building", RESULT_WIDTH - 2), ACCENT),
             span(format!(" {}", pad(&run.place, WHERE_WIDTH)), LABEL),
-            span(format!(" {elapsed:>7}  "), wall_color(run.elapsed)),
+            span(format!(" {elapsed:>7}     -  "), wall_color(run.elapsed)),
             span(label, VALUE),
             span(format!("  {detail}"), DIM),
             span(pad_left("now", 9), LABEL),
@@ -725,7 +725,7 @@ fn active_row(run: &crate::status::Active, wide: bool, command_width: usize) -> 
             strong("building", ACCENT),
             span(" · ", LABEL),
             span(elapsed, wall_color(run.elapsed)),
-            span(" · ", LABEL),
+            span(" · - · ", LABEL),
             span(label, VALUE),
             span(format!("  {detail}"), DIM),
         ]);
@@ -934,11 +934,11 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
     }
     let width = inner.width as usize;
     let wide = width >= 84;
-    // Fixed columns: result, where, wall 7, when 9, plus gaps.
-    let command_width = width.saturating_sub(RESULT_WIDTH + WHERE_WIDTH + 7 + 9 + 4);
+    // Reserve six cells for the CGU reuse percentage and its separator.
+    let command_width = width.saturating_sub(RESULT_WIDTH + WHERE_WIDTH + 7 + 9 + 4 + 6);
     let header = if wide {
         format!(
-            "  {} {} {:>7}  {}{:>9}",
+            "  {} {} {:>7} REUSE  {}{:>9}",
             pad("RESULT", RESULT_WIDTH - 2),
             pad("WHERE", WHERE_WIDTH),
             "WALL",
@@ -946,7 +946,7 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
             "WHEN"
         )
     } else {
-        "  RESULT · WHEN · COMMAND".into()
+        "  RESULT · WHEN · REUSE · COMMAND".into()
     };
     let mut lines = vec![
         kind_bar(state, width),
@@ -977,6 +977,15 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
         } else {
             "?".into()
         };
+        let reuse = run.reuse.filter(|s| s.cgu_total > 0).map_or_else(
+            || "-".to_string(),
+            |s| {
+                format!(
+                    "{}%",
+                    (100.0 * s.cgu_reused as f64 / s.cgu_total as f64).round() as u64
+                )
+            },
+        );
         let mut spans = vec![span("● ", color)];
         if wide {
             let command = clip(&command, command_width.saturating_sub(2));
@@ -986,13 +995,14 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
                 span(pad(&result, RESULT_WIDTH - 2), color),
                 span(format!(" {}", pad(&run.place, WHERE_WIDTH)), LABEL),
                 span(
-                    format!(" {wall:>7}  "),
+                    format!(" {wall:>7}"),
                     if run.exit.is_some() {
                         wall_color(run.wall)
                     } else {
                         DIM
                     },
                 ),
+                span(format!(" {reuse:>5}  "), LABEL),
                 span(command, VALUE),
                 span(format!("  {project}"), DIM),
                 span(pad_left(&when(run.start), 9), LABEL),
@@ -1000,7 +1010,7 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
         } else {
             spans.extend([
                 span(result, color),
-                span(format!(" · {} · ", when(run.start)), LABEL),
+                span(format!(" · {} · {reuse} · ", when(run.start)), LABEL),
                 span(command, VALUE),
                 span(format!("  {project}"), DIM),
             ]);
@@ -1720,6 +1730,14 @@ mod tests {
             run("unknown", 1., None),
         ];
         state.selected = 1;
+        for w in [70, 140] {
+            let text = screen(&state, w, 60);
+            let history = text.split("─ Runs").nth(1).unwrap();
+            assert!(
+                history.contains("REUSE") && history.contains("38%") && history.contains("0%"),
+                "{history}"
+            );
+        }
         for (w, h) in [(140, 40), (40, 24)] {
             let text = screen(&state, w, h);
             assert!(text.contains("2/3 hosted measured"), "{text}");
@@ -2069,7 +2087,7 @@ mod tests {
         assert!(!screen(&state, 140, 30).contains("jcode test  hosted"));
         state.snapshot.active[0].running = vec![("serde".into(), 1.0)];
         // The narrow layout keeps it too.
-        assert!(screen(&state, 70, 30).contains("building · 1m15s · jcode test"));
+        assert!(screen(&state, 70, 30).contains("building · 1m15s · - · jcode test"));
 
         assert_eq!(wall_color(2.0), GOOD);
         assert_eq!(wall_color(30.0), VALUE);
