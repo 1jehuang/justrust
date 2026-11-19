@@ -372,11 +372,32 @@ fn may_have(root: &Path, base: &str, key: &str) -> bool {
         return true;
     }
     if !fresh_file(&idx, INDEX_SECS) {
-        // One fetcher refreshes; concurrent shims use the old copy or ask.
+        // Keep a stable lock inode even when the index is atomically replaced.
+        // Process exit releases the OS lock. Never unlink the lock file.
+        let Ok(lock) = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(idx.with_extension("refresh-lock"))
+        else {
+            return true;
+        };
+        if lock.try_lock().is_err() || fresh_file(&none, INDEX_SECS) {
+            // Busy or unsupported locking: a stale negative could hide a new
+            // key. Probe the manifest normally, including all validation.
+            return true;
+        }
+        if fresh_file(&idx, INDEX_SECS) {
+            return index_file_contains(&idx, key).unwrap_or(true);
+        }
         let t = tmp(root, "idx");
         match get(base, "index", &t, 20, MAX_INDEX) {
             Got::Ok => {
-                let _ = std::fs::rename(&t, &idx);
+                if std::fs::rename(&t, &idx).is_err() {
+                    let _ = std::fs::remove_file(&t);
+                    return true;
+                }
             }
             Got::Missing => {
                 let _ = std::fs::write(&none, b"");
