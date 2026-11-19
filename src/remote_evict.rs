@@ -182,7 +182,7 @@ pub fn plan(
     probe: &dyn Probe,
 ) -> (Vec<Eviction>, Vec<(PathBuf, Skip)>) {
     let now = probe.now();
-    let mut candidates = Vec::new();
+    let mut candidates = BTreeMap::<u64, Vec<PathBuf>>::new();
     let mut skipped = Vec::new();
     for (root, state) in roots {
         if state.leases > 0 {
@@ -204,22 +204,35 @@ pub fn plan(
             skipped.push((root.clone(), Skip::InUse));
             continue;
         }
-        let bytes = probe.size(&target);
-        candidates.push(Eviction {
-            target,
-            bytes,
-            last_build_end: state.last_build_end,
-        });
+        candidates
+            .entry(state.last_build_end)
+            .or_default()
+            .push(target);
     }
-    candidates.sort_by_key(|c| (c.last_build_end, std::cmp::Reverse(c.bytes)));
     let mut chosen = Vec::new();
     let mut freed = 0u64;
-    for c in candidates {
+    for (last_build_end, targets) in candidates {
         if freed >= need {
             break;
         }
-        freed = freed.saturating_add(c.bytes);
-        chosen.push(c);
+        // Size the whole age group: a later path may be its largest member.
+        // Stable sorting keeps registry path order when both keys tie.
+        let mut group: Vec<_> = targets
+            .into_iter()
+            .map(|target| Eviction {
+                bytes: probe.size(&target),
+                target,
+                last_build_end,
+            })
+            .collect();
+        group.sort_by_key(|c| std::cmp::Reverse(c.bytes));
+        for c in group {
+            freed = freed.saturating_add(c.bytes);
+            chosen.push(c);
+            if freed >= need {
+                break;
+            }
+        }
     }
     (chosen, skipped)
 }
@@ -964,6 +977,7 @@ mod tests {
     struct Fake {
         free: u64,
         total: u64,
+        size_calls: std::cell::Cell<usize>,
         sizes: HashMap<PathBuf, u64>,
         busy: Vec<PathBuf>,
         now: u64,
@@ -974,6 +988,7 @@ mod tests {
             Some((self.free, self.total))
         }
         fn size(&self, p: &Path) -> u64 {
+            self.size_calls.set(self.size_calls.get() + 1);
             self.sizes.get(p).copied().unwrap_or(0)
         }
         fn in_use_by_other(&self, p: &Path) -> bool {
@@ -1013,10 +1028,80 @@ mod tests {
         Fake {
             free,
             total,
+            size_calls: Default::default(),
             sizes: HashMap::new(),
             busy: Vec::new(),
             now,
         }
+    }
+
+    #[test]
+    fn age_group_plan_matches_eager_prefix_and_skips() {
+        let base = scratch("age-groups");
+        for entries in [
+            &[][..],
+            &[(2, 10), (1, 0), (2, 10), (1, 2), (2, 30), (4, 0)][..],
+            &[(1, u64::MAX - 1), (2, 5), (3, 1)][..],
+        ] {
+            let mut p = fake(0, 0, 100);
+            let mut roots = BTreeMap::new();
+            let mut eager = Vec::new();
+            for (i, &(age, bytes)) in entries.iter().enumerate() {
+                let root = mirrored(&base, &format!("r{i}"));
+                let target = root.join("target");
+                roots.insert(
+                    root,
+                    RootState {
+                        leases: 0,
+                        last_build_end: age,
+                    },
+                );
+                p.sizes.insert(target.clone(), bytes);
+                eager.push(Eviction {
+                    target,
+                    bytes,
+                    last_build_end: age,
+                });
+            }
+            let busy = mirrored(&base, "z-busy");
+            roots.insert(busy.clone(), RootState::default());
+            p.busy.push(busy.clone());
+            let missing = base.join("z-missing");
+            roots.insert(missing.clone(), RootState::default());
+            eager.sort_by_key(|e| (e.last_build_end, std::cmp::Reverse(e.bytes)));
+            for need in (0..=55).chain([u64::MAX - 1, u64::MAX]) {
+                let mut freed = 0u64;
+                let expected: Vec<_> = eager
+                    .iter()
+                    .take_while(|e| {
+                        if freed >= need {
+                            return false;
+                        }
+                        freed = freed.saturating_add(e.bytes);
+                        true
+                    })
+                    .cloned()
+                    .collect();
+                p.size_calls.set(0);
+                let (chosen, skipped) = plan(&roots, need, Duration::ZERO, &p);
+                assert_eq!(chosen, expected);
+                assert_eq!(
+                    skipped,
+                    [
+                        (busy.clone(), Skip::InUse),
+                        (missing.clone(), Skip::Missing)
+                    ]
+                );
+                let visited = expected.last().map_or(0, |last| {
+                    eager
+                        .iter()
+                        .filter(|e| e.last_build_end <= last.last_build_end)
+                        .count()
+                });
+                assert_eq!(p.size_calls.get(), visited);
+            }
+        }
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     const GIB: u64 = 1 << 30;
