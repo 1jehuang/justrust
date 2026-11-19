@@ -3,7 +3,7 @@
 use super::*;
 use crate::dashboard::data::{Bucket, Timeline};
 
-const COLORS: [Color; 9] = [
+pub(super) const COLORS: [Color; 9] = [
     ACCENT,
     GOOD,
     Color::Cyan,
@@ -26,6 +26,29 @@ pub(super) fn lines(trace: Option<&Timeline>, width: usize) -> Vec<Line<'static>
     result
 }
 
+/// Exact uncovered wall time, independent of terminal cell sampling.
+pub(super) fn gap(t: &Timeline) -> Option<f64> {
+    if !t.wall.is_finite() || t.wall <= 0. || t.spans.is_empty() {
+        return None;
+    }
+    let mut spans: Vec<_> = t
+        .spans
+        .iter()
+        .filter_map(|&(lo, hi, _)| {
+            (lo.is_finite() && hi.is_finite() && lo < hi && hi > 0. && lo < t.wall)
+                .then(|| (lo.max(0.), hi.min(t.wall)))
+        })
+        .collect();
+    spans.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+    let mut end: f64 = 0.;
+    let mut gap = 0.;
+    for (lo, hi) in spans {
+        gap += (lo - end).max(0.);
+        end = end.max(hi);
+    }
+    Some(gap + (t.wall - end))
+}
+
 fn single(t: &Timeline, width: usize) -> Vec<Line<'static>> {
     let prefix = if t.end_to_end {
         "Total elapsed  0s "
@@ -44,13 +67,8 @@ fn single(t: &Timeline, width: usize) -> Vec<Line<'static>> {
         }
     }
     let mut bar = vec![span(prefix, LABEL)];
-    let mut seen = 0;
-    let mut gaps = false;
-    let mut overlap = false;
     for (i, mask) in masks.into_iter().enumerate() {
-        seen |= mask;
         if mask == 0 {
-            gaps = true;
             bar.push(span("·", DIM));
             continue;
         }
@@ -64,7 +82,6 @@ fn single(t: &Timeline, width: usize) -> Vec<Line<'static>> {
         if mask.is_power_of_two() {
             bar.push(span("█", fg));
         } else {
-            overlap = true;
             bar.push(Span::styled(
                 "▚",
                 Style::default().fg(fg).bg(colors.next().unwrap()),
@@ -72,33 +89,7 @@ fn single(t: &Timeline, width: usize) -> Vec<Line<'static>> {
         }
     }
     bar.push(span(suffix, LABEL));
-    let mut key = Vec::new();
-    for cat in Bucket::ALL {
-        if seen & (1 << cat as usize) != 0 {
-            key.push(span(format!("■ {}  ", cat.label()), COLORS[cat as usize]));
-        }
-    }
-    if overlap {
-        key.push(span("▚ overlap  ", VALUE));
-    }
-    if gaps {
-        key.push(span("· untraced", DIM));
-    }
-    let mut rows = vec![fit(bar, width)];
-    let mut labels = Vec::new();
-    let mut used = 0;
-    for label in key {
-        if used + label.width() > width && !labels.is_empty() {
-            rows.push(fit(std::mem::take(&mut labels), width));
-            used = 0;
-        }
-        used += label.width();
-        labels.push(label);
-    }
-    if !labels.is_empty() {
-        rows.push(fit(labels, width));
-    }
-    rows
+    vec![fit(bar, width)]
 }
 
 #[cfg(test)]
@@ -112,6 +103,7 @@ mod tests {
             wall: 10.,
             spans: vec![(0., 8., Bucket::Compile), (5., 9., Bucket::Tests)],
         };
+        assert_eq!(gap(&t), Some(1.));
         let w = "Total elapsed  0s ".len() + 10 + format!(" {}", crate::status::dur(t.wall)).len();
         let row = lines(Some(&t), w)[0].to_string();
         assert!(row.contains("█████▚▚▚█·"), "{row}");

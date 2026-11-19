@@ -974,46 +974,74 @@ fn selected_lines(state: &State, width: usize) -> Vec<Line<'static>> {
         detail("Project", vec![span(tilde(&clean(&run.cwd)), VALUE)], width),
     ];
     lines.extend(timeline_view::lines(run.timeline.as_ref(), width));
-    if let Some(times) = &run.time {
-        let total: f64 = times.iter().sum();
-        let mut parts: Vec<_> = super::data::Bucket::ALL
-            .iter()
-            .map(|b| (b.label(), times[*b as usize]))
-            .filter(|(_, secs)| *secs > 0.0)
-            .collect();
-        parts.sort_by(|a, b| b.1.total_cmp(&a.1));
-        let entries = parts.iter().map(|(name, secs)| {
-            format!(
-                "{name} {} ({:.0}%)",
-                crate::status::dur(*secs),
-                if total > 0.0 {
-                    secs / total * 100.0
-                } else {
-                    0.0
-                }
-            )
-        });
-        let mut key = "Timing";
-        let mut row = String::new();
-        for entry in entries {
-            if !row.is_empty() {
-                if 9 + row.width() + 3 + entry.width() > width {
-                    lines.push(detail(
-                        key,
-                        vec![span(std::mem::take(&mut row), VALUE)],
-                        width,
-                    ));
-                    key = "";
-                } else {
-                    row.push_str(" · ");
-                }
-            }
-            row.push_str(&entry);
+    let mut timing_key = "Timing";
+    for axis in run
+        .timeline
+        .iter()
+        .flat_map(|t| std::iter::once(t).chain(t.cargo.as_deref()))
+    {
+        if let Some(gap) = timeline_view::gap(axis).filter(|g| *g > 0.) {
+            let name = if axis.end_to_end { "total" } else { "Cargo" };
+            lines.push(detail(
+                timing_key,
+                vec![span(
+                    format!(
+                        "· untraced {} ({:.0}% of {name})",
+                        crate::status::dur(gap),
+                        100. * gap / axis.wall
+                    ),
+                    DIM,
+                )],
+                width,
+            ));
+            timing_key = "";
         }
-        lines.push(detail(key, vec![span(row, VALUE)], width));
-    } else {
+    }
+    let mut parts =
+        super::data::Bucket::ALL.map(|b| (b, run.time.as_ref().map_or(0., |t| t[b as usize])));
+    parts.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let total: f64 = parts.iter().map(|p| p.1).sum();
+    let mut row = Vec::new();
+    let mut used = 9;
+    for (bucket, secs) in parts {
+        let traced = run
+            .timeline
+            .iter()
+            .flat_map(|t| std::iter::once(t).chain(t.cargo.as_deref()))
+            .any(|t| t.spans.iter().any(|s| s.2 == bucket));
+        if secs <= 0. && !traced {
+            continue;
+        }
+        let label = if secs > 0. {
+            format!(
+                "{} {} ({:.0}%)",
+                bucket.label(),
+                crate::status::dur(secs),
+                secs / total * 100.
+            )
+        } else {
+            bucket.label().to_string()
+        };
+        let entry = span(label, timeline_view::COLORS[bucket as usize]);
+        if !row.is_empty() && used + 3 + entry.width() > width {
+            lines.push(detail(timing_key, std::mem::take(&mut row), width));
+            timing_key = "";
+            used = 9;
+        }
+        if !row.is_empty() {
+            row.push(span(" · ", DIM));
+            used += 3;
+        }
+        used += entry.width();
+        row.push(entry);
+    }
+    if !row.is_empty() {
+        lines.push(detail(timing_key, row, width));
+        timing_key = "";
+    }
+    if run.time.is_none() {
         lines.push(detail(
-            "Timing",
+            timing_key,
             vec![span("breakdown not recorded locally", DIM)],
             width,
         ));
