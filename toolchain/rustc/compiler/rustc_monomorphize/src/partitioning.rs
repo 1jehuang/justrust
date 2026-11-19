@@ -95,13 +95,14 @@
 use std::cmp;
 use std::collections::hash_map::Entry;
 use std::fs::{self, File};
+use std::hash::BuildHasher;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use rustc_attr_ir::lang_items::LangItem;
 use rustc_attr_ir::{InlineAttr, Linkage};
 use rustc_data_structures::either::Either;
-use rustc_data_structures::fx::{FxHashMap, FxIndexMap, FxIndexSet, StdEntry};
+use rustc_data_structures::fx::{FxBuildHasher, FxHashMap, FxIndexMap, FxIndexSet, StdEntry};
 use rustc_data_structures::sync::par_join;
 use rustc_data_structures::unord::{UnordMap, UnordSet};
 use rustc_hir::def::DefKind;
@@ -118,7 +119,7 @@ use rustc_middle::ty::print::{characteristic_def_id_of_type, with_no_trimmed_pat
 use rustc_middle::ty::{self, InstanceKind, ShimKind, TyCtxt};
 use rustc_middle::util::Providers;
 use rustc_session::CodegenUnits;
-use rustc_session::config::{DumpMonoStatsFormat, SwitchWithOptPath};
+use rustc_session::config::{DumpMonoStatsFormat, OptLevel, SwitchWithOptPath};
 use rustc_span::{Symbol, bug};
 use rustc_target::spec::SymbolVisibility;
 use tracing::debug;
@@ -508,6 +509,35 @@ fn merge_codegen_units<'tcx>(
     // then at least one of the biggest N will have to grow. codegen_units[N-1]
     // is the smallest of those, and so has the most room to grow.
     let max_codegen_units = cx.tcx.sess.codegen_units().as_usize();
+    if cx.tcx.sess.is_test_crate()
+        && cx.tcx.sess.opts.incremental.is_some()
+        && cx.tcx.sess.opts.optimize == OptLevel::No
+        && max_codegen_units >= 256
+        && codegen_units.len() > max_codegen_units
+    {
+        // For a debug test edit, sorting by estimated MIR size lets a change
+        // in one function rename unrelated work products. Assign each natural
+        // CGU by its name, independent of all other CGUs and their sizes. An
+        // added/removed module disturbs only its bucket. Keep the requested
+        // upper bound, and use the usual internalization and symbol naming.
+        let mut buckets: Vec<Option<CodegenUnit<'tcx>>> =
+            (0..max_codegen_units).map(|_| None).collect();
+        for mut cgu in codegen_units.drain(..) {
+            let index =
+                (FxBuildHasher.hash_one(cgu.name().as_str()) % max_codegen_units as u64) as usize;
+            if let Some(dst) = &mut buckets[index] {
+                dst.items_mut().append(cgu.items_mut());
+                cgu_contents.get_mut(&dst.name()).unwrap().push(cgu.name());
+                cgu_contents.remove(&cgu.name());
+            } else {
+                buckets[index] = Some(cgu);
+            }
+        }
+        codegen_units.extend(buckets.into_iter().flatten().map(|mut cgu| {
+            cgu.compute_size_estimate();
+            cgu
+        }));
+    }
     while codegen_units.len() > max_codegen_units {
         // Sort small CGUs to the back.
         codegen_units.sort_by_key(|cgu| cmp::Reverse(cgu.size_estimate()));
