@@ -309,6 +309,9 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
         }
     };
     let pids: Arc<Mutex<HashMap<u64, RunStatus>>> = Arc::default();
+    // On graceful EOF drain only workers which have finished executing and are
+    // publishing their result or clearing their durable activity marker.
+    let publishing = Arc::new(std::sync::RwLock::new(()));
     // Mirrored roots and their builds, for low-disk `target/` eviction.
     // An explicitly prefixed agent owns this mirror namespace. Create its
     // directory before opening the canonical durable scope, including first boot.
@@ -517,6 +520,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                 // must survive the window before its process has a PID.
                 pids.lock().unwrap().insert(id, RunStatus::default());
                 let roots = roots.clone();
+                let publishing = publishing.clone();
                 let last_periodic_collection = last_periodic_collection.clone();
                 std::thread::spawn(move || {
                     let root = roots.lock().ok().and_then(|r| r.root_of(&cwd));
@@ -570,29 +574,33 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                     let result =
                         start_run(&executable, id, &cwd, &args, &env, &run_id, &out, &pids);
                     let executed = received.elapsed();
-                    if let (Some(root), Ok(mut r)) = (&root, roots.lock())
-                        && let Err(e) = r.end(
-                            root,
-                            crate::remote_evict::Probe::now(&crate::remote_evict::System),
-                        )
-                    {
-                        eprintln!(
-                            "justrust agent: activity end failed for {} (GC stays protected): {e}",
-                            root.display()
-                        );
-                    }
-                    drop(_build_lock);
-                    if let (Some(root), Ok(r)) = (&root, roots.lock())
-                        && let Err(e) = r.finish_idle(root)
-                    {
-                        eprintln!(
-                            "justrust agent: activity finalization failed for {} (GC stays protected): {e}",
-                            root.display()
-                        );
-                    }
-                    // Maintenance runs after the result is sent: the agent
-                    // waits on eviction, the client does not. The activity
-                    // above is already ended, so GC protection is unchanged.
+                    let publication = publishing.read().unwrap_or_else(|p| p.into_inner());
+                    // Keep the build lock and durable uncertainty marker live through
+                    // RunFiles and Exit. A concurrent collection may hold the registry
+                    // for seconds; releasing protection is not part of Cargo's result.
+                    let finish_activity = || {
+                        if let (Some(root), Ok(mut r)) = (&root, roots.lock())
+                            && let Err(e) = r.end(
+                                root,
+                                crate::remote_evict::Probe::now(&crate::remote_evict::System),
+                            )
+                        {
+                            eprintln!(
+                                "justrust agent: activity end failed for {} (GC stays protected): {e}",
+                                root.display()
+                            );
+                        }
+                        drop(_build_lock);
+                        if let (Some(root), Ok(r)) = (&root, roots.lock())
+                            && let Err(e) = r.finish_idle(root)
+                        {
+                            eprintln!(
+                                "justrust agent: activity finalization failed for {} (GC stays protected): {e}",
+                                root.display()
+                            );
+                        }
+                    };
+                    // Both completion paths release activity before periodic collection.
                     let collect = claim_periodic_collection(
                         &last_periodic_collection,
                         std::time::Instant::now(),
@@ -611,6 +619,8 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                                 },
                                 &[],
                             );
+                            finish_activity();
+                            drop(publication);
                             if collect {
                                 evict_now(&roots);
                             }
@@ -641,6 +651,8 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                         },
                         &summary,
                     );
+                    finish_activity();
+                    drop(publication);
                     if collect {
                         evict_now(&roots);
                     }
@@ -687,6 +699,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
             }
         }
     }
+    drop(publishing.write().unwrap_or_else(|p| p.into_inner()));
     res
 }
 

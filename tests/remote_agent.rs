@@ -233,6 +233,97 @@ fn read(p: &Path) -> String {
 }
 
 #[test]
+fn completed_run_reports_exit_while_another_roots_registration_is_blocked() {
+    let mut a = Agent::start("exit-during-enrollment");
+    for (path, contents) in [
+        (
+            "/p/Cargo.toml",
+            "[package]\nname='waiter'\nversion='0.1.0'\nedition='2024'\n",
+        ),
+        (
+            "/p/src/main.rs",
+            "fn main(){ std::fs::write(\"started\",b\"\").unwrap(); while !std::path::Path::new(\"go\").exists() {std::thread::sleep(std::time::Duration::from_millis(5));} }",
+        ),
+        ("/other/source", ""),
+    ] {
+        a.send(
+            Msg::Write {
+                path: path.into(),
+                mode: 0o644,
+            },
+            contents.as_bytes(),
+        );
+    }
+    for path in ["/p", "/other"] {
+        a.send(Msg::Synced { path: path.into() }, &[]);
+    }
+    assert!(a.barrier(40).is_empty());
+    let lock_path = |root: &Path| {
+        let hash = root
+            .as_os_str()
+            .as_encoded_bytes()
+            .iter()
+            .fold(0xcbf29ce484222325u64, |h, b| {
+                (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)
+            });
+        a.dir
+            .join(format!("home/remote/evict-locks/{hash:016x}.lock"))
+    };
+    let other = std::fs::File::open(lock_path(&a.at("/other"))).unwrap();
+    let own = std::fs::File::open(lock_path(&a.at("/p"))).unwrap();
+    other.lock().unwrap();
+    a.send(
+        Msg::Run {
+            id: 41,
+            cwd: "/p".into(),
+            args: vec!["run".into(), "--offline".into()],
+            env: vec![
+                ("JUSTRUST_TOOLCHAIN".into(), "system".into()),
+                ("JUSTRUST_BUILDD".into(), "0".into()),
+            ],
+            roots: vec![],
+            start: false,
+            run_id: "exit-during-enrollment".into(),
+        },
+        &[],
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !a.at("/p/started").exists() {
+        assert!(Instant::now() < deadline, "fixture never started");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    a.send(
+        Msg::Synced {
+            path: "/other".into(),
+        },
+        &[],
+    );
+    // The following barrier stays queued behind the unrelated exclusive flock.
+    a.send(Msg::Barrier { id: 42 }, &[]);
+    std::thread::sleep(Duration::from_millis(50));
+    std::fs::write(a.at("/p/go"), b"").unwrap();
+    loop {
+        match a.recv().0 {
+            Msg::Out { id: 41, .. } | Msg::RunFiles { id: 41 } => (),
+            Msg::Exit {
+                id: 41, code: 0, ..
+            } => break,
+            other => panic!("unexpected frame {other:?}"),
+        }
+    }
+    assert!(
+        own.try_lock().is_err(),
+        "result delivery must not drop protection early"
+    );
+    drop(other);
+    assert!(matches!(a.recv().0, Msg::BarrierAck { id: 42, .. }));
+    drop(a.w.take());
+    assert!(a.child.wait().unwrap().success());
+    own.try_lock()
+        .expect("graceful EOF released completed build's lock");
+}
+
+#[test]
 fn authenticated_enrollment_survives_agent_exit_and_native_gc_defaults_dry() {
     let mut agent = Agent::start("durable-gc-restart");
     agent.send(
