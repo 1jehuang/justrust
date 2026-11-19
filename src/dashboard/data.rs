@@ -978,6 +978,28 @@ fn text(v: &Value) -> Option<String> {
     v.as_str().filter(|s| !s.is_empty()).map(str::to_owned)
 }
 
+// The account list carries only the fixed reuse projection, not raw ledgers.
+fn hosted_reuse(value: &Value) -> Option<ReuseStats> {
+    value.as_object()?;
+    let stats: ReuseStats = serde::Deserialize::deserialize(value).ok()?;
+    const MAX: u64 = 1_000_000_000_000;
+    (stats.ledgers > 0
+        && stats.cgu_reused <= stats.cgu_total
+        && [stats.ledgers, stats.cgu_total, stats.loaded]
+            .iter()
+            .all(|&n| n <= MAX)
+        && [
+            stats.same_secs,
+            stats.green_secs,
+            stats.changed_secs,
+            stats.unknown_secs,
+        ]
+        .iter()
+        .all(|&n| (0.0..=MAX as f64).contains(&n))
+        && stats.measured())
+    .then_some(stats)
+}
+
 fn hosted_row(value: &Value) -> Option<RunRow> {
     let id = value["id"].as_str()?;
     if !valid_id(id) {
@@ -1016,7 +1038,7 @@ fn hosted_row(value: &Value) -> Option<RunRow> {
         compile_failed: summary["compile_failed"].as_bool().unwrap_or(false),
         time: None,
         compile: None,
-        reuse: None,
+        reuse: hosted_reuse(&summary["dashboard_profile"]["reuse"]),
         timeline: None,
         opt_level: summary["opt_level"]
             .as_str()
@@ -2114,6 +2136,81 @@ mod tests {
         assert_eq!(row.exit, None);
         assert_eq!(row.place, "unknown");
         assert_eq!(row.origin, "hosted");
+    }
+
+    #[test]
+    fn account_list_reuse_counts_only_measured_rows_after_local_dedup() {
+        use serde_json::json;
+        let base = json!({"ledgers":1,"loaded":0,"cgu_total":0,"cgu_reused":0,
+            "same_secs":0,"green_secs":0,"changed_secs":0,"unknown_secs":0});
+        let record = |id, reuse| {
+            hosted_row(&json!({"id":id,"at":123,"summary":{
+            "args":["test","--lib"],"exit":0,"wall":3.5,"place":"hosted",
+            "dashboard_profile":{"reuse":reuse}}}))
+            .unwrap()
+        };
+        let mut cgu = base.clone();
+        cgu["cgu_total"] = json!(8);
+        cgu["cgu_reused"] = json!(7);
+        let mut zero_query = base.clone();
+        zero_query["query_observed"] = json!(true);
+        zero_query["cgu_observed"] = json!(false);
+        let mut state = super::super::State {
+            hosted_runs: vec![
+                record("cgu", cgu.clone()),
+                record("query", zero_query),
+                record("legacy-zero", base),
+                record("missing", Value::Null),
+                record("both", cgu),
+            ],
+            ..Default::default()
+        };
+        let mut local = state.hosted_runs.last().unwrap().clone();
+        local.origin = "local".into();
+        local.reuse = Some(ReuseStats {
+            loaded: 13,
+            ledgers: 1,
+            ..Default::default()
+        });
+        state.snapshot.runs.push(local);
+        let rows = state.rows();
+        let measured: Vec<_> = rows.iter().filter_map(|r| r.reuse).collect();
+        assert_eq!((rows.len(), measured.len()), (5, 3));
+        assert_eq!(measured.iter().filter(|r| r.has_queries()).count(), 2);
+        assert_eq!(measured.iter().filter(|r| r.has_cgus()).count(), 1);
+        assert_eq!(measured.iter().map(|r| r.loaded).sum::<u64>(), 13);
+        assert_eq!(measured.iter().map(|r| r.cgu_reused).sum::<u64>(), 7);
+    }
+
+    #[test]
+    fn account_list_rejects_malformed_reuse_without_fabricating_zeros() {
+        use serde_json::json;
+        let base = json!({"ledgers":1,"loaded":1,"cgu_total":2,"cgu_reused":1,
+            "same_secs":0,"green_secs":0.25,"changed_secs":0,"unknown_secs":0});
+        for (key, bad) in [
+            ("ledgers", json!(0)),
+            ("loaded", json!(0.5)),
+            ("cgu_reused", json!(3)),
+            ("same_secs", json!(-1)),
+            ("changed_secs", json!(1.1e12)),
+            ("unknown_secs", json!("0")),
+            ("loaded", json!(1_000_000_000_001u64)),
+            ("cgu_observed", json!(1)),
+            ("query_observed", Value::Null),
+        ] {
+            let mut invalid = base.clone();
+            invalid[key] = bad;
+            assert_eq!(hosted_reuse(&invalid), None, "{key}");
+        }
+        let mut partial = base.clone();
+        partial.as_object_mut().unwrap().remove("loaded");
+        assert_eq!(hosted_reuse(&partial), None);
+        assert!(
+            hosted_row(&json!({"id":"legacy","summary":{"reuse":base}}))
+                .unwrap()
+                .reuse
+                .is_none()
+        );
     }
 
     #[test]
