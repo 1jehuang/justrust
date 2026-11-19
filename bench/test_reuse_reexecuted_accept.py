@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -75,6 +76,15 @@ class ReexecutedAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'same_value'):
             accept.validate_counts([observation])
 
+    # Match the operation passed to the tracked dep-graph task, not either of
+    # the unrelated provider invocations in the same source file.
+    tracked_provider = re.compile(
+        r'dep_graph_data\.with_task\(\s*dep_node,\s*tcx,\s*\|\|\s*'
+        r'\{\s*(?:let _provider_timer\s*=\s*crate::provider_stats::provider\('
+        r'query\.name,\s*false\);\s*)?'
+        r'\(query\.invoke_provider_fn\)\(tcx,\s*key\)\s*\},\s*query\.hash_value_fn,?\s*\)'
+    )
+
     def test_native_callers_explicitly_exclude_feed_and_nonquery_tasks(self):
         # Structural regression check, supplemented by the direct native gate.
         compiler = Path(__file__).resolve().parents[1] / 'toolchain/rustc/compiler'
@@ -84,7 +94,13 @@ class ReexecutedAcceptanceTests(unittest.TestCase):
         self.assertEqual(graph.count('self.with_task_impl(dep_node, tcx, op, hash_result, true)'), 1)
         self.assertIn('data.hash_result_and_alloc_node(tcx, node, &reads, result, hash_result, false)', graph)
         self.assertIn('if tcx.prof.enabled()\n            && provider_execution\n            && let Some(previous_index)', graph)
-        self.assertIn('|| (query.invoke_provider_fn)(tcx, key)', execution)
+        self.assertRegex(execution, self.tracked_provider)
+        # Mutate only the tracked operation. A file-wide search for an actual
+        # provider call would still succeed and is not sufficient evidence.
+        match = self.tracked_provider.search(execution)
+        mutant = execution[:match.start()] + match[0].replace('invoke_provider_fn', 'cached_value_fn') + execution[match.end():]
+        self.assertIn('(query.invoke_provider_fn)(tcx, key)', mutant)
+        self.assertNotRegex(mutant, self.tracked_provider)
         for marker in accept.MARKERS:
             self.assertIn('"' + marker + '"', graph)
             self.assertNotIn('"' + marker.replace('jr_incremental_provider_', 'jr_incremental_') + '"', graph)
