@@ -820,23 +820,34 @@ pub fn build(
     // the binary directly and its output follows with no header, so the
     // binary starts here instead.
     let mut pooled: Option<(f64, String)> = None;
+    // Parallel pool output can retain only the final attempt's header.
+    let mut harnesses = std::collections::HashSet::new();
     for l in lines {
         let text = l.l.trim();
-        if let Some(exe) = text
+        if let Some(cmd) = text
             .strip_prefix("Running `")
-            .and_then(|c| {
-                let mut w = c.trim_end_matches('`').split_whitespace();
-                w.next()?;
-                (w.next()? == crate::test_runner::SUBCOMMAND).then_some(w)
-            })
-            .and_then(|mut w| {
-                w.next()?
-                    .starts_with(crate::test_pool::POOL_ARG)
-                    .then(|| w.next())
-                    .flatten()
-            })
+            .and_then(|s| s.strip_suffix('`'))
         {
-            pooled = Some((l.t, crate::sys::last_component(exe).to_owned()));
+            let mut words = cmd.split_whitespace().skip(1).peekable();
+            if words.next() == Some(crate::test_runner::SUBCOMMAND) {
+                let pool = words
+                    .next_if(|s| s.starts_with(crate::test_pool::POOL_ARG))
+                    .is_some();
+                if let Some(exe) = words.next() {
+                    if pool {
+                        pooled = Some((l.t, crate::sys::last_component(exe).to_owned()));
+                    }
+                    // Only unambiguous single-path headers identify a harness.
+                    // Do not mistake a path containing spaces for its prefix.
+                    if meta.subcommand == "test"
+                        && l.s == "e"
+                        && words.next().is_none()
+                        && Path::new(exe).is_absolute()
+                    {
+                        harnesses.insert(exe);
+                    }
+                }
+            }
         }
         if current.is_none()
             && is_libtest_running(text)
@@ -982,10 +993,18 @@ pub fn build(
         first_unit.min(build_end)
     };
     let startup_lock = lock_wait.min(startup);
-    let test_run: f64 = share_time(&test_spans, 0.0, wall)
-        .1
-        .min((wall - build_end).max(0.0))
-        .max(0.0);
+    // Each record tracks one PID + process start tick. Its first and last
+    // observations bound that harness's lifetime on the recorder clock.
+    // Do not bridge distinct processes or extrapolate a polling interval.
+    test_spans.extend(procs.iter().filter_map(|p| {
+        (p.kind == "target-binary"
+            && harnesses.contains(p.cmdline.split_whitespace().next()?)
+            && p.first_seen.is_finite()
+            && p.last_seen.is_finite()
+            && p.last_seen > p.first_seen)
+            .then(|| (rel(p.first_seen), rel(p.last_seen)))
+    }));
+    let test_run = share_time(&test_spans, build_end, wall).1;
     let build_window = (build_end - startup).max(0.0);
     let compile = compile_covered.min(build_window);
     let phases = Phases {
@@ -2303,6 +2322,58 @@ mod tests {
             s.phases
         );
         assert!(s.phases.tail < 1.0, "{:?}", s.phases);
+    }
+    #[test]
+    #[cfg(unix)]
+    fn sampled_harness_intervals_do_not_fill_unsampled_retry_gaps() {
+        let run = |t, text: &str| OutputLine {
+            t,
+            s: "e".into(),
+            l: text.into(),
+        };
+        let lines = [
+            run(110.0, "Running `/jr __test-runner /target/deps/suite`"),
+            run(
+                112.0,
+                "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.00s",
+            ),
+        ];
+        let proc = |pid, exe: &str, first_seen, last_seen| ProcRecord {
+            pid,
+            comm: "suite".into(),
+            cmdline: exe.into(),
+            kind: "target-binary".into(),
+            first_seen,
+            last_seen,
+            cpu_secs: 0.0,
+            max_rss_mb: 0.0,
+        };
+        let procs = [
+            proc(1, "/target/deps/suite", 108.0, 111.0),
+            proc(2, "/target/deps/suite --exact case", 111.0, 113.0),
+            proc(3, "/target/deps/suite", 115.0, 118.0),
+            proc(4, "/fixture/deps/suite", 113.0, 115.0),
+            proc(5, "/target/deps/suite", 114.0, 114.0),
+        ];
+        let s = build(
+            &Meta {
+                subcommand: "test".into(),
+                ..Default::default()
+            },
+            GitInfo::default(),
+            100.0,
+            120.0,
+            0,
+            0.0,
+            &lines,
+            &[],
+            &procs,
+            &[],
+        );
+        assert_eq!(
+            (s.phases.startup, s.phases.test_run, s.phases.tail),
+            (10.0, 6.0, 4.0)
+        );
     }
     #[test]
     fn nested_libtest_result_does_not_move_parent_time_to_tail() {

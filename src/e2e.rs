@@ -301,6 +301,11 @@ fn valid_run_timing(t: &crate::remote_proto::RunTiming) -> bool {
 /// by the tail (pooled binaries overlap, so their sum can exceed wall).
 fn corrected_phases(s: &crate::summary::Summary) -> crate::summary::Phases {
     let mut p = s.phases.clone();
+    // Recorders with coverage metadata already measured a union of test
+    // intervals. A concurrent suite's summed libtest durations are not wall.
+    if s.measurement_coverage.is_some() {
+        return p;
+    }
     let missing = (s.tests.libtest_secs - p.test_run).max(0.0).min(p.tail);
     p.test_run += missing;
     p.tail -= missing;
@@ -785,5 +790,9 @@ mod tests {
         assert!((get(&e, "build.tests") - 567.06).abs() < 1e-6, "{e:?}");
         assert!(get(&e, "build.tail") < 0.1, "{e:?}");
         assert!((sum(&e) - 569.0).abs() < 1e-6);
+        s.measurement_coverage = Some(Default::default());
+        let e = derive(&s).unwrap();
+        assert_eq!(get(&e, "build.tests"), 0.0);
+        assert!((get(&e, "build.tail") - 567.1).abs() < 1e-6);
     }
 }
