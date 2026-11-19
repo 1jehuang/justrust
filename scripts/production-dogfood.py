@@ -78,12 +78,18 @@ def verified_binary(info, triple):
     if hashlib.sha256(archive).hexdigest() != checksum[0].lower():
         raise ValueError("release archive checksum mismatch")
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as bundle:
-        members = [m for m in bundle.getmembers()
-                   if m.name == f"justrust-{triple}/justrust"]
-        if len(members) != 1 or not members[0].isfile() or members[0].size > 128 * 1024 * 1024:
+        # Read in archive order to avoid inflating the executable twice. Keep
+        # scanning after the match so a later duplicate is still rejected.
+        data = None
+        for member in bundle:
+            if member.name != f"justrust-{triple}/justrust":
+                continue
+            if data is not None or not member.isfile() or not 0 <= member.size <= 128 * 1024 * 1024:
+                raise ValueError("release must contain one regular executable")
+            data = bundle.extractfile(member).read()
+        if data is None:
             raise ValueError("release must contain one regular executable")
-        # Never extract arbitrary paths, links, or archive permissions.
-        return bundle.extractfile(members[0]).read()
+        return data
 
 
 def validate_release(binary, version):
