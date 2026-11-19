@@ -337,7 +337,13 @@ fn curl_with_timing(
     timing: bool,
 ) -> (Command, String) {
     let mut cmd = Command::new("curl");
-    let writeout = if timing {
+    let stages = timing
+        && method == "POST"
+        && path == "build/runs"
+        && std::env::var_os("JUSTRUST_CHARGE_TIMING").as_deref() == Some(std::ffi::OsStr::new("1"));
+    let writeout = if stages {
+        "\njustrust-admission-timing:%{http_code}\njustrust-network-timing:%{time_namelookup},%{time_connect},%{time_appconnect},%{time_pretransfer},%{time_starttransfer},%{time_total}\njustrust-charge-stages:%header{x-justrust-charge-timing}\n%header{server-timing}"
+    } else if timing {
         "\njustrust-admission-timing:%{http_code}\njustrust-network-timing:%{time_namelookup},%{time_connect},%{time_appconnect},%{time_pretransfer},%{time_starttransfer},%{time_total}\n%header{server-timing}"
     } else {
         "\n%{http_code}"
@@ -368,6 +374,9 @@ fn curl_with_timing(
     if timing {
         cmd.args(["-H", "X-Justrust-Timing: 1"]);
     }
+    if stages {
+        cmd.args(["-H", "X-Justrust-Charge-Timing: 1"]);
+    }
     if method == "POST" && path == "build/runs" {
         cmd.args(["-H", "X-Justrust-Admission: maintenance-v1"]);
     }
@@ -397,6 +406,11 @@ fn admission_timing(header: &str) -> Option<String> {
         "jr_queue",
         "jr_total",
     ];
+    let metrics = bounded_metrics(header, &NAMES)?;
+    Some(format!("{metrics} (awaited paths, identity overlaps)"))
+}
+
+fn bounded_metrics<const N: usize>(header: &str, names: &[&str; N]) -> Option<String> {
     if header.is_empty()
         || header.len() > 256
         || !header.is_ascii()
@@ -404,10 +418,10 @@ fn admission_timing(header: &str) -> Option<String> {
     {
         return None;
     }
-    let mut values = [None; NAMES.len()];
+    let mut values = [None; N];
     for metric in header.split(',') {
         let (name, duration) = metric.trim().split_once(";dur=")?;
-        let index = NAMES.iter().position(|candidate| *candidate == name)?;
+        let index = names.iter().position(|candidate| *candidate == name)?;
         if values[index].is_some()
             || duration.is_empty()
             || !duration.bytes().all(|b| b.is_ascii_digit() || b == b'.')
@@ -420,20 +434,17 @@ fn admission_timing(header: &str) -> Option<String> {
         }
         values[index] = Some(duration);
     }
-    let metrics: Vec<String> = NAMES
+    let metrics: Vec<String> = names
         .iter()
         .zip(values)
         .filter_map(|(name, value)| {
-            value.map(|v| format!("{} {v:.1} ms", name.strip_prefix("jr_").unwrap()))
+            value.map(|v| format!("{} {v:.1} ms", name.strip_prefix("jr_").unwrap_or(name)))
         })
         .collect();
     if metrics.is_empty() {
         None
     } else {
-        Some(format!(
-            "{} (awaited paths, identity overlaps)",
-            metrics.join(" | ")
-        ))
+        Some(metrics.join(" | "))
     }
 }
 
@@ -447,11 +458,21 @@ fn curl_response(stdout: &str, timing: bool) -> (&str, u16, Option<String>) {
             .unwrap_or((stdout, ""));
         let (code, header) = footer.split_once('\n').unwrap_or((footer, ""));
         let header = network_footer(header).map_or(header, |(_, header)| header);
-        (
-            body,
-            code.trim().parse().unwrap_or(0),
-            admission_timing(header),
-        )
+        let (stages, header) = header
+            .strip_prefix("justrust-charge-stages:")
+            .and_then(|s| s.split_once('\n'))
+            .map_or((None, header), |(stages, outer)| {
+                (
+                    bounded_metrics(stages, &["lookup", "txn", "notify", "status"]),
+                    outer,
+                )
+            });
+        let metrics = match (admission_timing(header), stages) {
+            (Some(outer), Some(stages)) => Some(format!("{outer} | backend: {stages}")),
+            (None, Some(stages)) => Some(format!("backend: {stages}")),
+            (outer, None) => outer,
+        };
+        (body, code.trim().parse().unwrap_or(0), metrics)
     } else {
         let (body, code) = stdout.rsplit_once('\n').unwrap_or(("", stdout));
         (body, code.trim().parse().unwrap_or(0), None)
@@ -3624,6 +3645,30 @@ mod tests {
         assert!(config.contains("data-binary = \"{\\\"run_id\\\":\\\"r1\\\"}\"\n"));
         assert!(trace_args.windows(2).any(|w| w == ["--config", "-"]));
         assert_eq!(trace_args.last(), args.last());
+    }
+
+    #[test]
+    fn charge_stages_are_optional_bounded_and_do_not_change_verdict() {
+        let prefix = "{}\njustrust-admission-timing:402\njustrust-network-timing:0,0,0,0,0,0\njustrust-charge-stages:";
+        for stage in [
+            "",
+            "secret;dur=1",
+            "txn;dur=60001",
+            "txn;dur=1,txn;dur=2",
+            "txn;dur=1;desc=private",
+        ] {
+            let raw = format!("{prefix}{stage}\njr_total;dur=9");
+            let (body, code, metrics) = curl_response(&raw, true);
+            assert_eq!((body, code), ("{}", 402));
+            assert_eq!(metrics, admission_timing("jr_total;dur=9"));
+        }
+        let raw = format!("{prefix}txn;dur=7,lookup;dur=2\njr_total;dur=9");
+        assert!(
+            curl_response(&raw, true)
+                .2
+                .unwrap()
+                .ends_with("backend: lookup 2.0 ms | txn 7.0 ms")
+        );
     }
 
     #[test]
