@@ -1,4 +1,5 @@
 """Opt-in release test on a committed client workspace, never the current checkout."""
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -14,6 +15,50 @@ SKIP = {b'toolchain', b'.wrangler', b'bench', b'data'}
 ARGS = ['test', '--workspace', '--locked']
 
 
+@contextmanager
+def blob_batch(git):
+    cmd = [*git, 'cat-file', '--batch']
+    with subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as proc:
+        try:
+            yield proc
+            proc.stdin.close()
+            if proc.stdout.read(1):
+                raise ValueError('unexpected trailing Git batch data')
+            if proc.wait():
+                raise subprocess.CalledProcessError(proc.returncode, cmd)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+
+
+def copy_blob(proc, oid, target):
+    # One outstanding request avoids pipe deadlocks. Stream even a large blob.
+    if not re.fullmatch(b'[0-9a-f]{40}', oid):
+        raise ValueError(f'invalid Git object ID: {target}')
+    proc.stdin.write(oid + b'\n')
+    proc.stdin.flush()
+    header = proc.stdout.readline(128)
+    match = re.fullmatch(oid + rb' blob (0|[1-9][0-9]*)\n', header)
+    if not match:
+        raise ValueError(f'invalid Git blob header for {target}: {header!r}')
+    size = match[1]
+    identity = hashlib.sha1(b'blob ' + size + b'\0')
+    digest = hashlib.sha256()
+    remaining = int(size)
+    with target.open('xb') as f:
+        while remaining:
+            chunk = proc.stdout.read(min(remaining, 256 * 1024))
+            if not chunk:
+                raise ValueError(f'truncated Git blob: {target}')
+            identity.update(chunk)
+            digest.update(chunk)
+            f.write(chunk)
+            remaining -= len(chunk)
+    if proc.stdout.read(1) != b'\n' or identity.hexdigest().encode() != oid:
+        raise ValueError(f'Git blob framing or identity mismatch: {target}')
+    return digest.hexdigest()
+
+
 def materialize(root, sha, destination):
     if not re.fullmatch('[0-9a-f]{40}', sha):
         raise ValueError('exact gate requires a full commit SHA')
@@ -27,22 +72,19 @@ def materialize(root, sha, destination):
     inventory = []
     # Read blobs, not git archive: export-ignore and export-subst must not
     # drop workspace members or rewrite bytes. Never copy local Git config.
-    for row in filter(None, entries):
-        header, name = row.split(b'\t', 1)
-        mode, kind, oid = header.split()
-        path = Path(os.fsdecode(name))
-        if (mode not in (b'100644', b'100755') or kind != b'blob' or path.is_absolute()
-                or any(p in {'.git', '..', 'target', '.justrust'} for p in path.parts)):
-            raise ValueError(f'unsupported client input: {path}')
-        data = read('cat-file', 'blob', oid)
-        if hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest().encode() != oid:
-            raise ValueError(f'Git blob identity mismatch: {path}')
-        target = destination / path
-        target.parent.mkdir(exist_ok=True, parents=True)
-        with target.open('xb') as f:
-            f.write(data)
-        target.chmod(int(mode, 8) & 0o777)
-        inventory.append([str(path), hashlib.sha256(data).hexdigest(), mode == b'100755'])
+    with blob_batch(git) as proc:
+        for row in filter(None, entries):
+            header, name = row.split(b'\t', 1)
+            mode, kind, oid = header.split()
+            path = Path(os.fsdecode(name))
+            if (mode not in (b'100644', b'100755') or kind != b'blob' or path.is_absolute()
+                    or any(p in {'.git', '..', 'target', '.justrust'} for p in path.parts)):
+                raise ValueError(f'unsupported client input: {path}')
+            target = destination / path
+            target.parent.mkdir(exist_ok=True, parents=True)
+            digest = copy_blob(proc, oid, target)
+            target.chmod(int(mode, 8) & 0o777)
+            inventory.append([str(path), digest, mode == b'100755'])
     return inventory
 
 

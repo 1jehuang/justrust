@@ -1,5 +1,6 @@
 """Offline Git, libtest witness, and pre-tag fail-closed fixtures."""
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -89,6 +90,24 @@ class ExactGateTests(unittest.TestCase):
                     with self.assertRaises((ValueError, subprocess.CalledProcessError)):
                         gate.gate(self.root, self.sha, invoke=self.invoke)
                 self.assertFalse(self.paths[-1].exists())
+
+    def test_missing_committed_blob_never_invokes_client(self):
+        oid = subprocess.check_output(['git', 'rev-parse', f'{self.sha}:{self.member}'],
+                                      cwd=self.root, text=True).strip()
+        (self.root / '.git/objects' / oid[:2] / oid[2:]).unlink()
+        invoke = mock.Mock()
+        with self.assertRaisesRegex(ValueError, 'missing'):
+            gate.gate(self.root, self.sha, invoke=invoke)
+        invoke.assert_not_called()
+
+    def test_bad_batch_responses(self):
+        oid = b'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391'  # empty blob
+        for response in (b'0'*40 + b' blob 0\n\n', oid + b' tree 0\n\n', oid + b' blob -1\n',
+                         oid + b' blob 1\n', oid + b' blob 0\nx', oid + b' blob 1\nx\n'):
+            proc = mock.Mock(stdin=io.BytesIO(), stdout=io.BytesIO(response))
+            with self.subTest(response=response), tempfile.TemporaryDirectory() as d:
+                with self.assertRaises(ValueError):
+                    gate.copy_blob(proc, oid, Path(d) / 'output')
 
     def test_no_release_without_matched_source_and_success(self):
         args = ['--tag', 'v1.2.3', '--ref', self.sha, '--test-exact', '--execute']
