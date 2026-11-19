@@ -615,18 +615,19 @@ def plan(pt: Point, seed: int) -> Plan:
     used: set[tuple[str, int]] = set()
 
     def place(kind: str, crate: str) -> EditOp | None:
-        loc_kind = "test" if kind == "test" else "body"
-        locs = [x for x in live(crate, loc_kind) if x not in used]
-        if not locs and kind == "test":
-            locs = [x for x in live(crate, "body") if x not in used]
-        if kind in ("item",):
-            files = sorted({f for f, _ in live(crate, "body")})
-            return EditOp(kind, crate, rng.choice(files)) if files else None
+        # Metadata-only edits need no compiler-proven source location.
         if kind == "new-file":
             rf = ws.pkgs[crate].root_file() if crate in ws.pkgs else None
             return EditOp(kind, crate, str(rf.relative_to(ws.root))) if rf else None
         if kind == "manifest":
             return EditOp(kind, crate, str(ws.pkgs[crate].manifest.relative_to(ws.root)))
+        if kind == "item":
+            files = sorted({f for f, _ in live(crate, "body")})
+            return EditOp(kind, crate, rng.choice(files)) if files else None
+        loc_kind = "test" if kind == "test" else "body"
+        locs = [x for x in live(crate, loc_kind) if x not in used]
+        if not locs and kind == "test":
+            locs = [x for x in live(crate, "body") if x not in used]
         if not locs:
             return None
         f, ln = rng.choice(locs)
