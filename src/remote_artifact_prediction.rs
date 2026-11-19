@@ -3,9 +3,12 @@
 use anyhow::{Context, Result, bail, ensure};
 use sha2::{Digest, Sha256};
 use std::fs::File;
-use std::io::{BufReader, Read, Write};
+use std::io::{BufReader, Read, Seek, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+
+#[path = "remote_artifact_unwind.rs"]
+mod unwind;
 
 const BLOCK: usize = 8192;
 const LITERAL: u32 = u32::MAX;
@@ -43,7 +46,13 @@ fn bucket(w: u64, bits: u32) -> usize {
     ((w ^ (w >> 29)).wrapping_mul(0x9e3779b185ebca87) >> (64 - bits)) as usize
 }
 
-fn encode(basis: &[u8], size: u64, mut input: impl Read, mut out: impl Write) -> Result<()> {
+fn encode(
+    basis: &[u8],
+    size: u64,
+    mut input: impl Read,
+    mut out: impl Write,
+    hints: Option<&unwind::Unwind>,
+) -> Result<()> {
     ensure!(
         size <= MAX && basis.len() as u64 <= MAX,
         "oversized prediction"
@@ -70,7 +79,9 @@ fn encode(basis: &[u8], size: u64, mut input: impl Read, mut out: impl Write) ->
         let block = &mut block[..len];
         input.read_exact(block)?;
         hash.update(&*block);
-        let source = best_source(basis, block, pos, previous_shift, bits, &table);
+        let source = hints
+            .and_then(|h| h.source(basis, block, pos))
+            .unwrap_or_else(|| best_source(basis, block, pos, previous_shift, bits, &table));
         if source != LITERAL {
             referenced += len;
             previous_shift = i64::from(source) - pos as i64;
@@ -183,7 +194,9 @@ fn decode(basis: &[u8], size: u64, mut input: impl Read, mut out: impl Write) ->
 
 pub(super) fn compress(old: &Path, new: &Path, size: u64, compressed: &Path) -> Result<()> {
     let basis = read_basis(old)?;
-    let input = File::open(new)?;
+    let mut input = File::open(new)?;
+    let hints = unwind::Unwind::detect(&basis, &mut input, size as usize);
+    input.rewind()?;
     let mut child = Command::new("zstd")
         .args(["-q", "-f", "-7", "-T2", "-", "-o"])
         .arg(compressed)
@@ -194,6 +207,7 @@ pub(super) fn compress(old: &Path, new: &Path, size: u64, compressed: &Path) -> 
         size,
         BufReader::new(input),
         child.stdin.take().context("zstd stdin")?,
+        hints.as_ref(),
     );
     let status = child.wait()?;
     res?;
@@ -248,7 +262,7 @@ mod tests {
     #[test]
     fn invalid_recipe_never_reads_beyond_basis_or_declared_output() {
         let mut input = Vec::new();
-        encode(b"", 1, &b"x"[..], &mut input).unwrap();
+        encode(b"", 1, &b"x"[..], &mut input, None).unwrap();
         let mut result = Vec::new();
         decode(b"", 1, &input[..], &mut result).unwrap();
         assert_eq!(result, b"x");
@@ -268,7 +282,7 @@ mod tests {
         for len in [0, 1, 7, 8, 23, 24, BLOCK - 1, BLOCK, BLOCK + 1] {
             let new: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
             let mut recipe = Vec::new();
-            encode(&[], len as u64, &new[..], &mut recipe).unwrap();
+            encode(&[], len as u64, &new[..], &mut recipe, None).unwrap();
             let mut got = Vec::new();
             decode(&[], len as u64, &recipe[..], &mut got).unwrap();
             assert_eq!(got, new);
