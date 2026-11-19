@@ -1308,29 +1308,38 @@ fn stamp(m: &std::fs::Metadata) -> String {
 /// the file's inode, size, and mtime still match.
 pub fn file_hash(path: &Path, memo: bool) -> Option<String> {
     let meta = std::fs::metadata(path).ok()?;
+    if !memo {
+        // Metadata failure remains a miss. Size selects scratch space only:
+        // even a growing or zero-size virtual file is read through EOF.
+        if meta.len() <= 16 * 1024 {
+            let f = std::fs::File::open(path).ok()?;
+            return hash_open_file(f, &mut [0; 16 * 1024]);
+        }
+        return hash_file_content(path);
+    }
     let st = stamp(&meta);
-    if memo
-        && let Some(v) = xattr_get(path, XATTR)
+    if let Some(v) = xattr_get(path, XATTR)
         && let Some((s, hash)) = v.rsplit_once('|')
         && s == st
     {
         return Some(hash.to_owned());
     }
     let hash = hash_file_content(path)?;
-    if memo {
-        xattr_set(path, XATTR, &format!("{st}|{hash}"));
-    }
+    xattr_set(path, XATTR, &format!("{st}|{hash}"));
     Some(hash)
 }
 
 pub(crate) fn hash_file_content(path: &Path) -> Option<String> {
+    let f = std::fs::File::open(path).ok()?;
+    hash_open_file(f, &mut vec![0; 1 << 20])
+}
+
+fn hash_open_file(mut f: std::fs::File, buf: &mut [u8]) -> Option<String> {
     use std::io::Read;
-    let mut f = std::fs::File::open(path).ok()?;
     let mut h = H128::new();
-    let mut buf = vec![0u8; 1 << 20];
     let mut total = 0u64;
     loop {
-        let n = f.read(&mut buf).ok()?;
+        let n = f.read(buf).ok()?;
         if n == 0 {
             break;
         }
@@ -1834,6 +1843,25 @@ pub(crate) fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strict_hash_matches_content_and_length_across_buffer_sizes() {
+        let dir = std::env::temp_dir().join(format!("jr-strict-hash-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("input");
+        for n in [0, 17, 16384, 16385, (1 << 20) + 3] {
+            let bytes: Vec<u8> = (0..n).map(|i| (i % 251) as u8).collect();
+            std::fs::write(&path, &bytes).unwrap();
+            let mut expected = H128::new();
+            expected.raw(&bytes);
+            expected.field(&(bytes.len() as u64).to_le_bytes());
+            assert_eq!(file_hash(&path, false), Some(expected.hex()));
+        }
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(file_hash(&path, false), None);
+        assert_eq!(file_hash(&dir, false), None);
+        std::fs::remove_dir(dir).unwrap();
+    }
 
     /// The key's C library is the host's, read at runtime: a static musl
     /// release build must key a glibc host as glibc, like a glibc build.
