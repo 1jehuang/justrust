@@ -862,6 +862,7 @@ mod tests {
                     secs: *v,
                 })
                 .collect(),
+            trace: vec![],
             derived,
         });
         s

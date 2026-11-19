@@ -31,6 +31,9 @@ pub struct E2e {
     /// Seconds from the justrust process starting to the report.
     pub wall: f64,
     pub segments: Vec<Segment>,
+    /// Measured intervals on the client monotonic clock, not reconstructed phase totals.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trace: Vec<(f64, f64, String)>,
     /// Reconstructed from older records (coarser, no client marks).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub derived: bool,
@@ -150,6 +153,7 @@ impl Waterfall {
         E2e {
             wall,
             segments: self.segments,
+            trace: Vec::new(),
             derived,
         }
     }
@@ -187,7 +191,25 @@ pub fn local(m: &Marks, now: f64, phases: &crate::summary::Phases) -> E2e {
         "build.other",
     );
     w.until("client.report", Some(now));
-    w.finish(now, false)
+    let mut e = w.finish(now, false);
+    let baseline = m.get("record_baseline");
+    let done = m.get("cargo_done");
+    e.interval("client.setup", Some(0.), baseline, now);
+    e.interval("build.window", baseline, done, now);
+    e.interval("client.report", done, Some(now), now);
+    e
+}
+
+impl E2e {
+    fn interval(&mut self, key: &str, start: Option<f64>, end: Option<f64>, wall: f64) {
+        if let (Some(lo), Some(hi)) = (start, end)
+            && 0. <= lo
+            && lo < hi
+            && hi <= wall
+        {
+            self.trace.push((lo, hi, key.into()));
+        }
+    }
 }
 
 /// What the remote path knows when it records a run.
@@ -242,7 +264,23 @@ pub fn remote(m: &Marks, now: f64, r: &RemoteTimes) -> E2e {
     split_owned(&mut w, m.get("exit"), &host, "remote.host_overhead");
     w.until("remote.artifacts", m.get("artifacts"));
     w.until("client.report", Some(now));
-    w.finish(now, false)
+    let mut e = w.finish(now, false);
+    let mut start = Some(0.);
+    for (key, end) in [
+        ("client.route", m.get("routed")),
+        ("client.roots", m.get("remote_roots")),
+        ("remote.admission", m.get("admitted")),
+        ("remote.daemon_connect", m.get("daemon_connected")),
+        ("sync.total", m.get("flushed")),
+    ] {
+        e.interval(key, start, end, now);
+        start = end;
+    }
+    // The execution host has a separate clock. Do not place its phases
+    // between flush and exit by assuming a one-way network latency.
+    e.interval("remote.artifacts", m.get("exit"), m.get("artifacts"), now);
+    e.interval("client.report", m.get("artifacts"), Some(now), now);
+    e
 }
 
 fn valid_run_timing(t: &crate::remote_proto::RunTiming) -> bool {
@@ -400,6 +438,7 @@ mod tests {
     fn local_waterfall_sums_to_wall() {
         let m = Marks(vec![
             ("routed", 0.05),
+            ("record_baseline", 0.18),
             ("cargo_spawn", 0.20),
             ("cargo_done", 3.6),
         ]);
@@ -410,6 +449,14 @@ mod tests {
             ..Default::default()
         };
         let e = local(&m, 3.8, &p);
+        assert_eq!(
+            e.trace,
+            vec![
+                (0., 0.18, "client.setup".into()),
+                (0.18, 3.6, "build.window".into()),
+                (3.6, 3.8, "client.report".into())
+            ]
+        );
         assert!((sum(&e) - 3.8).abs() < 1e-9, "{e:?}");
         assert!((get(&e, "client.route") - 0.05).abs() < 1e-9);
         assert!((get(&e, "client.setup") - 0.15).abs() < 1e-9);

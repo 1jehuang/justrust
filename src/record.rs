@@ -950,6 +950,7 @@ fn record(
     // Establish the CPU interval before Cargo can do any work. A baseline
     // taken by the sampler thread after spawn loses most of a short build.
     let baseline = SampleBaseline::capture();
+    crate::e2e::mark("record_baseline");
     let start = baseline.sample.t;
     // Early diagnostics (opt-in): a resident rust-analyzer answers in
     // parallel with cargo. Never touches cargo's command or output.
