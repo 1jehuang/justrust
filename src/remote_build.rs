@@ -2140,8 +2140,10 @@ fn record_remote(
     s.place = Some(place.into());
     s.client_version = Some(crate::update::VERSION.into());
     // Older hosted recorders return raw unit observations without the aggregate.
-    if s.units.opt_level.is_none() && !run_files.is_empty() {
-        s.units.opt_level = crate::summary::returned_opt_level(&dir);
+    if s.dashboard_profile.is_none() && !run_files.is_empty() {
+        let (profile, opt) = crate::dashboard::DashboardProfile::returned(&dir);
+        s.dashboard_profile = Some(profile);
+        s.units.opt_level = s.units.opt_level.or(opt);
     }
     let meta_path = dir.join("meta.json");
     if let Some(mut m) = std::fs::read(&meta_path)

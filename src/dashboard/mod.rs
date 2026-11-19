@@ -2,6 +2,7 @@
 //! Network and disk work stay off the terminal thread. Existing commands never enter it.
 mod cache;
 mod data;
+pub(crate) use data::DashboardProfile;
 #[cfg(unix)]
 mod reload;
 mod view;

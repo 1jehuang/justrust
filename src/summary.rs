@@ -33,6 +33,8 @@ pub struct Summary {
     pub ncpu: usize,
     pub phases: Phases,
     pub units: UnitStats,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dashboard_profile: Option<crate::dashboard::DashboardProfile>,
     pub top_units: Vec<UnitBreakdown>,
     pub link: LinkStats,
     pub tests: TestStats,
@@ -1235,6 +1237,7 @@ pub fn build(
         ncpu: meta.ncpu,
         phases,
         units: stats,
+        dashboard_profile: Some(crate::dashboard::DashboardProfile::recorded(units)),
         top_units: top,
         link,
         tests,
@@ -1298,20 +1301,6 @@ fn is_compile_error(t: &str) -> bool {
         || t.starts_with("error: process didn't exit successfully")
         || t.starts_with("error: no test target")
         || t.starts_with("error: Recipe"))
-}
-
-pub(crate) fn returned_opt_level(dir: &Path) -> Option<String> {
-    #[derive(Deserialize)]
-    struct Level<'a> {
-        opt_level: &'a str,
-    }
-    let bytes = std::fs::read(dir.join("units.jsonl")).ok()?;
-    observed_opt_level(bytes.split(|&c| c == b'\n').filter_map(|line| {
-        serde_json::from_slice::<Level<'_>>(line)
-            .ok()
-            .map(|u| u.opt_level)
-    }))
-    .map(str::to_owned)
 }
 
 pub(crate) fn valid_unit_opt_level(level: &str) -> bool {

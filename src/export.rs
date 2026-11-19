@@ -43,7 +43,10 @@ pub fn upload_run(s: &crate::summary::Summary) {
         .and_then(Value::as_str);
     let cwd = v.get("cwd").and_then(Value::as_str).unwrap_or("");
     public.insert(repo_name(git_root, cwd));
-    let data = slim(v, &home, &crate::procfs::hostname(), &public);
+    let mut data = slim(v, &home, &crate::procfs::hostname(), &public);
+    let mut profile = s.dashboard_profile.clone().unwrap_or_default();
+    profile.set_overall(s);
+    data["dashboard_profile"] = serde_json::json!(profile);
     crate::remote_hosted::upload_record("run", &s.id, data);
 }
 

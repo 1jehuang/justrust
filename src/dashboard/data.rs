@@ -180,9 +180,7 @@ fn profile(
     mut interval: impl FnMut(f64, f64),
 ) -> (Option<CompileTimes>, Option<ReuseStats>, Option<String>) {
     let mut opt = None;
-    let mut reuse = ReuseStats::default();
-    let mut out = [0.0; PARTS];
-    let mut any = false;
+    let mut agg = DashboardProfile::default();
     for row in units.split(|byte| *byte == b'\n') {
         let Ok(unit) = serde_json::from_slice::<UnitTime>(row) else {
             continue;
@@ -190,46 +188,115 @@ fn profile(
         if let (Some(start), Some(end)) = (unit.start, unit.end) {
             interval(start, end);
         }
-        if let Some(level) = unit
-            .opt_level
-            .filter(|s| matches!(s.as_str(), "0" | "1" | "2" | "3" | "s" | "z"))
-        {
-            match opt.as_deref() {
-                None => opt = Some(level),
-                Some(previous) if previous != "mixed" && previous != level => {
-                    opt = Some("mixed".into())
-                }
-                _ => {}
+        observe_level(&mut opt, unit.opt_level);
+        agg.observe(
+            part(
+                &unit.depcache,
+                unit.build_script,
+                &unit.crate_types,
+                unit.test,
+                unit.local,
+            ),
+            unit.wall,
+            &unit.reuse,
+        );
+    }
+    (agg.compile, agg.reuse, opt)
+}
+
+fn observe_level(opt: &mut Option<String>, level: Option<String>) {
+    if let Some(level) = level.filter(|s| crate::summary::valid_unit_opt_level(s)) {
+        match opt.as_deref() {
+            None => *opt = Some(level),
+            Some(previous) if previous != "mixed" && previous != level => {
+                *opt = Some("mixed".into())
+            }
+            _ => {}
+        }
+    }
+}
+
+fn part(cache: &str, script: bool, types: &[String], test: bool, local: bool) -> Part {
+    if matches!(cache, "hit" | "remote" | "peer" | "prebuilt" | "local") {
+        Part::Restores
+    } else if script {
+        Part::BuildScripts
+    } else if types.iter().any(|t| t == "proc-macro") {
+        Part::ProcMacros
+    } else if test {
+        Part::Tests
+    } else if local {
+        Part::Workspace
+    } else {
+        Part::Dependencies
+    }
+}
+
+/// Fixed-size, non-identifying personal dashboard evidence for account records.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct DashboardProfile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    overall: Option<Times>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compile: Option<CompileTimes>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reuse: Option<ReuseStats>,
+}
+
+impl DashboardProfile {
+    fn observe(&mut self, part: Part, wall: f64, rows: &[crate::reuse::Row]) {
+        if wall.is_finite() && wall > 0. {
+            self.compile.get_or_insert([0.; PARTS])[part as usize] += wall;
+        }
+        if !rows.is_empty() {
+            self.reuse
+                .get_or_insert_with(Default::default)
+                .observe(rows);
+        }
+    }
+    pub(crate) fn recorded(units: &[crate::shim::Unit]) -> Self {
+        let mut agg = Self::default();
+        for u in units {
+            agg.observe(
+                part(&u.depcache, u.build_script, &u.crate_types, u.test, u.local),
+                u.wall,
+                &u.reuse,
+            );
+        }
+        agg
+    }
+    /// Pre-aggregate recorders returned only JSONL. Fold one row at a time,
+    /// recovering opt level in the same pass instead of rereading the sidecar.
+    pub(crate) fn returned(dir: &Path) -> (Self, Option<String>) {
+        File::open(dir.join("units.jsonl"))
+            .map(|f| Self::read_returned(std::io::BufReader::new(f)))
+            .unwrap_or_default()
+    }
+    fn read_returned(mut input: impl std::io::BufRead) -> (Self, Option<String>) {
+        let mut agg = Self::default();
+        let mut opt = None;
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            match input.read_until(b'\n', &mut line) {
+                Ok(0) => break,
+                Err(_) => return (Self::default(), None),
+                Ok(_) => {}
+            }
+            if let Ok(u) = serde_json::from_slice::<UnitTime>(&line) {
+                observe_level(&mut opt, u.opt_level);
+                agg.observe(
+                    part(&u.depcache, u.build_script, &u.crate_types, u.test, u.local),
+                    u.wall,
+                    &u.reuse,
+                );
             }
         }
-        reuse.observe(&unit.reuse);
-        if !unit.wall.is_finite() || unit.wall <= 0.0 {
-            continue;
-        }
-        let part = if matches!(
-            unit.depcache.as_str(),
-            "hit" | "remote" | "peer" | "prebuilt" | "local"
-        ) {
-            Part::Restores
-        } else if unit.build_script {
-            Part::BuildScripts
-        } else if unit.crate_types.iter().any(|t| t == "proc-macro") {
-            Part::ProcMacros
-        } else if unit.test {
-            Part::Tests
-        } else if unit.local {
-            Part::Workspace
-        } else {
-            Part::Dependencies
-        };
-        out[part as usize] += unit.wall;
-        any = true;
+        (agg, opt)
     }
-    (
-        any.then_some(out),
-        (reuse.ledgers > 0).then_some(reuse),
-        opt,
-    )
+    pub(crate) fn set_overall(&mut self, s: &crate::summary::Summary) {
+        self.overall = measured_parts(s.wall, Some(&s.phases), s.e2e.as_ref());
+    }
 }
 
 /// Summary and sidecars travel together from the recorder. Neither their
@@ -419,20 +486,27 @@ fn times(summary: &[u8]) -> Option<Times> {
 }
 
 fn measured_times(timing: Timing) -> Option<Times> {
+    measured_parts(timing.wall, timing.phases.as_ref(), timing.e2e.as_ref())
+}
+fn measured_parts(
+    wall: f64,
+    phases: Option<&crate::summary::Phases>,
+    e2e: Option<&crate::e2e::E2e>,
+) -> Option<Times> {
     let mut out = [0.0; BUCKETS];
     let mut add = |bucket: Bucket, secs: f64| {
         if secs.is_finite() && secs > 0.0 {
             out[bucket as usize] += secs;
         }
     };
-    match timing.e2e.filter(|e2e| !e2e.segments.is_empty()) {
+    match e2e.filter(|e2e| !e2e.segments.is_empty()) {
         Some(e2e) => {
             for segment in &e2e.segments {
                 add(Bucket::of(&segment.key), segment.secs);
             }
         }
         None => {
-            let p = timing.phases?;
+            let p = phases?;
             add(Bucket::Startup, p.startup);
             add(Bucket::Lock, p.lock_wait);
             add(Bucket::Compile, p.compile);
@@ -440,7 +514,7 @@ fn measured_times(timing: Timing) -> Option<Times> {
             add(Bucket::Other, p.build_gaps + p.tail);
             let attributed =
                 p.startup + p.lock_wait + p.compile + p.test_run + p.build_gaps + p.tail;
-            add(Bucket::Other, timing.wall - attributed);
+            add(Bucket::Other, wall - attributed);
         }
     }
     Some(out)
@@ -1325,6 +1399,42 @@ mod tests {
             }
         );
         assert!(unit_profiles(b"{\"wall\":1}").1.is_none());
+    }
+
+    #[test]
+    fn private_profile_matches_legacy_and_current_recorders() {
+        let u = crate::shim::Unit {
+            local: true,
+            wall: 1.125,
+            opt_level: "2".into(),
+            reuse: crate::reuse::parse("green_recompute\tprivate_query\t0.125\t1"),
+            ..Default::default()
+        };
+        let bytes = serde_json::to_vec(&u).unwrap();
+        let (mut old, level) = DashboardProfile::read_returned(bytes.as_slice());
+        assert_eq!(level.as_deref(), Some("2"));
+        let new = DashboardProfile::recorded(&[u]);
+        assert_eq!(serde_json::json!(old), serde_json::json!(new));
+        let s = crate::summary::Summary {
+            wall: 3.,
+            ..Default::default()
+        };
+        old.set_overall(&s);
+        let json = serde_json::json!(old);
+        assert_eq!(
+            json["overall"],
+            serde_json::json!([0., 0., 0., 0., 0., 0., 0., 0., 3.])
+        );
+        assert_eq!(
+            json["compile"],
+            serde_json::json!([1.125, 0., 0., 0., 0., 0.])
+        );
+        assert_eq!(json["reuse"]["green_secs"], 0.125);
+        assert!(!json.to_string().contains("private_query"));
+        assert_eq!(
+            serde_json::json!(DashboardProfile::default()),
+            serde_json::json!({})
+        );
     }
 
     #[test]
