@@ -1465,6 +1465,17 @@ fn is_test(argv: &[String]) -> bool {
     matches!(argv.first().map(String::as_str), Some("test" | "t"))
 }
 
+/// Whether the prediction must change the invocation to avoid running tests.
+/// An explicit Cargo --no-run already is the exact request: preserve its
+/// argv, output and status so normal same-stamp attach/replay can serve it.
+fn needs_compile_only(argv: &[String]) -> bool {
+    is_test(argv)
+        && !argv
+            .iter()
+            .take_while(|a| *a != "--")
+            .any(|a| a == "--no-run")
+}
+
 /// `test ARGS -- FILTERS` -> `test ARGS --no-run`: the same units, no run.
 fn no_run_argv(argv: &[String]) -> Vec<String> {
     let mut out: Vec<String> = argv.iter().take_while(|a| *a != "--").cloned().collect();
@@ -1652,7 +1663,7 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
             // Never run an agent's tests on a guess: they may touch files,
             // sockets or processes, and a cancelled prebuild would kill
             // them mid-run. Compile the same units only.
-            let compile_only = is_test(&req.argv);
+            let compile_only = needs_compile_only(&req.argv);
             if compile_only {
                 req.argv = no_run_argv(&req.argv);
             }
@@ -1915,7 +1926,13 @@ mod tests {
             no_run_argv(&v(&["test", "--no-run"])),
             v(&["test", "--no-run"])
         );
-        assert!(is_test(&v(&["t"])) && !is_test(&v(&["check"])));
+        assert!(needs_compile_only(&v(&["t", "--", "--no-run"])));
+        assert!(!needs_compile_only(&v(&[
+            "test",
+            "--no-run",
+            "--message-format=json-render-diagnostics"
+        ])));
+        assert!(!needs_compile_only(&v(&["check"])));
     }
 
     #[test]
