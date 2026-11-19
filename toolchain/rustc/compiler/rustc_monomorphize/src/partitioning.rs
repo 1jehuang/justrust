@@ -101,7 +101,7 @@ use std::path::{Path, PathBuf};
 use rustc_attr_ir::lang_items::LangItem;
 use rustc_attr_ir::{InlineAttr, Linkage};
 use rustc_data_structures::either::Either;
-use rustc_data_structures::fx::{FxIndexMap, FxIndexSet};
+use rustc_data_structures::fx::{FxHashMap, FxIndexMap, FxIndexSet, StdEntry};
 use rustc_data_structures::sync::par_join;
 use rustc_data_structures::unord::{UnordMap, UnordSet};
 use rustc_hir::def::DefKind;
@@ -1309,25 +1309,63 @@ where
 {
     let _prof_timer = tcx.prof.generic_activity("assert_symbols_are_distinct");
 
-    let mut symbols: Vec<_> =
-        mono_items.map(|mono_item| (mono_item, mono_item.symbol_name(tcx))).collect();
+    let collision = first_symbol_collision(mono_items.map(|item| (item.symbol_name(tcx), item)));
+    if let Some((sym1, mono_item1, mono_item2)) = collision {
+        let span1 = mono_item1.local_span(tcx);
+        let span2 = mono_item2.local_span(tcx);
 
-    symbols.sort_by_key(|sym| sym.1);
+        // Deterministically select one of the spans for error reporting
+        let span = match (span1, span2) {
+            (Some(span1), Some(span2)) => {
+                Some(if span1.lo().0 > span2.lo().0 { span1 } else { span2 })
+            }
+            (span1, span2) => span1.or(span2),
+        };
 
-    for &[(mono_item1, ref sym1), (mono_item2, ref sym2)] in symbols.array_windows() {
-        if sym1 == sym2 {
-            let span1 = mono_item1.local_span(tcx);
-            let span2 = mono_item2.local_span(tcx);
+        tcx.dcx().emit_fatal(SymbolAlreadyDefined { span, symbol: sym1.to_string() });
+    }
+}
 
-            // Deterministically select one of the spans for error reporting
-            let span = match (span1, span2) {
-                (Some(span1), Some(span2)) => {
-                    Some(if span1.lo().0 > span2.lo().0 { span1 } else { span2 })
-                }
-                (span1, span2) => span1.or(span2),
-            };
+/// Match the stable sort's first pair: the least duplicated name and its
+/// first two occurrences. Consume every item so symbol-name queries and their
+/// diagnostics are unchanged, even if a collision was already found.
+fn first_symbol_collision<K: Copy + Ord + std::hash::Hash, V: Copy>(
+    symbols: impl Iterator<Item = (K, V)>,
+) -> Option<(K, V, V)> {
+    let mut first = FxHashMap::with_capacity_and_hasher(symbols.size_hint().0, Default::default());
+    let mut collision = None;
+    for (name, item) in symbols {
+        match first.entry(name) {
+            StdEntry::Vacant(entry) => {
+                entry.insert(item);
+            }
+            StdEntry::Occupied(entry) if collision.is_none_or(|(best, _, _)| name < best) => {
+                collision = Some((name, *entry.get(), item));
+            }
+            _ => {}
+        }
+    }
+    collision
+}
 
-            tcx.dcx().emit_fatal(SymbolAlreadyDefined { span, symbol: sym1.to_string() });
+#[cfg(test)]
+#[test]
+fn collision_matches_stable_sort() {
+    for len in 0..=7 {
+        for mut pattern in 0..3_u32.pow(len) {
+            let rows: Vec<_> = (0..len)
+                .map(|i| {
+                    let key = pattern % 3;
+                    pattern /= 3;
+                    (key, i)
+                })
+                .collect();
+            let actual = first_symbol_collision(rows.iter().copied());
+            let mut sorted = rows;
+            sorted.sort_by_key(|&(key, _)| key);
+            let expected =
+                sorted.windows(2).find(|p| p[0].0 == p[1].0).map(|p| (p[0].0, p[0].1, p[1].1));
+            assert_eq!(actual, expected);
         }
     }
 }
