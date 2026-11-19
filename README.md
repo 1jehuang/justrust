@@ -139,8 +139,11 @@ whether its recording is stored locally or in your account.
 The Runs card says what happened instead of a bare exit code: `compile error`,
 `tests failed`, `your code failed`, `toolchain fault`, `infra fault`,
 `interrupted` or `unknown cause`. The cause is the class the recorder stored. A
-failure with no recorded class shows its exit code. The last column is how long
-ago the run started. Enter still shows the run ID and full details.
+failure with no recorded class shows its exit code. **OPT** shows the rustc
+optimization level observed in recorded units (`0`–`3`, `s`, or `z`). `mixed`
+means those units used different levels. `-` means no level was recorded, not
+that optimization was disabled. The wide layout ends with the run's age.
+Enter shows the run ID and full details.
 
 **Selected run** shows a chronological elapsed-time bar for the highlighted build.
 Read it from 0s on the left. Each cell samples one instant: solid colors show

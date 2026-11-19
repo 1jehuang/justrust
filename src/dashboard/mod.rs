@@ -250,7 +250,7 @@ const LOCAL_CACHE_SCOPE: &str = "00000000000000000000000000000000000000000000000
 /// Only completed display data is restored. Never restore active builds or
 /// mark a cached answer as connected, freshly checked, or authoritative.
 fn restore_cached(state: &mut State, scope: Option<&str>) {
-    if let Some(saved) = cache::load::<Vec<RunRow>>(LOCAL_CACHE_SCOPE, "local-v3") {
+    if let Some(saved) = cache::load::<Vec<RunRow>>(LOCAL_CACHE_SCOPE, "local-v4") {
         state.snapshot.runs = saved.data;
         state.local_cached = !state.snapshot.runs.is_empty();
     }
@@ -704,7 +704,13 @@ pub(crate) fn run() -> Result<()> {
         .map(|row| {
             (
                 row.id.clone(),
-                (row.time, row.compile, row.reuse, row.timeline.clone()),
+                (
+                    row.time,
+                    row.compile,
+                    row.reuse,
+                    row.timeline.clone(),
+                    row.opt_level.clone(),
+                ),
             )
         })
         .collect();
@@ -718,7 +724,7 @@ pub(crate) fn run() -> Result<()> {
                 && local.runs != saved_rows
                 && cache::save(
                     LOCAL_CACHE_SCOPE,
-                    "local-v3",
+                    "local-v4",
                     crate::paths::now(),
                     &local.runs,
                 )
@@ -1337,7 +1343,7 @@ fn full_dashboard_cached_data_latency_probe() {
     let versions = data::fetch_versions(&data::Versions::local(), |_| {});
     assert!(versions.error.is_none(), "{:?}", versions.error);
     let at = crate::paths::now();
-    cache::save(LOCAL_CACHE_SCOPE, "local-v3", at, &local.runs).expect("private local cache");
+    cache::save(LOCAL_CACHE_SCOPE, "local-v4", at, &local.runs).expect("private local cache");
     cache::save(&scope, "hosted", at, &hosted).expect("private hosted cache");
     cache::save(&scope, "versions", at, &versions).expect("private versions cache");
     for sample in 1..=3 {
@@ -1378,7 +1384,13 @@ fn full_dashboard_cached_data_latency_probe() {
             .map(|row| {
                 (
                     row.id.clone(),
-                    (row.time, row.compile, row.reuse, row.timeline.clone()),
+                    (
+                        row.time,
+                        row.compile,
+                        row.reuse,
+                        row.timeline.clone(),
+                        row.opt_level.clone(),
+                    ),
                 )
             })
             .collect();

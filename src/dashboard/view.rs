@@ -715,7 +715,10 @@ fn active_row(run: &crate::status::Active, wide: bool, command_width: usize) -> 
         spans.extend([
             strong(pad("building", RESULT_WIDTH - 2), ACCENT),
             span(format!(" {}", pad(&run.place, WHERE_WIDTH)), LABEL),
-            span(format!(" {elapsed:>7}     -  "), wall_color(run.elapsed)),
+            span(
+                format!(" {elapsed:>7}     -     -  "),
+                wall_color(run.elapsed),
+            ),
             span(label, VALUE),
             span(format!("  {detail}"), DIM),
             span(pad_left("now", 9), LABEL),
@@ -725,7 +728,7 @@ fn active_row(run: &crate::status::Active, wide: bool, command_width: usize) -> 
             strong("building", ACCENT),
             span(" · ", LABEL),
             span(elapsed, wall_color(run.elapsed)),
-            span(" · - · ", LABEL),
+            span(" · - · - · ", LABEL),
             span(label, VALUE),
             span(format!("  {detail}"), DIM),
         ]);
@@ -934,11 +937,11 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
     }
     let width = inner.width as usize;
     let wide = width >= 84;
-    // Reserve six cells for the CGU reuse percentage and its separator.
-    let command_width = width.saturating_sub(RESULT_WIDTH + WHERE_WIDTH + 7 + 9 + 4 + 6);
+    // REUSE and OPT each take five cells plus a separator.
+    let command_width = width.saturating_sub(RESULT_WIDTH + WHERE_WIDTH + 7 + 9 + 4 + 6 + 6);
     let header = if wide {
         format!(
-            "  {} {} {:>7} REUSE  {}{:>9}",
+            "  {} {} {:>7} REUSE   OPT  {}{:>9}",
             pad("RESULT", RESULT_WIDTH - 2),
             pad("WHERE", WHERE_WIDTH),
             "WALL",
@@ -946,7 +949,7 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
             "WHEN"
         )
     } else {
-        "  RESULT · WHEN · REUSE · COMMAND".into()
+        "  RESULT · WHEN · REUSE · OPT · COMMAND".into()
     };
     let mut lines = vec![
         kind_bar(state, width),
@@ -986,6 +989,7 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
                 )
             },
         );
+        let opt = run.opt_level.as_deref().unwrap_or("-");
         let mut spans = vec![span("● ", color)];
         if wide {
             let command = clip(&command, command_width.saturating_sub(2));
@@ -1002,7 +1006,7 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
                         DIM
                     },
                 ),
-                span(format!(" {reuse:>5}  "), LABEL),
+                span(format!(" {reuse:>5} {opt:>5}  "), LABEL),
                 span(command, VALUE),
                 span(format!("  {project}"), DIM),
                 span(pad_left(&when(run.start), 9), LABEL),
@@ -1010,7 +1014,10 @@ fn history(f: &mut Frame, area: Rect, state: &State) {
         } else {
             spans.extend([
                 span(result, color),
-                span(format!(" · {} · {reuse} · ", when(run.start)), LABEL),
+                span(
+                    format!(" · {} · {reuse} · {opt} · ", when(run.start)),
+                    LABEL,
+                ),
                 span(command, VALUE),
                 span(format!("  {project}"), DIM),
             ]);
@@ -1276,7 +1283,8 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
     let width = inner_width(area.width);
     // Cards pair up side by side when there is room, else stack, and short
     // terminals keep the run list instead.
-    let beside = area.width >= 110;
+    // Two bordered, padded cards with at least 45 content cells each.
+    let beside = inner_width(area.width / 2) >= 45;
     let card_width = if beside {
         inner_width(area.width / 2)
     } else {
@@ -1325,28 +1333,49 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
     } else {
         0
     };
-    // When measured rows need the space, keep the comparison and at least
-    // one actionable run row before optional profile and selection details.
+    // Budget the list first: two borders, three header lines, and room to
+    // browse several records. Empty history need not displace useful cards.
+    let body = state
+        .rows()
+        .len()
+        .saturating_add(state.snapshot.active.len())
+        .clamp(1, 10) as u16;
+    let reserve = 6 + body.min((area.height / 5).max(1)); // includes footer
     let mut versions_h = versions_h;
     let mut second_h = second_h;
     let mut first_h = first_h;
     let mut selected_h = selected_h;
-    if stacked_reuse_h > 0 && measured.0 > 0 {
-        let mut need =
-            (account_h + versions_h + first_h + second_h + selected_h + stacked_reuse_h + 6)
-                .saturating_sub(area.height);
-        for panel in [
+    let mut stacked_reuse_h = stacked_reuse_h;
+    let mut need =
+        (account_h + versions_h + first_h + second_h + selected_h + stacked_reuse_h + reserve)
+            .saturating_sub(area.height);
+    if need > 0 && measured.0 == 0 {
+        need = need.saturating_sub(stacked_reuse_h);
+        stacked_reuse_h = 0;
+    }
+    // Preserve measured comparisons. In paired mode the selection also
+    // contains reuse, so reclaim the profile before that pair if needed.
+    let optional = if measured.0 > 0 {
+        [
             &mut versions_h,
             &mut second_h,
             &mut first_h,
             &mut selected_h,
-        ] {
-            if need == 0 {
-                break;
-            }
-            need = need.saturating_sub(*panel);
-            *panel = 0;
+        ]
+    } else {
+        [
+            &mut selected_h,
+            &mut versions_h,
+            &mut second_h,
+            &mut first_h,
+        ]
+    };
+    for panel in optional {
+        if need == 0 {
+            break;
         }
+        need = need.saturating_sub(*panel);
+        *panel = 0;
     }
     let [
         top,
@@ -1358,7 +1387,7 @@ pub(super) fn draw(f: &mut Frame, state: &State) {
         runs,
         footer,
     ] = Layout::vertical([
-        Constraint::Length(account_h.min(area.height.saturating_sub(6))),
+        Constraint::Length(account_h.min(area.height.saturating_sub(reserve + stacked_reuse_h))),
         Constraint::Length(versions_h),
         Constraint::Length(first_h),
         Constraint::Length(second_h),
@@ -1471,6 +1500,27 @@ mod tests {
     use super::super::data::Bucket;
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn half_screen_and_smaller_keep_a_browsable_history() {
+        let mut state = State::default();
+        state.snapshot.runs = (0..24)
+            .map(|i| RunRow {
+                id: format!("run-{i}"),
+                args: vec![format!("item{i:02}")],
+                exit: Some(0),
+                ..Default::default()
+            })
+            .collect();
+        for (w, h, minimum) in [(102, 55, 10), (90, 32, 6), (60, 24, 4)] {
+            let text = screen(&state, w, h);
+            let (_, history) = text.split_once("─ Runs").unwrap();
+            assert!(
+                history.lines().filter(|line| line.contains("item")).count() >= minimum,
+                "{text}"
+            );
+        }
+    }
 
     #[test]
     fn chrome_clips_by_unicode_cells_and_removes_terminal_controls() {
@@ -1947,11 +1997,15 @@ mod tests {
             false,
         );
         failed.start = crate::paths::now() - 300.0;
+        failed.opt_level = Some("z".into());
         failed.place = "remote".into();
         state.snapshot.runs = vec![failed];
         let text = screen(&state, 140, 30);
         assert!(text.contains("tests failed"), "{text}");
         assert!(text.contains("5m ago"), "{text}");
+        assert!(text.contains("REUSE   OPT  COMMAND"));
+        assert!(text.contains("-     z  test -p ui"), "{text}");
+        assert!(screen(&state, 70, 30).contains(" · - · z · test -p ui"));
         assert!(text.contains("WHEN"));
         // The wide layout shows the age in place of the run ID.
         let history = text.split("─ Runs").nth(1).unwrap();
@@ -2082,7 +2136,7 @@ mod tests {
         assert!(!screen(&state, 140, 30).contains("jcode test  hosted"));
         state.snapshot.active[0].running = vec![("serde".into(), 1.0)];
         // The narrow layout keeps it too.
-        assert!(screen(&state, 70, 30).contains("building · 1m15s · - · jcode test"));
+        assert!(screen(&state, 70, 30).contains("building · 1m15s · - · - · jcode test"));
 
         assert_eq!(wall_color(2.0), GOOD);
         assert_eq!(wall_color(30.0), VALUE);

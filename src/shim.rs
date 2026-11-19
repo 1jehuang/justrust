@@ -909,14 +909,18 @@ fn describe(args: &[OsString]) -> Unit {
                 }
                 i += 1;
             }
-            "-C" => {
+            "-O" => u.opt_level = "3".into(),
+            "-C" | "--codegen" => {
                 codegen(next);
                 i += 1;
             }
             _ => {
                 if let Some(v) = a.strip_prefix("--emit=") {
                     u.emit = v.to_owned();
-                } else if let Some(v) = a.strip_prefix("-C") {
+                } else if let Some(v) = a
+                    .strip_prefix("-C")
+                    .or_else(|| a.strip_prefix("--codegen="))
+                {
                     codegen(v);
                 } else if let Some(v) = a
                     .strip_prefix("-Zthreads=")
@@ -1162,6 +1166,18 @@ mod tests {
         assert!(u.test && u.incremental);
         assert_eq!(u.frontend_threads, Some(8));
         assert_eq!(u.emit, "dep-info,metadata,link");
+    }
+
+    #[test]
+    fn describes_effective_opt_level() {
+        for (flags, expected) in [
+            (vec!["-Copt-level=s", "-O"], "3"),
+            (vec!["-O", "--codegen=opt-level=z"], "z"),
+            (vec!["--codegen", "opt-level=1"], "1"),
+        ] {
+            let args: Vec<_> = flags.iter().map(OsString::from).collect();
+            assert_eq!(describe(&args).opt_level, expected);
+        }
     }
 
     #[test]

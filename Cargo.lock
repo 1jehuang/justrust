@@ -1064,7 +1064,7 @@ dependencies = [
 
 [[package]]
 name = "justrust"
-version = "0.1.0-alpha.57"
+version = "0.1.0-alpha.58"
 dependencies = [
  "anyhow",
  "chrono",

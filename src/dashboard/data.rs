@@ -51,6 +51,7 @@ pub(crate) type TimeCache = std::collections::HashMap<
         Option<CompileTimes>,
         Option<ReuseStats>,
         Option<Timeline>,
+        Option<String>,
     ),
 >;
 
@@ -143,6 +144,7 @@ impl Part {
 /// Only what the compile profile needs from a recorded unit.
 #[derive(serde::Deserialize)]
 struct UnitTime {
+    opt_level: Option<String>,
     start: Option<f64>,
     end: Option<f64>,
     #[serde(default)]
@@ -169,12 +171,14 @@ fn compile_times(units: &[u8]) -> Option<CompileTimes> {
 }
 #[cfg(test)]
 fn unit_profiles(units: &[u8]) -> (Option<CompileTimes>, Option<ReuseStats>) {
-    profile(units, |_, _| {})
+    let (compile, reuse, _) = profile(units, |_, _| {});
+    (compile, reuse)
 }
 fn profile(
     units: &[u8],
     mut interval: impl FnMut(f64, f64),
-) -> (Option<CompileTimes>, Option<ReuseStats>) {
+) -> (Option<CompileTimes>, Option<ReuseStats>, Option<String>) {
+    let mut opt = None;
     let mut reuse = ReuseStats::default();
     let mut out = [0.0; PARTS];
     let mut any = false;
@@ -184,6 +188,18 @@ fn profile(
         };
         if let (Some(start), Some(end)) = (unit.start, unit.end) {
             interval(start, end);
+        }
+        if let Some(level) = unit
+            .opt_level
+            .filter(|s| matches!(s.as_str(), "0" | "1" | "2" | "3" | "s" | "z"))
+        {
+            match opt.as_deref() {
+                None => opt = Some(level),
+                Some(previous) if previous != "mixed" && previous != level => {
+                    opt = Some("mixed".into())
+                }
+                _ => {}
+            }
         }
         reuse.observe(&unit.reuse);
         if !unit.wall.is_finite() || unit.wall <= 0.0 {
@@ -208,7 +224,11 @@ fn profile(
         out[part as usize] += unit.wall;
         any = true;
     }
-    (any.then_some(out), (reuse.ledgers > 0).then_some(reuse))
+    (
+        any.then_some(out),
+        (reuse.ledgers > 0).then_some(reuse),
+        opt,
+    )
 }
 
 /// Summary and sidecars travel together from the recorder. Neither their
@@ -236,7 +256,12 @@ fn timeline_profiles(
     units: &[u8],
     local: bool,
     processes: impl FnOnce() -> Vec<u8>,
-) -> (Option<CompileTimes>, Option<ReuseStats>, Option<Timeline>) {
+) -> (
+    Option<CompileTimes>,
+    Option<ReuseStats>,
+    Option<Timeline>,
+    Option<String>,
+) {
     let input = serde_json::from_slice::<TimelineInput>(summary).unwrap_or_default();
     let e2e = input.e2e.as_ref().filter(|e| {
         !e.derived
@@ -285,7 +310,7 @@ fn timeline_profiles(
             }
         }
     };
-    let (compile, reuse) = profile(units, |s, e| observe(s, e, Bucket::Compile));
+    let (compile, reuse, opt) = profile(units, |s, e| observe(s, e, Bucket::Compile));
     // Summary binary ranges can enclose gaps between several invocations of
     // the same binary. Color only the lifetime actually observed for each PID.
     if !input.tests.binaries.is_empty() {
@@ -322,7 +347,7 @@ fn timeline_profiles(
         .spans
         .sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
     let measured = timeline.wall.is_finite() && timeline.wall > 0. && !timeline.spans.is_empty();
-    (compile, reuse, measured.then_some(timeline))
+    (compile, reuse, measured.then_some(timeline), opt)
 }
 
 impl Bucket {
@@ -444,6 +469,9 @@ pub(crate) struct RunRow {
     pub time: Option<Times>,
     /// What the compiler's time went to. Only for runs with units recorded here.
     pub compile: Option<CompileTimes>,
+    /// Effective rustc optimization observed across recorded units, or `mixed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opt_level: Option<String>,
     pub reuse: Option<ReuseStats>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeline: Option<Timeline>,
@@ -477,11 +505,12 @@ pub(crate) fn local_snapshot(
     match rows {
         Ok(mut rows) => {
             for row in &mut rows {
-                if let Some((time, compile, reuse, timeline)) = cache.get(&row.id) {
+                if let Some((time, compile, reuse, timeline, opt)) = cache.get(&row.id) {
                     row.time = *time;
                     row.compile = *compile;
                     row.reuse = *reuse;
                     row.timeline.clone_from(timeline);
+                    row.opt_level.clone_from(opt);
                 }
             }
             // The index is small. Never hold its rows behind a directory scan
@@ -536,7 +565,7 @@ fn enrich_rows(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path) {
                         let summary = read_summary(&run.join("summary.json")).unwrap_or_default();
                         row.time = times(&summary);
                         let units = read_summary(&run.join("units.jsonl")).unwrap_or_default();
-                        (row.compile, row.reuse, row.timeline) =
+                        (row.compile, row.reuse, row.timeline, row.opt_level) =
                             timeline_profiles(&summary, &units, row.place == "local", || {
                                 read_summary(&run.join("processes.json")).unwrap_or_default()
                             });
@@ -548,7 +577,13 @@ fn enrich_rows(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path) {
     for row in rows.iter() {
         cache.insert(
             row.id.clone(),
-            (row.time, row.compile, row.reuse, row.timeline.clone()),
+            (
+                row.time,
+                row.compile,
+                row.reuse,
+                row.timeline.clone(),
+                row.opt_level.clone(),
+            ),
         );
     }
     let ids: std::collections::HashSet<_> = rows.iter().map(|row| row.id.as_str()).collect();
@@ -744,6 +779,7 @@ fn index_rows(tail: &str) -> Vec<RunRow> {
             compile: None,
             reuse: None,
             timeline: None,
+            opt_level: None,
         })
         .collect()
 }
@@ -785,6 +821,7 @@ fn hosted_row(value: &Value) -> Option<RunRow> {
         compile: None,
         reuse: None,
         timeline: None,
+        opt_level: None,
     })
 }
 
@@ -1308,6 +1345,25 @@ mod tests {
     }
 
     #[test]
+    fn opt_level_uses_observed_units_not_profile_defaults() {
+        let measured = |units: &[u8]| profile(units, |_, _| {}).2;
+        assert_eq!(measured(br#"{"wall":3}"#), None);
+        assert_eq!(measured(br#"{"opt_level":"unknown"}"#), None);
+        for level in ["0", "1", "2", "3", "s", "z"] {
+            let unit = serde_json::json!({"opt_level": level});
+            assert_eq!(
+                measured(format!("{unit}\n{unit}").as_bytes()).as_deref(),
+                Some(level)
+            );
+        }
+        assert_eq!(
+            measured(b"{\"opt_level\":\"0\"}\n{\"opt_level\":\"z\"}\n{\"opt_level\":\"0\"}")
+                .as_deref(),
+            Some("mixed")
+        );
+    }
+
+    #[test]
     fn cached_profile_rows_need_no_summary_or_unit_files() {
         let time = Some([1.0; BUCKETS]);
         let compile = Some([2.0; PARTS]);
@@ -1315,11 +1371,15 @@ mod tests {
             id: "saved".into(),
             time,
             compile,
+            opt_level: Some("s".into()),
             ..Default::default()
         }];
         let mut cache = TimeCache::from([
-            ("saved".into(), (time, compile, None, None)),
-            ("expired".into(), (None, None, None, None)),
+            (
+                "saved".into(),
+                (time, compile, None, None, Some("s".into())),
+            ),
+            ("expired".into(), (None, None, None, None, None)),
         ]);
         enrich_rows(
             &mut rows,
@@ -1329,7 +1389,10 @@ mod tests {
         assert_eq!(rows[0].time, time);
         assert_eq!(rows[0].compile, compile);
         assert_eq!(cache.len(), 1);
-        assert_eq!(cache["saved"], (time, compile, None, None));
+        assert_eq!(
+            cache["saved"],
+            (time, compile, None, None, Some("s".into()))
+        );
     }
 
     #[test]
