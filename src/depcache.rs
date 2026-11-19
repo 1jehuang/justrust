@@ -406,12 +406,8 @@ fn is_unit_out_dir(out_dir: &Path) -> bool {
         && profile_dir(out_dir).is_some()
 }
 
-/// Keyed variables in `env` that cargo does not set for every unit: the
-/// user's environment or a cargo `[env]` table (`LIBRARY_PATH`, `RUSTC_*`,
-/// `CARGO_PROFILE_*`, ...). Each one splits this machine's keys from the
-/// prebuilt store and from machines without it: a leftover `[env]
-/// LIBRARY_PATH` on a hosted machine took a cold build from 529 store hits
-/// to 0 (FINDINGS 65d). Names only, sorted.
+/// Report inherited key names that can distinguish a unit from producers with
+/// a different environment. Presence alone does not establish why it missed.
 pub(crate) fn user_keyed_env(env: &[(String, String)]) -> Vec<String> {
     let mut v: Vec<String> = env
         .iter()
@@ -442,7 +438,6 @@ fn cargo_sets(k: &str) -> bool {
                 | "CARGO_RESOLVER_FEATURE_UNIFICATION"
                 | "CARGO_UNSTABLE_FEATURE_UNIFICATION"
                 | "CARGO_SBOM_PATH"
-                | "CARGO_RUSTC_CURRENT_DIR"
                 | "OUT_DIR"
                 | "RUSTC"
                 | "RUSTC_BOOTSTRAP"
@@ -2159,13 +2154,15 @@ mod tests {
         let mut env2 = env.clone();
         env2.extend([
             e("LIBRARY_PATH"),
+            // Cargo no longer sets this, but callers such as rustc bootstrap can.
+            ("CARGO_RUSTC_CURRENT_DIR".into(), "/private/cwd".into()),
             e("CARGO_PROFILE_DEV_DEBUG"),
             e("RUSTC_ICE"),
             e("LIBRARY_PATH"),
         ]);
         assert_eq!(
             user_keyed_env(&env2),
-            vec!["LIBRARY_PATH".to_owned(), "RUSTC_ICE".to_owned()]
+            ["CARGO_RUSTC_CURRENT_DIR", "LIBRARY_PATH", "RUSTC_ICE"]
         );
     }
 
