@@ -34,10 +34,10 @@ pub(super) fn gap(t: &Timeline) -> Option<f64> {
     let mut spans: Vec<_> = t
         .spans
         .iter()
-        .filter_map(|&(lo, hi, _)| {
-            (lo.is_finite() && hi.is_finite() && lo < hi && hi > 0. && lo < t.wall)
-                .then(|| (lo.max(0.), hi.min(t.wall)))
+        .filter(|&&(lo, hi, _)| {
+            lo.is_finite() && hi.is_finite() && lo < hi && hi > 0. && lo < t.wall
         })
+        .map(|&(lo, hi, _)| (lo.max(0.), hi.min(t.wall)))
         .collect();
     spans.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
     let mut end: f64 = 0.;
