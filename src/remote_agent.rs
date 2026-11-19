@@ -22,6 +22,9 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[path = "remote_admission_gc.rs"]
+mod admission_gc;
+
 use crate::remote_proto::{
     CACHE_VERSION, MIN_VERSION, Msg, RUN_FILES_VERSION, VERSION, read_frame, write_frame,
 };
@@ -150,12 +153,13 @@ fn collection_interval(env: &[(String, String)]) -> std::time::Duration {
 }
 
 /// Free bytes if below the build floor even after an eviction attempt.
-fn low_disk_after_eviction(roots: &crate::remote_evict::Shared) -> Option<u64> {
+fn low_disk_after_eviction(
+    roots: &crate::remote_evict::Shared,
+    gc: &admission_gc::AdmissionGc,
+) -> Option<u64> {
     use crate::remote_evict as ev;
     let home = dirs::home_dir()?;
-    ev::below_floor(&ev::System, &home)?;
-    evict_now(roots);
-    ev::below_floor(&ev::System, &home)
+    gc.below_after(|| ev::below_floor(&ev::System, &home), || evict_now(roots))
 }
 
 /// ENOSPC ("No space left on device") or a quota exhaustion.
@@ -323,6 +327,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
         crate::remote_evict::Registry::disabled(e.to_string())
     });
     let roots: crate::remote_evict::Shared = Arc::new(Mutex::new(registry));
+    let admission_gc = Arc::new(admission_gc::AdmissionGc::default());
     let last_periodic_collection = Arc::new(Mutex::new(None));
     // Paths whose latest Write or Delete failed: the tree differs from what
     // the daemon believes. Reported with every barrier until a later frame
@@ -518,11 +523,11 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                 // must survive the window before its process has a PID.
                 pids.lock().unwrap().insert(id, RunStatus::default());
                 let roots = roots.clone();
+                let admission_gc = admission_gc.clone();
                 let publishing = publishing.clone();
                 let last_periodic_collection = last_periodic_collection.clone();
                 std::thread::spawn(move || {
-                    let root = roots.lock().ok().and_then(|r| r.root_of(&cwd));
-                    if let Some(free) = low_disk_after_eviction(&roots) {
+                    if let Some(free) = low_disk_after_eviction(&roots, &admission_gc) {
                         pids.lock().unwrap().remove(&id);
                         send(
                             &out,
@@ -537,6 +542,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                         );
                         return;
                     }
+                    let root = roots.lock().ok().and_then(|r| r.root_of(&cwd));
                     // Shared per-root lock: eviction of this root's target/
                     // waits for the build, and the build for an eviction.
                     let setup = (|| -> anyhow::Result<_> {
