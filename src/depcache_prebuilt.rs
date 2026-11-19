@@ -374,10 +374,50 @@ fn may_have(root: &Path, base: &str, key: &str) -> bool {
             }
         }
     }
-    match std::fs::read(&idx) {
-        Ok(b) => index_contains(&b, key),
-        Err(_) => true,
+    index_file_contains(&idx, key).unwrap_or(true)
+}
+
+fn index_file_contains(path: &Path, key: &str) -> std::io::Result<bool> {
+    let file = std::fs::File::open(path)?;
+    let meta = file.metadata()?;
+    index_snapshot_contains(file, meta, key)
+}
+
+fn index_snapshot_contains(
+    mut file: std::fs::File,
+    meta: std::fs::Metadata,
+    key: &str,
+) -> std::io::Result<bool> {
+    use std::io::Read;
+    let len = meta.len();
+    // Pin the descriptor across all probes: an atomic refresh cannot mix generations.
+    #[cfg(unix)]
+    if meta.is_file() && len > 65536 && len.is_multiple_of(33) {
+        use std::os::unix::fs::FileExt;
+        if key.len() != 32 {
+            return Ok(false);
+        }
+        let (mut lo, mut hi) = (0, len / 33);
+        let mut probe = [0; 32];
+        while hi - lo > 256 {
+            let mid = lo + (hi - lo) / 2;
+            file.read_exact_at(&mut probe, mid * 33)?;
+            match probe.as_slice().cmp(key.as_bytes()) {
+                std::cmp::Ordering::Less => lo = mid + 1,
+                std::cmp::Ordering::Greater => hi = mid,
+                std::cmp::Ordering::Equal => return Ok(true),
+            }
+        }
+        let mut window = [0; 256 * 33];
+        let window = &mut window[..((hi - lo) * 33) as usize];
+        file.read_exact_at(window, lo * 33)?;
+        return Ok(index_contains(window, key) || file.metadata()?.len() != len);
     }
+    // Small files, streams, non-Unix platforms and variable-width indexes keep
+    // the buffered parser. Do not size the allocation from unbounded metadata.
+    let mut bytes = Vec::with_capacity(len.min(MAX_INDEX) as usize);
+    file.read_to_end(&mut bytes)?;
+    Ok((meta.is_file() && bytes.len() as u64 != len) || index_contains(&bytes, key))
 }
 
 /// The index is sorted, so binary search over fixed-width lines.
@@ -696,6 +736,42 @@ mod tests {
         // Not fixed width: linear scan still answers.
         let odd = format!("{}\n{}", "1".repeat(32), "2".repeat(32));
         assert!(index_contains(odd.as_bytes(), &"2".repeat(32)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_index_uses_open_snapshot_and_original_search_order() {
+        let dir = std::env::temp_dir().join(format!("jr-index-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("index");
+        let mut records = (0..3000)
+            .map(|i| format!("{:032x}\n", i / 2))
+            .collect::<String>()
+            .into_bytes();
+        // Malformed but divisible: the original parser ignores terminators and
+        // does not repair out-of-order records. Compare against that parser.
+        records[32] = b'x';
+        records[33 * 7..33 * 7 + 32].fill(b'z');
+        std::fs::write(&path, &records).unwrap();
+        for i in 0..1503 {
+            let key = format!("{i:032x}");
+            assert_eq!(
+                index_file_contains(&path, &key).unwrap(),
+                index_contains(&records, &key)
+            );
+        }
+        let held = std::fs::File::open(&path).unwrap();
+        let meta = held.metadata().unwrap();
+        let replacement = path.with_extension("new");
+        std::fs::write(&replacement, &records).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let truncated = std::fs::File::open(&path).unwrap();
+        let before = truncated.metadata().unwrap();
+        std::fs::write(&path, []).unwrap();
+        let key = format!("{:032x}", 1499);
+        assert!(index_snapshot_contains(held, meta, &key).unwrap());
+        assert!(index_snapshot_contains(truncated, before, &key).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
