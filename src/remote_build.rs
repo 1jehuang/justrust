@@ -2162,6 +2162,7 @@ fn record_remote(
             sync: sync_timing,
             run: run_timing,
             host_wall: s.wall,
+            slot_wait: s.slot.as_ref().map_or(0.0, |slot| slot.join_wait_secs),
             host_phases: s.phases.clone(),
         },
     ));

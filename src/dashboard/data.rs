@@ -364,7 +364,9 @@ impl Bucket {
             ("remote", "artifacts") => Bucket::Artifacts,
             ("remote", "other") => Bucket::Other,
             ("remote", _) => Bucket::Hosted,
-            ("host", "prepare" | "recorder" | "finalize" | "records") => Bucket::Hosted,
+            ("host", "prepare" | "slot_wait" | "recorder" | "finalize" | "records") => {
+                Bucket::Hosted
+            }
             _ => Bucket::Other,
         }
     }

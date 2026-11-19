@@ -219,6 +219,8 @@ pub struct RemoteTimes {
     pub run: Option<crate::remote_proto::RunTiming>,
     /// Host-recorded wall and phases, from the host's summary.
     pub host_wall: f64,
+    /// Identical-request wait inside slots::acquire, before record_baseline.
+    pub slot_wait: f64,
     pub host_phases: crate::summary::Phases,
 }
 
@@ -254,10 +256,14 @@ pub fn remote(m: &Marks, now: f64, r: &RemoteTimes) -> E2e {
     host.push(("host.other".into(), (r.host_wall - phase_sum).max(0.0)));
     if let Some(t) = r.run.filter(valid_run_timing) {
         host.insert(0, ("host.prepare".into(), t.prepare_ms / 1000.0));
-        host.push((
-            "host.recorder".into(),
-            (t.execute_ms / 1000.0 - r.host_wall).max(0.0),
-        ));
+        let residual = (t.execute_ms / 1000.0 - r.host_wall).max(0.0);
+        let wait = if r.slot_wait.is_finite() {
+            r.slot_wait.clamp(0.0, residual)
+        } else {
+            0.0
+        };
+        host.insert(1, ("host.slot_wait".into(), wait));
+        host.push(("host.recorder".into(), residual - wait));
         host.push(("host.finalize".into(), t.finalize_ms / 1000.0));
         host.push(("host.records".into(), t.records_ms / 1000.0));
     }
@@ -342,6 +348,7 @@ pub fn label(key: &str) -> &str {
         "remote.host_overhead" => "host start, results back",
         "host.prepare" => "agent preflight, protection",
         "host.recorder" => "recorder setup, reporting",
+        "host.slot_wait" => "wait for identical build",
         "host.finalize" => "activity finalization, GC",
         "host.records" => "pack, send run records",
         "remote.artifacts" => "artifacts back",
@@ -485,6 +492,7 @@ mod tests {
                 barrier_ms: 70.0,
             }),
             host_wall: 6.0,
+            slot_wait: 0.0,
             host_phases: Phases {
                 startup: 0.5,
                 compile: 5.0,
@@ -549,6 +557,43 @@ mod tests {
         ] {
             assert!((get(&e, key) - expected).abs() < 1e-9, "{key}: {e:?}");
         }
+    }
+
+    #[test]
+    fn identical_build_wait_only_consumes_host_execution_residual() {
+        // Replay execution measurements from 20261118-053339515-2563372-pre.
+        let marks = Marks(vec![("flushed", 0.0), ("exit", 245.0)]);
+        let mut times = RemoteTimes {
+            host_wall: 101.45868349075317,
+            run: Some(crate::remote_proto::RunTiming {
+                execute_ms: 244922.168591,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let old = remote(&marks, 245.0, &times);
+        let residual = get(&old, "host.recorder");
+        assert!((residual - 143.46348510024683).abs() < 1e-9);
+        for (measured, expected) in [
+            (143.332422317, 143.332422317),
+            (300.0, residual),
+            (-1.0, 0.0),
+            (f64::INFINITY, 0.0),
+            (f64::NAN, 0.0),
+        ] {
+            times.slot_wait = measured;
+            let e = remote(&marks, 245.0, &times);
+            assert!((get(&e, "host.slot_wait") - expected).abs() < 1e-9);
+            assert!((get(&e, "host.recorder") - (residual - expected)).abs() < 1e-9);
+            assert!((sum(&e) - sum(&old)).abs() < 1e-9);
+            assert_eq!(
+                render(&e).contains("wait for identical build"),
+                expected > 0.0
+            );
+        }
+        times.slot_wait = 143.332422317;
+        times.run = None;
+        assert_eq!(get(&remote(&marks, 245.0, &times), "host.slot_wait"), 0.0);
     }
 
     #[test]
@@ -642,6 +687,7 @@ mod tests {
                 push_ms: 300.0,
                 barrier_ms: 60.0,
             }),
+            slot_wait: 0.0,
             host_wall: 5.0,
             host_phases: Phases {
                 compile: 4.0,
