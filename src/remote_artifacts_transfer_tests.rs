@@ -186,7 +186,11 @@ impl Fixture {
     fn frames(&self) -> Vec<(Frame, Vec<u8>)> {
         let mut wire = Vec::new();
         serve_dir(&self.remote, &self.req, &self.sent, &mut wire).unwrap();
-        let mut reader = BufReader::new(wire.as_slice());
+        Self::decode(&wire)
+    }
+
+    fn decode(wire: &[u8]) -> Vec<(Frame, Vec<u8>)> {
+        let mut reader = BufReader::new(wire);
         let mut frames = Vec::new();
         loop {
             let mut line = String::new();
@@ -255,35 +259,128 @@ fn metadata_only_rebuild_eliminates_legacy_delta_payload() {
 }
 
 #[test]
-fn identical_selected_test_keeps_the_selected_manifest() {
-    let mut fixture = Fixture::new("selected", b"selected executable snapshot");
+fn selected_tests_reuse_exact_scoped_bases_across_slots() {
+    if !available() {
+        return;
+    }
+    let mut state = 0x1357_2468u32;
+    let body: Vec<u8> = (0..262144)
+        .flat_map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state.to_le_bytes()
+        })
+        .collect();
+    let mut fixture = Fixture::new("selected", &body);
+    let slots = fixture.root.join("target/justrust-slots");
+    std::fs::create_dir_all(&slots).unwrap();
+    let first = slots.join("0");
+    std::fs::rename(&fixture.remote, &first).unwrap();
+    fixture.remote = first;
     fixture.req.test_run = Some("successful-run".into());
-    let manifest = vec![serde_json::json!({
-        "reason": "compiler-artifact", "profile": {"test": true},
-        "executable": fixture.remote.join("app"),
-    })];
-    let mut wire = Vec::new();
-    serve_selected_dir(
+    let run = |dir: &Path, req: &Request| {
+        let mut wire = Vec::new();
+        let manifest = vec![
+            serde_json::json!({"reason":"compiler-artifact", "profile":{"test":true}, "executable":dir.join("app")}),
+        ];
+        serve_selected_dir(dir, req, &fixture.sent, &mut wire, Some(manifest.clone())).unwrap();
+        let frames = Fixture::decode(&wire);
+        assert_eq!(
+            frames[1].0,
+            Frame::Selected {
+                artifacts: manifest
+            }
+        );
+        frames
+            .into_iter()
+            .find(|(f, _)| matches!(f, Frame::File { .. }))
+    };
+    // Legacy metadata ids cannot authorize a cross-slot basis.
+    let (
+        Frame::File {
+            id, patch: false, ..
+        },
+        full,
+    ) = run(&fixture.remote, &fixture.req).unwrap()
+    else {
+        panic!("expected full")
+    };
+    fixture.req.have[0].id = Some(id);
+    let other = slots.join("1");
+    std::fs::create_dir(&other).unwrap();
+    let path = other.join("app");
+    std::fs::copy(fixture.remote.join("app"), &path).unwrap();
+    assert!(run(&other, &fixture.req).is_none());
+    crate::sys::set_mode(&path, 0o700).unwrap();
+    assert!(matches!(
+        run(&other, &fixture.req).unwrap().0,
+        Frame::File {
+            mode: 0o700,
+            patch: true,
+            ..
+        }
+    ));
+    crate::sys::set_mode(&path, 0o755).unwrap();
+    let mut changed = std::fs::read(&path).unwrap();
+    changed[123] ^= 1;
+    std::fs::write(&path, &changed).unwrap();
+    let original_time = fixture
+        .remote
+        .join("app")
+        .metadata()
+        .unwrap()
+        .modified()
+        .unwrap();
+    std::fs::File::open(&path)
+        .unwrap()
+        .set_modified(original_time)
+        .unwrap();
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..3)
+            .map(|_| scope.spawn(|| run(&other, &fixture.req)))
+            .collect();
+        for handle in handles {
+            assert!(matches!(
+                handle.join().unwrap().unwrap().0,
+                Frame::File { patch: true, .. }
+            ));
+        }
+    });
+    let (
+        Frame::File {
+            patch: true,
+            size,
+            mode,
+            ..
+        },
+        delta,
+    ) = run(&other, &fixture.req).unwrap()
+    else {
+        panic!("expected cross-slot patch")
+    };
+    let dst = apply(
         &fixture.remote,
-        &fixture.req,
-        &fixture.sent,
-        &mut wire,
-        Some(manifest.clone()),
+        "app",
+        mode,
+        size,
+        Some(&fixture.remote.join("app")),
+        &delta,
+        Validation::NativeBuild,
     )
     .unwrap();
-    let frames: Vec<Frame> = std::str::from_utf8(&wire)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    assert_eq!(frames.len(), 3);
-    assert_eq!(
-        frames[1],
-        Frame::Selected {
-            artifacts: manifest
-        }
+    assert_eq!(std::fs::read(dst).unwrap(), changed);
+    assert!(delta.len() < full.len() / 10);
+    eprintln!(
+        "selected cross-slot payload: full={} unchanged=0 delta={}",
+        full.len(),
+        delta.len()
     );
-    assert_eq!(frames[2], Frame::End);
+    fixture.req.cwd = "other-tenant/workspace".into();
+    assert!(matches!(
+        run(&other, &fixture.req).unwrap().0,
+        Frame::File { patch: false, .. }
+    ));
 }
 
 #[test]

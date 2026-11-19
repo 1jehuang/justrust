@@ -13,6 +13,7 @@
 //! ~/.justrust/remote/fetched.json   client: path -> {id, size, mtime} of each file it wrote
 //! ~/.justrust/sent/<path key>       machine: the last copy sent of each artifact
 //! ~/.justrust/sent/<path key>.id    machine: its id (size-mtime_ns on the machine)
+//! ~/.justrust/sent/test-<scope>-<id> immutable selected-test basis (age-evicted)
 //! ```
 //!
 //! Safety: names are checked to stay inside the profile dir, every file is
@@ -538,6 +539,10 @@ fn serve_selected_dir(
     out: impl Write,
     selected: Option<Vec<serde_json::Value>>,
 ) -> Result<()> {
+    let scratch = selected
+        .as_ref()
+        .map(|_| TestScratch::new(sent_root))
+        .transpose()?;
     let mut out = BufWriter::new(out);
     write_frame(
         &mut out,
@@ -571,38 +576,80 @@ fn serve_selected_dir(
     } else {
         build_candidates(dir, &req.args)
     };
-    for (name, m) in files {
+    for (index, (name, m)) in files.into_iter().enumerate() {
         let rid = id_of(&m);
         let h = have.get(name.as_str()).copied();
-        if if req.test_run.is_some() {
-            h.and_then(|h| h.id.as_deref()) == Some(&rid)
-        } else {
-            !needed(h, &rid, mtime_of(&m), req.start)
-        } {
+        if scratch.is_none() && !needed(h, &rid, mtime_of(&m), req.start) {
             continue;
         }
         let path = dir.join(&name);
         let key = path.display().to_string().replace('/', "%");
-        let sent = sent_root.join(&key);
+        let mut sent = sent_root.join(&key);
         let sent_id = sent_root.join(format!("{key}.id"));
-        let patch = h
-            .and_then(|h| h.id.as_deref())
-            .is_some_and(|id| std::fs::read_to_string(&sent_id).ok().as_deref() == Some(id))
+        let mut patch = scratch.is_none()
+            && h.and_then(|h| h.id.as_deref())
+                .is_some_and(|id| std::fs::read_to_string(&sent_id).ok().as_deref() == Some(id))
             && sent.is_file();
         // Snapshot first: the build tree may be rewritten under us, and the
         // delta base must be exactly what was sent.
-        let snap = sent_root.join(format!("{key}.new"));
+        let snap = scratch.as_ref().map_or_else(
+            || sent_root.join(format!("{key}.new")),
+            |s| s.0.join(format!("{index}.new")),
+        );
         std::fs::copy(&path, &snap).with_context(|| format!("copy {}", path.display()))?;
+        let (rid, m, publication) = if let Some(s) = &scratch {
+            use sha2::{Digest, Sha256};
+            // cwd was authenticated against the successful run. Include the complete
+            // relative target/profile/name, never the interchangeable physical slot.
+            let family = dir
+                .parent()
+                .filter(|p| {
+                    p.file_name().is_some_and(|s| s == "justrust-slots")
+                        && dir
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n.parse::<usize>().is_ok())
+                })
+                .unwrap_or(dir);
+            let scope = Sha256::digest(serde_json::to_vec(&(&req.cwd, family, &name))?);
+            let m = snap.metadata()?;
+            let mut digest = Sha256::new();
+            digest.update(scope);
+            digest.update((crate::sys::mode(&m, &path) & 0o7777).to_le_bytes());
+            std::io::copy(&mut std::fs::File::open(&snap)?, &mut digest)?;
+            let rid = format!("t1-{:x}", digest.finalize());
+            let offered = h.and_then(|h| h.id.as_deref());
+            if offered == Some(&rid) {
+                continue;
+            }
+            let prefix = format!("test-{scope:x}-");
+            sent = s.0.join("basis");
+            let _ = std::fs::remove_file(&sent);
+            if let Some(id) = offered.filter(|id| {
+                id.strip_prefix("t1-")
+                    .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            }) {
+                // Pin the immutable published inode across concurrent eviction.
+                patch = std::fs::hard_link(sent_root.join(format!("{prefix}{id}")), &sent).is_ok();
+            }
+            let publication = sent_root.join(format!("{prefix}{rid}"));
+            (rid, m, Some(publication))
+        } else {
+            (rid, m, None)
+        };
         // A rebuild can change the metadata id without changing the output.
         // Only compare against a base the client explicitly still has. Keep
         // that base and its old id when skipping: advancing the id here would
         // forget the client's provenance and force the next request to resend.
         // Compare the snapshot, not the live build output, just as for deltas.
-        if patch && identical_artifact(&snap, &sent).unwrap_or(false) {
+        if publication.is_none() && patch && identical_artifact(&snap, &sent).unwrap_or(false) {
             let _ = std::fs::remove_file(&snap);
             continue;
         }
-        let zst = sent_root.join(format!("{key}.zst"));
+        let zst = scratch.as_ref().map_or_else(
+            || sent_root.join(format!("{key}.zst")),
+            |s| s.0.join("payload.zst"),
+        );
         let base = (!patch && req.anchors)
             .then(|| anchor(&streamed, m.len()))
             .flatten();
@@ -638,6 +685,12 @@ fn serve_selected_dir(
             },
             &data,
         )?;
+        if let Some(publication) = publication {
+            // Cache publication is optional. Never overwrite a published inode.
+            let _ = std::fs::hard_link(&snap, publication);
+            streamed.push((name, m.len(), snap));
+            continue;
+        }
         std::fs::rename(&snap, &sent)?;
         std::fs::write(&sent_id, &rid)?;
         streamed.push((name, m.len(), sent));
@@ -645,6 +698,29 @@ fn serve_selected_dir(
     write_frame(&mut out, &Frame::End, &[])?;
     out.flush()?;
     Ok(())
+}
+
+struct TestScratch(PathBuf);
+
+impl TestScratch {
+    fn new(root: &Path) -> std::io::Result<Self> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        loop {
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = root.join(format!("test-stream-{}-{n}", std::process::id()));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Ok(Self(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+impl Drop for TestScratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Exact comparison with bounded memory. Modes are part of the output contract,
