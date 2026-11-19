@@ -1107,16 +1107,20 @@ pub fn jr_cgu_cost(cgu: &str, cpu: Duration) {
     }
 }
 
-/// Charges this thread's CPU until dropped to codegen unit `cgu`.
+/// Charges this thread's CPU until dropped to codegen unit `cgu`, less the
+/// time of query scopes that completed inside it on this thread (those are
+/// already in the query rows), so the ledger never counts work twice.
 #[must_use]
-pub struct JrCguCpuGuard(Option<(String, Duration)>);
+pub struct JrCguCpuGuard(Option<(String, Duration, u128)>);
 
 impl Drop for JrCguCpuGuard {
     fn drop(&mut self) {
-        if let Some((cgu, start)) = self.0.take()
+        if let Some((cgu, start, nested_at)) = self.0.take()
             && let Some(now) = jr_thread_cpu()
         {
-            jr_cgu_cost(&cgu, now.saturating_sub(start));
+            let nested = JR_REUSE_COMPLETED.with(|c| c.get()).saturating_sub(nested_at);
+            let nested = Duration::from_nanos(nested.min(u64::MAX as u128) as u64);
+            jr_cgu_cost(&cgu, now.saturating_sub(start).saturating_sub(nested));
         }
     }
 }
@@ -1125,7 +1129,7 @@ impl Drop for JrCguCpuGuard {
 #[inline]
 pub fn jr_cgu_cpu(cgu: &str) -> JrCguCpuGuard {
     JrCguCpuGuard(if jr_reuse_enabled() {
-        jr_thread_cpu().map(|t| (cgu.to_owned(), t))
+        jr_thread_cpu().map(|t| (cgu.to_owned(), t, JR_REUSE_COMPLETED.with(|c| c.get())))
     } else {
         None
     })

@@ -1092,6 +1092,9 @@ impl<'gctx> DrainState<'gctx> {
         let messages = self.messages.clone();
         let is_fresh = job.freshness().is_fresh();
         self.execution_graph.start(unit, is_fresh);
+        if is_fresh {
+            jr_record_fresh(build_runner, unit);
+        }
         let rmeta_required = build_runner.rmeta_required(unit);
         let lock_manager = build_runner.lock_manager.clone();
         let warning_handling = build_runner.bcx.gctx.warning_handling().unwrap_or_default();
@@ -1400,5 +1403,45 @@ impl ErrorsDuringDrain {
             1 => Some(format_err!("1 job failed")),
             n => Some(format_err!("{} jobs failed", n)),
         }
+    }
+}
+
+/// justrust: a unit Cargo skipped as fresh is reuse. Record it with the
+/// compiler CPU it cost when it was last compiled, which the justrust shim
+/// leaves beside the unit's outputs (`<deps>/.jr-cost-<crate><extra>`:
+/// `cpu_secs`). Appended to `$JUSTRUST_RUN_DIR/fresh.jsonl`; a missing cost
+/// is recorded as unmeasured, never guessed. Best effort and read-only.
+fn jr_record_fresh(build_runner: &BuildRunner<'_, '_>, unit: &Unit) {
+    let Some(run_dir) = env::var_os("JUSTRUST_RUN_DIR") else { return };
+    if unit.mode.is_run_custom_build() || unit.mode.is_doc() || unit.mode.is_doc_test() {
+        return;
+    }
+    let files = build_runner.files();
+    let extra = files.metadata(unit).c_extra_filename().map(|h| format!("-{h}")).unwrap_or_default();
+    let crate_name = unit.target.crate_name();
+    let cost = files.deps_dir(unit).join(format!(".jr-cost-{crate_name}{extra}"));
+    // `<secs> <basis>`: basis `cpu` (measured compile CPU) or `wall` (a
+    // dependency-cache hit: the original compile's wall time).
+    let text = std::fs::read_to_string(&cost).unwrap_or_default();
+    let mut f = text.split_whitespace();
+    let cpu = f.next().and_then(|s| s.parse::<f64>().ok()).filter(|s| s.is_finite());
+    let basis = f.next().unwrap_or(if cpu.is_some() { "cpu" } else { "none" });
+    let line = serde_json::json!({
+        "crate_name": crate_name,
+        "package": unit.pkg.name().as_str(),
+        "version": unit.pkg.version().to_string(),
+        "test": unit.mode.is_any_test(),
+        "check": unit.mode.is_check(),
+        "local": unit.is_local(),
+        "cpu_secs": cpu,
+        "basis": basis,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(Path::new(&run_dir).join("fresh.jsonl"))
+    {
+        use std::io::Write as _;
+        let _ = f.write_all(format!("{line}\n").as_bytes());
     }
 }
