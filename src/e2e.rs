@@ -263,6 +263,8 @@ pub fn remote(m: &Marks, now: f64, r: &RemoteTimes) -> E2e {
             0.0
         };
         host.insert(1, ("host.slot_wait".into(), wait));
+        // This remainder has no start/end marks of its own. Keep the historical
+        // key for saved profiles, but do not attribute it to recorder work.
         host.push(("host.recorder".into(), residual - wait));
         host.push(("host.finalize".into(), t.finalize_ms / 1000.0));
         host.push(("host.records".into(), t.records_ms / 1000.0));
@@ -352,7 +354,7 @@ pub fn label(key: &str) -> &str {
         "remote.daemon_connect" => "sync daemon connect",
         "remote.host_overhead" => "host start, results back",
         "host.prepare" => "agent preflight, protection",
-        "host.recorder" => "recorder setup, reporting",
+        "host.recorder" => "unattributed host execution",
         "host.slot_wait" => "wait for identical build",
         "host.finalize" => "activity finalization, GC",
         "host.records" => "pack, send run records",
