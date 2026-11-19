@@ -235,6 +235,7 @@ impl MacroRulesMacroExpander {
         sp: Span,
         body: &TokenStream,
     ) -> Result<TokenStream, ErrorGuaranteed> {
+        let _timer = cx.sess.prof.generic_activity("expand_declarative_derive");
         // This is similar to `expand_macro`, but they have very different signatures, and will
         // diverge further once derives support arguments.
         let name = self.name;
@@ -452,6 +453,7 @@ fn expand_macro<'cx, 'a: 'cx>(
         trace_macros_note(&mut cx.expansions, sp, msg);
     }
 
+    let _timer = cx.sess.prof.generic_activity("expand_declarative_bang");
     let cache_eligible = cx.sess.opts.unstable_opts.jr_cache_declarative_macros
         && cx.sess.opts.incremental.is_some()
         && cache_definition.is_some()
@@ -601,6 +603,7 @@ fn expand_macro_attr(
     rules: &[MacroRule],
     on_unmatched_args: Option<&Directive>,
 ) -> Result<TokenStream, ErrorGuaranteed> {
+    let _timer = cx.sess.prof.generic_activity("expand_declarative_attr");
     let psess = &cx.sess.psess;
     // Macros defined in the current crate have a real node id,
     // whereas macros from an external crate have a dummy id.
