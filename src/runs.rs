@@ -347,7 +347,9 @@ pub fn show(id: Option<&str>, json: bool) -> Result<()> {
         return Ok(());
     }
     let mut s: Summary = serde_json::from_slice(&raw)?;
-    if s.diagnostics.failure.is_none() {
+    // A successful run has no failure to reconstruct. Older records may have
+    // large logs and unit ledgers, neither of which changes this verdict.
+    if s.exit != 0 && s.diagnostics.failure.is_none() {
         s.diagnostics.failure = classify_saved(&id);
     }
     print!("{}", render(&s, &dir));
