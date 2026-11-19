@@ -34,9 +34,9 @@
 //! Experimental `JUSTRUST_BUILDD_NATIVE_EMPTY=1` skips source validation only
 //! when no active or finished candidate exists. Native Cargo still runs, and
 //! the unvalidated execution can never be attached to or replayed.
-//! Experimental `JUSTRUST_BUILDD_NATIVE_NO_CANDIDATE=1` also permits unrelated
-//! map entries when no same-key owner/result or same-session wrong guess needs
-//! coordination. This is an operational gate, not dependency isolation.
+//! Foreground check and clippy skip validation when no same-key owner/result
+//! or same-session wrong guess needs coordination. `JUSTRUST_BUILDD_NATIVE_NO_CANDIDATE=0`
+//! disables this; `1` extends it to other commands. Cargo always runs.
 //!
 //! Wire format, both directions: `[u8 kind][u32 len, big endian][payload]`.
 //! Client to daemon: `R` request JSON, `P` ping, `S` shutdown. Daemon to
@@ -1119,10 +1119,10 @@ fn native_key_occupied(st: &State, key: &str) -> bool {
 /// This makes no claim about path or dependency isolation: Cargo still runs.
 fn native_no_candidate_eligible(st: &State, req: &Request, key: &str) -> bool {
     !req.prebuild
-        && req
-            .env
-            .iter()
-            .any(|(k, v)| k == "JUSTRUST_BUILDD_NATIVE_NO_CANDIDATE" && v == "1")
+        && req.env.iter().find(|(k, _)| k == "JUSTRUST_BUILDD_NATIVE_NO_CANDIDATE").map_or_else(
+            || matches!(req.argv.first().map(String::as_str), Some("check" | "c" | "clippy")),
+            |(_, v)| v == "1",
+        )
         // Covers stale cancellation, compile-only settlement, attach, finished
         // removal/replay and unstamped same-key reservations, without a stamp.
         && !st.builds.contains_key(key)
@@ -2030,10 +2030,15 @@ mod tests {
     }
 
     #[test]
-    fn native_no_candidate_requires_exact_opt_in_and_real_request() {
+    fn native_no_candidate_defaults_to_foreground_metadata_checks() {
         let st = State::default();
+        for cmd in ["check", "c", "clippy", "build", "test", "t"] {
+            assert_eq!(
+                native_no_candidate_eligible(&st, &req(&[], &[cmd]), "key"),
+                matches!(cmd, "check" | "c" | "clippy")
+            );
+        }
         let mut r = req(&[], &["check"]);
-        assert!(!native_no_candidate_eligible(&st, &r, "key"));
         for value in ["0", "true", "on", "01", "", "1"] {
             r.env = vec![("JUSTRUST_BUILDD_NATIVE_NO_CANDIDATE".into(), value.into())];
             assert_eq!(native_no_candidate_eligible(&st, &r, "key"), value == "1");
