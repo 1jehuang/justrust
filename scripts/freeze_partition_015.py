@@ -51,7 +51,14 @@ def freeze():
         tree = git('write-tree').decode().strip()
         if git('diff', '--name-only', BASE, tree).decode().splitlines() != [FILE]:
             raise ValueError('effective tree differs outside partitioning.rs')
-        return dict(base=BASE, donor=DONOR, tree=tree, path=FILE, blob=blob,
+        # A commit identity (not a release tag or branch) is needed by bootstrap.
+        # Pin every field, including the timestamp, for independent reproduction.
+        for role in ('AUTHOR', 'COMMITTER'):
+            for key, fmt in [('NAME', '%an'), ('EMAIL', '%ae'), ('DATE', '%aI')]:
+                env[f'GIT_{role}_{key}'] = git('show', '-s', f'--format={fmt}', DONOR).decode().strip()
+        revision = git('-c', 'commit.gpgsign=false', 'commit-tree', tree, '-p', BASE,
+                       data=f'Selective partition candidate from {DONOR}\n'.encode()).decode().strip()
+        return dict(base=BASE, donor=DONOR, tree=tree, revision=revision, path=FILE, blob=blob,
                     sha256=hashlib.sha256(content).hexdigest(),
                     cargo_tree=git('rev-parse', tree+':toolchain/cargo').decode().strip())
 
