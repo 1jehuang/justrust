@@ -1071,6 +1071,7 @@ dependencies = [
  "clap",
  "dirs",
  "flate2",
+ "justrust-graph",
  "libc",
  "memchr",
  "memmap2",
@@ -1093,6 +1094,17 @@ dependencies = [
  "unicode-width",
  "ureq",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "justrust-graph"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "libc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -25,20 +25,6 @@ mod depcache_remote;
 mod depcache_why;
 mod e2e;
 mod early;
-mod execution_graph;
-mod execution_graph_compiler;
-mod execution_graph_compiler_cli;
-mod execution_graph_continuation;
-mod execution_graph_flow;
-mod execution_graph_manifest;
-mod execution_graph_query;
-mod execution_graph_readiness;
-mod execution_graph_reads;
-mod execution_graph_resource;
-mod execution_graph_resource_attachment;
-mod execution_graph_task_bindings;
-mod execution_graph_task_dag;
-mod execution_graph_timing;
 mod export;
 mod failure;
 mod findings;
@@ -1160,9 +1146,9 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             json,
         } => {
             if let Some(manifest) = compiler_manifest {
-                execution_graph_compiler_cli::command(&path, &manifest, json)?;
+                justrust_graph::compiler_command(&path, &manifest, json)?;
             } else {
-                execution_graph::command_with_latch_readiness_dag(
+                justrust_graph::command_with_latch_readiness_dag(
                     &path,
                     json,
                     manifest.as_deref(),

@@ -11,7 +11,7 @@ semantic dependency was captured, nor a bound on possible redesigned compilers.
 
 Implementation lives in `toolchain/cargo/src/compiler/job_queue/jr_execution_graph.rs`
 and its scheduler hooks. The independent client validator is
-`src/execution_graph.rs`, exposed through `justrust graph <file-or-directory>`.
+`crates/graph/src/execution_graph.rs`, exposed through `justrust graph <file-or-directory>`.
 No wrapper, stderr parser or reconstructed logical Cargo graph supplies these
 edges: declarations come directly from the prerequisite list passed to the
 native scheduler, including its synthetic prerequisites and metadata handoffs.

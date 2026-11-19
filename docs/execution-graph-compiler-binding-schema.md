@@ -12,7 +12,7 @@ No whole-pipeline completeness or speedup is claimed.
 
 ## Scope and trust boundaries
 
-`src/execution_graph_compiler.rs` assesses one selected compiler-launch authority.
+`crates/graph/src/execution_graph_compiler.rs` assesses one selected compiler-launch authority.
 Its scope is `buildrunner-compiler-launch-coverage`. Every assessment retains
 `full_pipeline_complete: false`, `cpu_work_ns: null`, and
 `execution_span_ns: null`, including successful, structurally complete captures.

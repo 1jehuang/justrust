@@ -1187,7 +1187,7 @@ pub(crate) fn command_with_execution_flow_dag(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn command_with_latch_readiness_dag(
+pub fn command_with_latch_readiness_dag(
     path: &Path,
     json: bool,
     manifest: Option<&Path>,

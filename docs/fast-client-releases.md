@@ -37,6 +37,14 @@ rerun that workflow before retrying the command. Never move a published tag.
 The local activation helper currently supports Linux x86_64/aarch64. It refuses
 unsupported platforms before creating or pushing a tag.
 
+## Registry source packages
+
+The binary release uses the graph library directly from `crates/graph`. For a
+crates.io client release, publish the matching `justrust-graph` version first,
+then `justrust`. If the graph source changes after that version is published,
+bump its version and the client's exact dependency together. `cargo package
+--locked` at the root packages both workspace members.
+
 ## Keep the release critical path small
 
 Before publication: committed-source/tag/version checks, frozen compiler-policy

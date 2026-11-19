@@ -12,7 +12,13 @@ repository = "https://github.com/1jehuang/justrust"
 # toolchain/ holds the fully vendored compiler forks, built separately.
 exclude = ["/toolchain/", "/.wrangler/"]
 
+[workspace]
+members = ["crates/graph"]
+default-members = [".", "crates/graph"]
+exclude = ["bench", "toolchain"]
+
 [dependencies]
+justrust-graph = { version = "=0.1.0", path = "crates/graph" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 regex = "1"
@@ -43,6 +49,9 @@ sha2 = "0.10"
 # Preserve file:line test backtraces while keeping hosted test artifacts smaller.
 # For local-variable inspection, use --config 'profile.test.package.justrust.debug=2'.
 [profile.test.package.justrust]
+debug = "line-tables-only"
+
+[profile.test.package.justrust-graph]
 debug = "line-tables-only"
 
 # Large artifact round trips otherwise spend their test time in debug DEFLATE.
