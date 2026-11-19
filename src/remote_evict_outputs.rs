@@ -67,9 +67,20 @@ fn build_dir(root: &Path) -> std::io::Result<(PathBuf, u64)> {
     Ok((dir, dev))
 }
 
+#[cfg(test)]
 fn candidates(root: &Path, probe: &dyn Probe) -> std::io::Result<Vec<(PathBuf, u64)>> {
+    let groups = generations(root)?;
+    Ok(rank_generations(groups, probe))
+}
+
+struct Generations {
+    dev: u64,
+    multiple: Vec<Vec<PathBuf>>,
+}
+
+fn generations(root: &Path) -> std::io::Result<Generations> {
     let (build, dev) = build_dir(root)?;
-    let mut groups: BTreeMap<String, Vec<(PathBuf, u64)>> = BTreeMap::new();
+    let mut groups: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     for e in std::fs::read_dir(build)? {
         let e = e?;
         let name = e.file_name();
@@ -79,13 +90,28 @@ fn candidates(root: &Path, probe: &dyn Probe) -> std::io::Result<Vec<(PathBuf, u
         if !e.file_type()?.is_dir() {
             continue;
         }
-        // An unsafe sibling makes its package ineligible rather than making an
-        // older output look like the newest valid output for that package.
-        let time = tree_time(&e.path(), dev).unwrap_or(u64::MAX);
-        groups.entry(pkg.into()).or_default().push((e.path(), time));
+        groups.entry(pkg.into()).or_default().push(e.path());
     }
+    Ok(Generations {
+        dev,
+        multiple: groups
+            .into_values()
+            .filter(|entries| entries.len() > 1)
+            .collect(),
+    })
+}
+
+fn rank_generations(groups: Generations, probe: &dyn Probe) -> Vec<(PathBuf, u64)> {
     let mut out = Vec::new();
-    for entries in groups.into_values() {
+    for paths in groups.multiple {
+        // An unsafe sibling still excludes the entire package.
+        let entries: Vec<_> = paths
+            .into_iter()
+            .map(|p| {
+                let time = tree_time(&p, groups.dev).unwrap_or(u64::MAX);
+                (p, time)
+            })
+            .collect();
         let newest = entries.iter().map(|e| e.1).max().unwrap_or(u64::MAX);
         if newest == u64::MAX {
             continue;
@@ -97,7 +123,7 @@ fn candidates(root: &Path, probe: &dyn Probe) -> std::io::Result<Vec<(PathBuf, u
         }
     }
     out.sort_by_key(|e| e.1);
-    Ok(out)
+    out
 }
 
 pub fn collect(
@@ -119,13 +145,18 @@ pub fn collect(
         let Ok(state) = registry.fresh_state(root) else {
             continue;
         };
-        if state.leases != 0 || probe.in_use_by_other(root) {
+        if state.leases != 0 {
             continue;
         }
-        let Ok(planned) = candidates(root, probe) else {
+        let Ok(groups) = generations(root) else {
             continue;
         };
-        for (path, time) in planned {
+        // If every package has just its retained generation, neither a full
+        // process census nor recursively dating its outputs can free a byte.
+        if groups.multiple.is_empty() || probe.in_use_by_other(root) {
+            continue;
+        }
+        for (path, time) in rank_generations(groups, probe) {
             if freed >= need {
                 break;
             }

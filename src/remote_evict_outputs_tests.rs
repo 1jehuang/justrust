@@ -81,7 +81,11 @@ mod tests {
         }
         let (root, old, newest, registry, p) = fixture("output-pressure");
         let planned = candidates(&root, &p).unwrap();
-        assert_eq!(planned.len(), 1, "fixture must have exactly one idle output");
+        assert_eq!(
+            planned.len(),
+            1,
+            "fixture must have exactly one idle output"
+        );
         assert_eq!(planned[0].0, old, "newest output must not be a candidate");
         assert_eq!(
             pressure_collect(
@@ -151,6 +155,40 @@ mod tests {
     }
 
     #[test]
+    fn singleton_generations_never_trigger_process_census() {
+        struct NoCensus;
+        impl Probe for NoCensus {
+            fn disk(&self, _: &Path) -> Option<(u64, u64)> {
+                unreachable!()
+            }
+            fn size(&self, _: &Path) -> u64 {
+                panic!("singleton must not be sized")
+            }
+            fn in_use_by_other(&self, _: &Path) -> bool {
+                panic!("no deletion candidate")
+            }
+            fn now(&self) -> u64 {
+                u64::MAX
+            }
+        }
+        let (root, old, newest, registry, _) = fixture("singleton-guard");
+        std::fs::remove_dir_all(newest).unwrap();
+        assert_eq!(
+            collect(
+                &registry,
+                &registry.roots,
+                u64::MAX,
+                false,
+                &NoCensus,
+                &mut |_| {}
+            ),
+            0
+        );
+        assert!(old.join("out/nested/file").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn tied_newest_and_recent_older_generations_are_retained() {
         let (root, old, newest, _, mut p) = fixture("output-ranking");
         assert_eq!(candidates(&root, &p).unwrap().len(), 1);
@@ -163,10 +201,15 @@ mod tests {
             .unwrap();
         use std::os::unix::fs::MetadataExt;
         let dev = std::fs::metadata(&old).unwrap().dev();
-        assert_eq!(tree_time(&old, dev).unwrap(), tree_time(&newest, dev).unwrap());
+        assert_eq!(
+            tree_time(&old, dev).unwrap(),
+            tree_time(&newest, dev).unwrap()
+        );
         // The fixture deliberately future-dates newest to separate its rank.
         // Advance the injected observation clock so this tie is idle too.
-        p.now = p.now.max(tree_time(&old, dev).unwrap() + IDLE.as_secs() + 1);
+        p.now = p
+            .now
+            .max(tree_time(&old, dev).unwrap() + IDLE.as_secs() + 1);
         assert!(tree_time(&old, dev).unwrap() + IDLE.as_secs() <= p.now);
         assert!(candidates(&root, &p).unwrap().is_empty());
 
