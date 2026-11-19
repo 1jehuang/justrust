@@ -492,25 +492,63 @@ mod linux {
 
     pub fn read_stat(pid: i32) -> Option<ProcStat> {
         let s = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        // comm is in parentheses and may contain spaces, so split at the last ')'.
+        parse_stat(pid, &s)
+    }
+
+    fn parse_stat(pid: i32, s: &str) -> Option<ProcStat> {
+        // comm may contain spaces and parentheses, so split at the last ')'.
         let open = s.find('(')?;
         let close = s.rfind(')')?;
-        let comm = s[open + 1..close].to_owned();
-        let rest: Vec<&str> = s[close + 2..].split_whitespace().collect();
-        // rest[0] is field 3 (state).
-        let field = |n: usize| {
-            rest.get(n - 3)
+        let comm = s.get(open + 1..close)?.to_owned();
+        let mut rest = s.get(close + 2..)?.split_whitespace();
+        // Consume only through RSS. nth skips relative to the previous field.
+        let mut field = |skip| {
+            rest.nth(skip)
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(0)
         };
         Some(ProcStat {
             pid,
-            ppid: field(4) as i32,
+            ppid: field(1) as i32, // field 4
             comm,
-            cpu_ticks: field(14) + field(15),
-            start_ticks: field(22),
-            rss_pages: field(24),
+            cpu_ticks: field(9) + field(0), // fields 14 and 15
+            start_ticks: field(6),          // field 22
+            rss_pages: field(1),            // field 24
         })
+    }
+
+    #[test]
+    fn stat_parser_handles_names_missing_fields_and_reused_pids() {
+        let line = "98 (a ) (b) S 4 5 6 7 8 9 10 11 12 13 bad 15 16 17 18 19 20 21 22 23 -4";
+        let st = parse_stat(98, line).unwrap();
+        assert_eq!(
+            (
+                st.comm.as_str(),
+                st.ppid,
+                st.cpu_ticks,
+                st.start_ticks,
+                st.rss_pages
+            ),
+            ("a ) (b", 4, 15, 22, 0)
+        );
+        let reused = parse_stat(98, &line.replace("22 23 -4", "99 23 24")).unwrap();
+        assert_eq!(
+            (reused.pid, reused.start_ticks, reused.rss_pages),
+            (98, 99, 24)
+        );
+        let short = parse_stat(98, "98 (a) S 4").unwrap();
+        assert_eq!(
+            (
+                short.ppid,
+                short.cpu_ticks,
+                short.start_ticks,
+                short.rss_pages
+            ),
+            (4, 0, 0, 0)
+        );
+        for malformed in ["98 a", "98 )(", "98 (a)"] {
+            assert!(parse_stat(98, malformed).is_none());
+        }
     }
 
     pub fn all_pids() -> Vec<i32> {
