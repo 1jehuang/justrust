@@ -327,22 +327,40 @@ mod scan_tests;
 // Git-listed target directories can contain source, not build output. Keep
 // these exceptions exact: including target/*** would expose ignored files.
 fn target_source_filters(root: &Path) -> Vec<String> {
-    let Ok(listed) = Command::new("git")
-        .args(["ls-files", "-co", "--exclude-standard", "-z"])
-        .current_dir(root)
-        .stderr(Stdio::null())
-        .output()
+    let list = |narrow: bool| {
+        let mut git = Command::new("git");
+        git.args(["ls-files", "-co", "--exclude-standard", "-z"]);
+        if narrow {
+            git.args(["--", ":(glob)**/target/**"]);
+        }
+        git.current_dir(root)
+            .stderr(Stdio::null())
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+    };
+    // A literal pathspec override can silently return zero matches. Preserve
+    // the original no-pathspec query under caller-selected pathspec modes.
+    let default_mode = [
+        "GIT_LITERAL_PATHSPECS",
+        "GIT_GLOB_PATHSPECS",
+        "GIT_NOGLOB_PATHSPECS",
+        "GIT_ICASE_PATHSPECS",
+    ]
+    .iter()
+    .all(|key| std::env::var_os(key).is_none());
+    let Some(listed) = (if default_mode { list(true) } else { None }).or_else(|| list(false))
     else {
         return Vec::new();
     };
-    if !listed.status.success() {
-        return Vec::new();
-    }
+    target_filters_from_listing(root, &listed.stdout)
+}
+
+fn target_filters_from_listing(root: &Path, listing: &[u8]) -> Vec<String> {
     let mut files = BTreeSet::new();
     let mut directories = BTreeSet::new();
     let mut targets = BTreeSet::new();
-    for name in listed
-        .stdout
+    for name in listing
         .split(|byte| *byte == 0)
         .filter(|name| !name.is_empty())
     {
@@ -1370,6 +1388,18 @@ mod tests {
             target: None,
             prefix: d.join("machine").display().to_string(),
         };
+        for cwd in [&root, &root.join("tests")] {
+            let full = Command::new("git")
+                .args(["ls-files", "-co", "--exclude-standard", "-z"])
+                .current_dir(cwd)
+                .output()
+                .unwrap();
+            assert!(full.status.success());
+            assert_eq!(
+                target_source_filters(cwd),
+                target_filters_from_listing(cwd, &full.stdout)
+            );
+        }
         let dst = PathBuf::from(mirror.remote(&root));
         std::fs::create_dir_all(dst.join("target/debug")).unwrap();
         std::fs::create_dir_all(dst.join(rel).join("nested/target")).unwrap();
