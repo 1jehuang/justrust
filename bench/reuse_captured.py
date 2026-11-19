@@ -1,196 +1,111 @@
 #!/usr/bin/env python3
-"""Actual vs maximum safe reuse per build, from production per-operation logs.
+"""Report observed reuse events and historical cost estimates, not a safety ceiling.
 
-Weights are compiler CPU seconds (measured where logged, estimated where not;
-every estimate is tagged). Categories per build:
-  actual    reuse that happened (CPU work not redone)
-  missed    proven missed safe reuse (work redone whose result was provably
-            reusable)
-  necessary recomputation that had to happen
-  unknown   work whose reusability the logs cannot decide
-maximum = actual + missed (lower bound); actual + missed + unknown (upper).
-captured = 100 * actual / maximum, reported as a range when unknown > 0.
-Aggregates sum totals across builds before dividing.
+Process CPU, query execution and historical cost are different, potentially
+overlapping views. Do not add them or infer a maximum safe reuse percentage.
 """
-import collections, glob, json, os, sys, datetime
+import argparse
+from collections import Counter
+from datetime import datetime
+import json
+import math
+import os
+from pathlib import Path
 
-RUNS = os.path.expanduser('~/.justrust/runs')
-since = datetime.datetime.fromisoformat(sys.argv[1]).timestamp() if len(sys.argv) > 1 else 0
 
-# Dependency-cache miss reasons whose only differing part is provably output-
-# irrelevant or where the artifact existed and was lost.
-def dep_miss_class(why):
-    if not why:
-        return 'unknown', 'miss without recorded reason'
-    head = why.split(':')[0]
-    if head == 'evicted':
-        return 'missed', 'evicted (artifact existed)'
-    if head.startswith('first-seen'):
-        return 'necessary', 'first-seen key'
-    if head == 'compile-failed':
-        return 'necessary', 'compile failed'
-    detail = why.split(': ', 1)[1] if ': ' in why else ''
-    parts = set(head.split('+'))
-    if parts == {'env'} and 'CARGO_RESOLVER_' in detail and detail.count(',') == 0:
-        return 'missed', 'key split only by CARGO_RESOLVER_* (output-irrelevant)'
-    if parts == {'flags'} and detail and all('linker=' in f for f in detail.split(', ')):
-        return 'missed', 'key split only by -C linker on rlib (output-irrelevant)'
-    if 'toolchain' in parts:
-        return 'necessary', 'toolchain differs'
-    if parts & {'flags', 'dependency', 'native-lib'}:
-        return 'necessary', 'flags/dependency/native-lib differ'
-    return 'unknown', 'key part ' + head
+HITS = {'hit', 'peer', 'local', 'remote', 'prebuilt'}
 
-# Pass 1: per-query mean exclusive compute cost from executions in production
-# (new/changed/same/green_recompute), to estimate compute avoided by loads.
-qcost = collections.defaultdict(lambda: [0.0, 0])
-crate_cpu = {}  # (crate, version, opt) -> last measured miss CPU
-files = []
-for up in glob.glob(f'{RUNS}/*/units.jsonl'):
-    if os.path.getmtime(up) < since:
-        continue
-    files.append(up)
-    for l in open(up):
-        try:
-            u = json.loads(l)
-        except Exception:
-            continue
-        for x in u.get('reuse') or []:
-            if x['outcome'] in ('new', 'changed', 'same', 'green_recompute') and x['count']:
-                c = qcost[x['query']]; c[0] += x['secs']; c[1] += x['count']
-        if u.get('depcache') == 'miss' and u.get('exit', 0) == 0:
-            crate_cpu[(u['crate_name'], u.get('version'), u.get('opt_level'))] = (u.get('user') or 0) + (u.get('sys') or 0)
 
-def mean(q):
-    s, n = qcost.get(q, (0, 0))
-    return s / n if n else None
-
-builds = []
-for up in files:
-    rid = up.split('/')[-2]
-    try:
-        s = json.load(open(up.replace('units.jsonl', 'summary.json')))
-    except Exception:
-        s = {}
-    b = collections.Counter(); why = collections.Counter(); ev = collections.Counter()
-    for l in open(up):
-        try:
-            u = json.loads(l)
-        except Exception:
-            continue
-        cpu = (u.get('user') or 0) + (u.get('sys') or 0)
-        dc = u.get('depcache')
-        if u.get('build_script') and not u.get('crate_types'):
-            continue
-        if dc in ('hit', 'peer', 'local', 'remote', 'prebuilt'):
-            k = (u['crate_name'], u.get('version'), u.get('opt_level'))
-            if k in crate_cpu:
-                b['actual'] += crate_cpu[k]; ev['dep hit, CPU from measured miss'] += 1
-            else:
-                b['actual'] += u.get('depcache_saved_secs') or 0; ev['dep hit, CPU est. = original wall'] += 1
-            continue
-        if dc == 'miss':
-            c, r = dep_miss_class(u.get('depcache_why'))
-            b[c] += cpu; why[(c, r)] += cpu
-            continue
-        r = u.get('reuse')
-        if not r:
-            b['unknown'] += cpu; why[('unknown', 'compiled unit without reuse ledger')] += cpu
-            continue
-        warm = any(x['outcome'] == 'loaded' for x in r)
-        sess = next((x['outcome'] for x in r if x['query'] == '<session>'), None)
-        sib = any(x['query'] == '<sibling_state>' for x in r)
-        native = any(x['outcome'].startswith('loaded_') for x in r)
-        if sess:
-            warm = sess == 'warm'
-        led = 0.0
-        for x in r:
-            o, t, q = x['outcome'], x['secs'], x['query']
-            if q == '<cgu>' or q == '<session>' or q == '<sibling_state>':
-                continue
-            if q == '<cgu_avoided>':
-                if o == 'measured':
-                    b['actual'] += t; ev['cgu reuse, measured CPU'] += x['count']
-                else:
-                    ev['cgu reuse, unmeasured'] += x['count']
-                continue
-            if q in ('<cgu_cpu>', '<link>'):
-                led += t
-                b['necessary'] += t; why[('necessary', f'{q} {o}')] += t
-                continue
-            if o == 'loaded_avoided':
-                b['actual'] += t; ev['load credited from crate cost history'] += x['count']; continue
-            if o == 'loaded_unmeasured':
-                ev['load without cost history'] += x['count']; continue
-            led += t
-            if o == 'loaded':
-                if native:
-                    b['necessary'] += t; why[('necessary', 'cache load cost')] += t
+def records(path):
+    if path.is_file():
+        with path.open() as stream:
+            for line in stream:
+                try:
+                    row = json.loads(line)
+                except ValueError:
                     continue
-                m = mean(x['query'])
-                if m is None:
-                    why[('unknown', 'load of query never seen executing')] += 0
-                    ev['loaded nodes without cost sample'] += x['count']
-                else:
-                    b['actual'] += m * x['count']; ev['loaded, avoided CPU est. from mean execution'] += x['count']
-                b['necessary'] += t; why[('necessary', 'cache load cost')] += t
-            elif o in ('green_recompute', 'same', 'eval_always_same'):
-                b['missed'] += t; why[('missed', o)] += t
-            elif o in ('changed', 'eval_always_changed'):
-                b['necessary'] += t; why[('necessary', 'changed')] += t
-            elif o == 'new':
-                if warm or (sess and not sib):
-                    c, rs = 'necessary', 'new (warm session)' if warm else f'new ({sess}, no sibling state)'
-                elif sib:
-                    c, rs = 'missed', 'new (cold beside finalized sibling state)'
-                else:
-                    c, rs = 'unknown', 'new (cold session: prior state may have existed elsewhere)'
-                b[c] += t; why[(c, rs)] += t
-            else:  # nohash, eval_always
-                b['unknown'] += t; why[('unknown', o)] += t
-        rest = max(cpu - led, 0.0)
-        b['unknown'] += rest; why[('unknown', 'CPU outside query ledger (LLVM threads, link, metadata)')] += rest
-    fresh = (s.get('units') or {}).get('fresh') or 0
-    fp = up.replace('units.jsonl', 'fresh.jsonl')
-    if os.path.exists(fp):
-        for l in open(fp):
-            try:
-                x = json.loads(l)
-            except Exception:
+                if isinstance(row, dict):
+                    yield row
+
+
+def seconds(x):
+    return type(x) in (float, int) and math.isfinite(x) and x >= 0
+
+
+def report(path):
+    folder = path.parent
+    counts, process, ledger, estimates = (Counter() for _ in range(4))
+    summary_path = folder / 'summary.json'
+    try:
+        summary = json.loads(summary_path.read_text())
+    except (OSError, ValueError):
+        summary = {}
+    for u in records(path):
+        counts['unit_rows'] += 1
+        if u.get('build_script') and not u.get('crate_types'):
+            counts['build_script_runs_excluded'] += 1
+            continue
+        dc = u.get('depcache')
+        key = 'dependency_cache:' + (dc or 'not_reported')
+        counts[key] += 1
+        if dc in ('miss', 'local-miss'):
+            counts['miss_reason:' + (u.get('depcache_why') or 'not_reported').split(':', 1)[0]] += 1
+        if all(seconds(u.get(k)) for k in ('user', 'sys')):
+            process[key] += u['user'] + u['sys']
+            counts['units_with_process_cpu'] += 1
+        if dc in HITS and seconds(u.get('depcache_saved_secs')):
+            estimates['dependency_hit_original_wall_seconds'] += u['depcache_saved_secs']
+            counts['hits_with_original_wall'] += 1
+        for row in u.get('reuse') or []:
+            q, outcome, n, t = (row[k] for k in ('query', 'outcome', 'count', 'secs'))
+            category = q if q.startswith('<') else 'query'
+            key = f'{category}:{outcome}'
+            counts[key] += n
+            if not seconds(t):
                 continue
-            fresh -= 1
-            if x.get('cpu_secs') is not None:
-                b['actual'] += x['cpu_secs']; ev[f"cargo fresh, cost basis {x.get('basis')}"] += 1
-            else:
-                ev['cargo fresh, no cost sidecar'] += 1
-        fresh = max(fresh, 0)
-    builds.append((rid, s, b, why, ev, fresh))
+            if (q, outcome) == ('<cgu_avoided>', 'measured') or outcome == 'loaded_avoided':
+                estimates[key + ':historical_cost_seconds'] += t
+            elif (category == 'query' and not outcome.startswith('loaded_')) or q in ('<cgu_cpu>', '<link>'):
+                ledger[key] += t
+    fresh = 0
+    for r in records(folder / 'fresh.jsonl'):
+        fresh += 1
+        if seconds(r.get('cpu_secs')):
+            # Despite its name, cpu_secs can contain the original wall time.
+            basis = r.get('basis') or 'unspecified'
+            estimates[f'cargo_fresh_historical_{basis}_seconds'] += r['cpu_secs']
+            counts['fresh_rows_with_cost'] += 1
+    counts['fresh_sidecar_rows'] = fresh
+    counts['summary_fresh_without_sidecar_row'] = max(0, ((summary.get('units') or {}).get('fresh') or 0) - fresh)
+    return dict(run=folder.name, args=summary.get('args'), toolchain=summary.get('toolchain'),
+                where=(summary.get('remote') or {}).get('machine'), counts=counts,
+                recorded_unit_cpu_seconds=process, recorded_ledger_seconds=ledger,
+                estimated_gross_costs=estimates, maximum_safe_reuse=None)
 
-def cap(b):
-    a, m, u = b['actual'], b['missed'], b['unknown']
-    lo_max, hi_max = a + m, a + m + u
-    lo = 100 * a / hi_max if hi_max else None
-    hi = 100 * a / lo_max if lo_max else None
-    return lo_max, hi_max, lo, hi
 
-out = os.path.join(os.environ.get('JCODE_SCRATCH_DIR', '/tmp'), 'reuse-captured.jsonl')
-T = collections.Counter(); W = collections.Counter(); E = collections.Counter(); F = 0; NB = 0
-with open(out, 'w') as f:
-    for rid, s, b, why, ev, fresh in builds:
-        lo_max, hi_max, lo, hi = cap(b)
-        f.write(json.dumps({'run': rid, 'args': ' '.join((s.get('args') or [])[:6]),
-            'where': (s.get('remote') or {}).get('machine') or 'local', 'toolchain': s.get('toolchain'),
-            'actual': round(b['actual'], 3), 'missed': round(b['missed'], 3),
-            'necessary': round(b['necessary'], 3), 'unknown': round(b['unknown'], 3),
-            'max_lo': round(lo_max, 3), 'max_hi': round(hi_max, 3),
-            'captured_lo': lo and round(lo, 1), 'captured_hi': hi and round(hi, 1),
-            'fresh_units_unquantified': fresh}) + '\n')
-        T.update(b); W.update(why); E.update(ev); F += fresh; NB += 1
-print(f'{NB} builds, per-build rows: {out}')
-print({k: round(v / 3600, 2) for k, v in T.items()}, '(CPU hours)')
-lo_max, hi_max, lo, hi = cap(T)
-print(f'maximum safe reuse: {lo_max/3600:.2f}h .. {hi_max/3600:.2f}h; captured {lo:.1f}% .. {hi:.1f}%')
-for k, v in sorted(W.items(), key=lambda kv: -kv[1])[:24]:
-    print(f'  {v/3600:7.2f}h  {k[0]:9} {k[1]}')
-print('evidence:', dict(E))
-print('cargo-fresh units (reused, cost not logged):', F)
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('since', nargs='?', type=datetime.fromisoformat)
+    parser.add_argument('--runs', type=Path, default=Path.home() / '.justrust/runs')
+    parser.add_argument('--run', type=Path, help='read just this run directory')
+    parser.add_argument('--output', type=Path, default=Path(os.environ.get('JCODE_SCRATCH_DIR', '/tmp')) / 'reuse-captured.jsonl')
+    args = parser.parse_args()
+    paths = [args.run / 'units.jsonl'] if args.run else args.runs.glob('*/units.jsonl')
+    totals = {k: Counter() for k in ('counts', 'recorded_unit_cpu_seconds', 'recorded_ledger_seconds', 'estimated_gross_costs')}
+    n = 0
+    with args.output.open('w') as stream:
+        for p in paths:
+            if not p.is_file() or (args.since and p.stat().st_mtime < args.since.timestamp()):
+                continue
+            row = report(p)
+            print(json.dumps(row), file=stream)
+            for key in totals:
+                totals[key].update(row[key])
+            n += 1
+    print(f'{n} builds, per-build rows: {args.output}')
+    print(json.dumps(totals, sort_keys=True))
+    print('Maximum safe reuse and captured percentage are not identifiable from these records.')
+
+
+if __name__ == '__main__':
+    main()
