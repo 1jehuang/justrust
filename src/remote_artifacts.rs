@@ -654,7 +654,14 @@ fn serve_selected_dir(
             .then(|| anchor(&streamed, m.len()))
             .flatten();
         let mut c = Command::new("zstd");
-        c.args(["-q", "-f", "-3", "-T0", "--long=31"]);
+        c.args(["-q", "-f", "-T0"]);
+        if !patch && base.is_none() && m.len() >= 32 * 1024 * 1024 {
+            // Large standalone binaries benefit from a denser ordinary window.
+            // Keep the large reference window for both kinds of delta.
+            c.arg("-9");
+        } else {
+            c.args(["-3", "--long=31"]);
+        }
         if patch {
             c.arg(format!("--patch-from={}", sent.display()));
         } else if let Some((_, _, from)) = base {

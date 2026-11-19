@@ -169,6 +169,46 @@ fn explicit_binary_filter_reduces_unrequested_payload_without_dropping_shared_li
     eprintln!("exclusive --bin artifact payload: legacy={before} bytes, filtered={after} bytes");
 }
 
+#[test]
+fn large_standalone_frame_round_trips_without_a_reference() {
+    if !available() {
+        return;
+    }
+    let mut fixture = Fixture::new("large-full", b"artifact bytes");
+    fixture.req.have.clear();
+    let src = fixture.remote.join("app");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&src)
+        .unwrap()
+        .set_len(32 << 20)
+        .unwrap();
+    let frames = fixture.frames();
+    let (
+        Frame::File {
+            patch: false,
+            base: None,
+            size,
+            ..
+        },
+        data,
+    ) = &frames[1]
+    else {
+        panic!("expected standalone frame");
+    };
+    let dst = apply(
+        &fixture.root,
+        "out",
+        0o755,
+        *size,
+        None,
+        data,
+        Validation::NativeBuild,
+    )
+    .unwrap();
+    assert!(identical_artifact(&src, &dst).unwrap());
+}
+
 struct Fixture {
     root: PathBuf,
     remote: PathBuf,
