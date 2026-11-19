@@ -25,3 +25,14 @@ pub mod expand;
 pub mod module;
 pub mod proc_macro;
 pub mod proc_macro_client;
+
+use rustc_data_structures::profiling::{JrPhaseGuard, SelfProfilerRef, TimingGuard, jr_phase};
+
+/// Static labels keep disabled instrumentation off the allocation and clock paths.
+/// Unlike verbose activities these high-frequency phases never print per invocation.
+fn expansion_phase<'a>(
+    prof: &'a SelfProfilerRef,
+    label: &'static str,
+) -> (TimingGuard<'a>, JrPhaseGuard) {
+    (prof.generic_activity(label), jr_phase(label))
+}

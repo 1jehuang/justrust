@@ -631,12 +631,12 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
         // Resolve `$crate`s in the fragment for pretty-printing.
         let prof = &self.cx.sess.prof;
         {
-            let _timer = prof.generic_activity("expand_resolve_dollar_crates");
+            let _timer = crate::expansion_phase(prof, "expand_resolve_dollar_crates");
             self.cx.resolver.resolve_dollar_crates();
         }
 
         let mut invocations = {
-            let _timer = prof.generic_activity("expand_collect_invocations");
+            let _timer = crate::expansion_phase(prof, "expand_collect_invocations");
             let mut collector = InvocationCollector {
                 // Non-derive macro invocations cannot see the results of cfg expansion - they
                 // will either be removed along with the item, or invoked before the cfg/cfg_attr
@@ -653,7 +653,7 @@ impl<'a, 'b> MacroExpander<'a, 'b> {
         };
 
         if self.monotonic {
-            let _timer = prof.generic_activity("expand_build_reduced_graph");
+            let _timer = crate::expansion_phase(prof, "expand_build_reduced_graph");
             self.cx
                 .resolver
                 .visit_ast_fragment_with_placeholders(self.cx.current_expansion.id, &fragment);
