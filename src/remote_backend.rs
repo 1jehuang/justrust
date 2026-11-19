@@ -163,7 +163,8 @@ pub struct Target {
 impl Target {
     pub fn command(&self) -> Command {
         if let Some(endpoint) = &self.native {
-            let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("justrust"));
+            let exe = crate::procfs::running_executable_path()
+                .unwrap_or_else(|_| PathBuf::from("justrust"));
             let mut c = Command::new(exe);
             c.args([
                 "__native",
@@ -185,7 +186,8 @@ impl Target {
     /// `ssh <opts>` for `rsync -e`.
     pub fn rsync_shell(&self) -> String {
         if let Some(endpoint) = &self.native {
-            let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("justrust"));
+            let exe = crate::procfs::running_executable_path()
+                .unwrap_or_else(|_| PathBuf::from("justrust"));
             return format!(
                 "{} __native rsync {}",
                 crate::remote_sync::rsync_shell_quote(&exe.to_string_lossy()),

@@ -35,6 +35,20 @@ pub fn page_size() -> u64 {
     4096
 }
 
+/// A pathname for synchronous helpers (hashing, patching and uploading) to
+/// read our loaded image, even after its original directory entry is removed.
+/// Use our PID, not `self`: a child must not hash its own executable instead.
+/// Do not persist this path beyond the lifetime of the calling process.
+#[cfg(target_os = "linux")]
+pub fn running_executable_path() -> std::io::Result<std::path::PathBuf> {
+    Ok(format!("/proc/{}/exe", std::process::id()).into())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn running_executable_path() -> std::io::Result<std::path::PathBuf> {
+    std::env::current_exe()
+}
+
 /// Open the running executable itself, including after an atomic installer
 /// replacement removed its original pathname. Keep procfs details here.
 #[cfg(unix)]
@@ -1020,6 +1034,42 @@ mod output_consumer_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn child_hashes_running_image_after_unlink() {
+        const KEY: &str = "JUSTRUST_TEST_UNLINKED_IMAGE";
+        if let Ok(copy) = std::env::var(KEY) {
+            // Never unlink an arbitrary path supplied in the environment.
+            let exe = std::env::current_exe().unwrap();
+            assert_eq!(exe, std::path::Path::new(&copy).join("test-bin"));
+            let expected = crate::toolchain::sha256(&exe).unwrap();
+            std::fs::remove_file(&exe).unwrap();
+            std::fs::write(&exe, b"replacement, not the running image").unwrap();
+            assert_eq!(
+                crate::toolchain::sha256(&running_executable_path().unwrap()).unwrap(),
+                expected
+            );
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("jr-unlinked-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let copy = dir.join("test-bin");
+        let exe = std::env::current_exe().unwrap();
+        if std::fs::hard_link(&exe, &copy).is_err() {
+            std::fs::copy(exe, &copy).unwrap();
+        }
+        let result = std::process::Command::new(&copy)
+            .args([
+                "--exact",
+                "procfs::tests::child_hashes_running_image_after_unlink",
+            ])
+            .env(KEY, &dir)
+            .status();
+        let replaced = std::fs::metadata(&copy).unwrap().len() < 100;
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(result.unwrap().success() && replaced);
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

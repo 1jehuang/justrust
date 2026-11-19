@@ -73,6 +73,7 @@ pub(crate) fn upload_file(target: &Target, source: &Path, remote: &str) -> Resul
     let mut command = Command::new("rsync");
     configure_rsync(&mut command, target);
     let status = command
+        .arg("--copy-links")
         .arg(source)
         .arg(rsync_destination(target, remote))
         .stdin(Stdio::null())

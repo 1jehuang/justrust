@@ -326,7 +326,7 @@ fn pump(mut socket: Socket, raw: TcpStream) -> Result<()> {
 /// The `ProxyCommand` value that runs this binary as the relay client, or
 /// `None` when the executable path cannot be expressed.
 pub fn proxy_command(windows_worker: bool) -> Option<String> {
-    let exe = std::env::current_exe().ok()?;
+    let exe = crate::procfs::running_executable_path().ok()?;
     proxy_command_for(exe.to_str()?, windows_worker)
 }
 

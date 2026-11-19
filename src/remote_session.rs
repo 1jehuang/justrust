@@ -1203,7 +1203,7 @@ fn command_with_executable(
     check_prefix(prefix)?;
     executable.validate()?;
     let config = serde_json::json!({ "dest": target.dest, "opts": target.opts, "native": target.native, "prefix": prefix, "executable": executable });
-    let mut command = Command::new(std::env::current_exe()?);
+    let mut command = Command::new(crate::procfs::running_executable_path()?);
     command.args([ARG, "client", &config.to_string()]);
     Ok(command)
 }

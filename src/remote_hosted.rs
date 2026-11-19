@@ -2276,7 +2276,7 @@ fn acknowledge_native_only(c: &Creds, target: &Target, offer: &NativeOnlyOffer) 
     if offer.acknowledged {
         return Ok(());
     }
-    let result = Command::new(std::env::current_exe()?)
+    let result = Command::new(crate::procfs::running_executable_path()?)
         .args([
             "__native",
             "accept",

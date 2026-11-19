@@ -474,7 +474,7 @@ fn fetch_release_on_machine(t: &Target) -> bool {
     let Some(url) = release_asset_url() else {
         return false;
     };
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = crate::procfs::running_executable_path() else {
         return false;
     };
     let Ok(want) = crate::toolchain::sha256(&exe) else {
@@ -673,7 +673,7 @@ pub(crate) fn ensure_session_executable(target: &Target) -> Result<PinnedSession
         arch.status.success() && remote == local && remote.starts_with("Linux "),
         "durable hosted sessions require an exact matching Linux executable (local {local}, remote {remote}); JUSTRUST_HOSTED_SESSION=0 selects legacy transport"
     );
-    let exe = std::env::current_exe()?;
+    let exe = crate::procfs::running_executable_path()?;
     let digest = crate::toolchain::sha256(&exe)?;
     let result = target
         .command()
@@ -791,7 +791,7 @@ fn upload_patch(t: &Target) -> bool {
     if std::env::var("JUSTRUST_REMOTE_PATCH").as_deref() == Ok("0") {
         return false;
     }
-    let (Some(base), Ok(exe)) = (installed_copy(), std::env::current_exe()) else {
+    let (Some(base), Ok(exe)) = (installed_copy(), crate::procfs::running_executable_path()) else {
         return false;
     };
     let (Ok(base_sha), Ok(want)) = (
@@ -903,7 +903,7 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
             t0.elapsed().as_secs_f64()
         ));
     } else if remote_arch == local_arch {
-        let exe = std::env::current_exe()?;
+        let exe = crate::procfs::running_executable_path()?;
         let tmp = ".cargo/bin/.justrust.upload";
         let ok = t
             .command()
@@ -949,7 +949,7 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
             .stdin(Stdio::null())
             .status();
     }
-    if let Ok(exe) = std::env::current_exe() {
+    if let Ok(exe) = crate::procfs::running_executable_path() {
         remember_installed(&exe);
     }
     std::fs::write(&stamp, want)?;
