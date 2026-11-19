@@ -966,6 +966,19 @@ impl DepGraphData {
 }
 
 impl DepGraph {
+    /// First direct dependency not known green after CGU validation failed. Read-only:
+    /// never force another query or change the reuse decision for profiling.
+    pub fn jr_cgu_blocker(&self, node: &DepNode) -> &'static str {
+        let Some(data) = self.data() else { return "<untracked>" };
+        let Some(index) = data.previous.node_to_index_opt(node) else { return "<no prior node>" };
+        for dep in data.previous.edge_targets_from(index) {
+            if !matches!(data.colors.get(dep), DepNodeColor::Green(_)) {
+                return data.previous.index_to_node(dep).kind.name();
+            }
+        }
+        "<no observed blocking edge>"
+    }
+
     /// Checks whether a previous work product exists for `v` and, if
     /// so, return the path that leads to it. Used to skip doing work.
     pub fn previous_work_product(&self, v: &WorkProductId) -> Option<WorkProduct> {

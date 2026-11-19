@@ -911,9 +911,9 @@ pub(crate) fn build_compile_unit_di_node<'ll, 'tcx>(
 
     let name_in_debuginfo = name_in_debuginfo.to_string_lossy();
     let work_dir = tcx.sess.psess.source_map().working_dir();
-    let output_filenames = tcx.output_filenames(());
     let split_name = if tcx.sess.target_can_use_split_dwarf()
-        && let Some(f) = output_filenames.split_dwarf_path(
+        && tcx.sess.split_debuginfo() != rustc_target::spec::SplitDebuginfo::Off
+        && let Some(f) = tcx.output_filenames(()).split_dwarf_path(
             tcx.sess.split_debuginfo(),
             tcx.sess.opts.unstable_opts.split_dwarf_kind,
             codegen_unit_name,

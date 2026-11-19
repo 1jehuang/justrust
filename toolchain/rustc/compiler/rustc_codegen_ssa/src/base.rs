@@ -1316,6 +1316,13 @@ pub fn determine_cgu_reuse<'tcx>(tcx: TyCtxt<'tcx>, cgu: &CodegenUnit<'tcx>) -> 
             _ => CguReuse::PreLto,
         }
     } else {
+        if rustc_data_structures::profiling::jr_reuse_enabled() {
+            rustc_data_structures::profiling::jr_reuse_count(
+                tcx.dep_graph.jr_cgu_blocker(&dep_node),
+                "cgu_blocker",
+                Duration::ZERO,
+            );
+        }
         CguReuse::No
     }
 }

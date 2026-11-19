@@ -104,7 +104,11 @@ pub(crate) fn create_informational_target_machine(sess: &Session) -> OwnedTarget
 }
 
 pub(crate) fn create_target_machine(tcx: TyCtxt<'_>, mod_name: &str) -> OwnedTargetMachine {
-    let split_dwarf_file = if tcx.sess.target_can_use_split_dwarf() {
+    // Only record a CGU dependency on output paths when the backend embeds one.
+    // Otherwise switching Cargo slots invalidates even byte-identical ELF objects.
+    let split_dwarf_file = if tcx.sess.target_can_use_split_dwarf()
+        && tcx.sess.split_debuginfo() != SplitDebuginfo::Off
+    {
         tcx.output_filenames(()).split_dwarf_path(
             tcx.sess.split_debuginfo(),
             tcx.sess.opts.unstable_opts.split_dwarf_kind,
@@ -114,8 +118,15 @@ pub(crate) fn create_target_machine(tcx: TyCtxt<'_>, mod_name: &str) -> OwnedTar
         None
     };
 
-    let output_obj_file =
-        Some(tcx.output_filenames(()).temp_path_for_cgu(OutputType::Object, mod_name));
+    // LLVM's ObjectFilenameForDebug is used for CodeView's S_OBJNAME.
+    // Keep the original behavior outside ordinary Linux DWARF targets.
+    let ordinary_elf = tcx.sess.target.os == rustc_target::spec::Os::Linux
+        && tcx.sess.target.binary_format == rustc_target::spec::BinaryFormat::Elf
+        && tcx.sess.target_can_use_split_dwarf()
+        && tcx.sess.opts.cg.llvm_args.is_empty()
+        && tcx.sess.opts.unstable_opts.llvm_plugins.is_empty();
+    let output_obj_file = (!ordinary_elf)
+        .then(|| tcx.output_filenames(()).temp_path_for_cgu(OutputType::Object, mod_name));
     let config = TargetMachineFactoryConfig { split_dwarf_file, output_obj_file };
 
     target_machine_factory(tcx.sess, tcx.backend_optimization_level(()))(tcx.dcx(), config)
