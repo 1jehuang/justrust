@@ -1295,7 +1295,13 @@ fn link_natively(
         Regex::new(r"(unknown|unrecognized) (command line )?(option|argument)").unwrap();
     let mut prog;
     loop {
+        let jr_children = rustc_data_structures::profiling::jr_children_cpu();
         prog = sess.time("run_linker", || exec_linker(sess, &cmd, out_filename, flavor, tmpdir));
+        if let (Some(before), Some(after)) =
+            (jr_children, rustc_data_structures::profiling::jr_children_cpu())
+        {
+            rustc_data_structures::profiling::jr_link_cpu(after.saturating_sub(before));
+        }
         let Ok(ref output) = prog else {
             break;
         };

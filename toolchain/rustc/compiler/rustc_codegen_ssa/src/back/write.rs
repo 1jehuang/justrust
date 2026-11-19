@@ -823,6 +823,7 @@ fn execute_optimize_work_item<B: WriteBackendMethods>(
     mut module: ModuleCodegen<B::Module>,
 ) -> WorkItemResult<B> {
     let _timer = prof.generic_activity_with_arg("codegen_module_optimize", &*module.name);
+    let _jr_cpu = rustc_data_structures::profiling::jr_cgu_cpu(&module.name);
 
     B::optimize(cgcx, prof, &shared_emitter, &mut module, &cgcx.module_config);
 
@@ -1914,6 +1915,7 @@ fn spawn_thin_lto_work<B: WriteBackendMethods>(
             }
             ThinLtoWorkItem::ThinLto(m) => {
                 let _timer = prof.generic_activity_with_arg("codegen_module_perform_lto", m.name());
+                let _jr_cpu = rustc_data_structures::profiling::jr_cgu_cpu(m.name());
                 B::optimize_and_codegen_thin(&cgcx, &prof, &shared_emitter, tm_factory, m)
             }
         }));

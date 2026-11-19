@@ -795,7 +795,13 @@ fn execute_job_incr<'tcx, C: QueryCache>(
     prof_timer.finish_with_query_invocation_id(dep_node_index.into());
     if let Some(start) = jr_reuse {
         let outcome = if query.eval_always {
-            "eval_always"
+            // Re-runs by design. Whether it reproduced last session's value
+            // separates redundant re-execution from a real change.
+            match dep_graph_data.jr_reexecution_outcome(&dep_node, query.hash_value_fn.is_some()) {
+                "same" => "eval_always_same",
+                "changed" => "eval_always_changed",
+                _ => "eval_always",
+            }
         } else {
             dep_graph_data.jr_reexecution_outcome(&dep_node, query.hash_value_fn.is_some())
         };

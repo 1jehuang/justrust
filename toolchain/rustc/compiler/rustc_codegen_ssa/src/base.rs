@@ -812,6 +812,11 @@ pub fn codegen_crate<
                 }
                 CguReuse::No => "changed",
             };
+            if outcome == "loaded" {
+                rustc_data_structures::profiling::jr_cgu_reused(cgu.name().as_str());
+            } else {
+                rustc_data_structures::profiling::jr_cgu_outcome(cgu.name().as_str(), outcome);
+            }
             rustc_data_structures::profiling::jr_reuse_count(
                 "<cgu>",
                 outcome,
@@ -854,6 +859,8 @@ pub fn codegen_crate<
             let start_time = Instant::now();
 
             let pre_compiled_cgus = par_map(cgus, |(i, _)| {
+                let _jr_cpu =
+                    rustc_data_structures::profiling::jr_cgu_cpu(codegen_units[i].name().as_str());
                 let module =
                     backend.compile_codegen_unit(tcx, codegen_units[i].name(), bitcode_needed);
                 (i, IntoDynSyncSend(module))
@@ -879,6 +886,7 @@ pub fn codegen_crate<
                     cgu.0
                 } else {
                     let start_time = Instant::now();
+                    let _jr_cpu = rustc_data_structures::profiling::jr_cgu_cpu(cgu.name().as_str());
                     let module = backend.compile_codegen_unit(tcx, cgu.name(), bitcode_needed);
                     total_codegen_time += start_time.elapsed();
                     module

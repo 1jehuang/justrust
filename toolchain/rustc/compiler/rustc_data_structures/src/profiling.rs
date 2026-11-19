@@ -941,12 +941,268 @@ pub fn jr_reuse_finish(start: JrReuseStart, query: &'static str, outcome: &'stat
 
 /// Count `n` units of `outcome` for a non-query item kind (codegen units).
 pub fn jr_reuse_count(kind: &'static str, outcome: &'static str, dur: Duration) {
+    jr_reuse_add(kind, outcome, dur, 1);
+}
+
+/// Add `count` items and `dur` to (`outcome`, `kind`) in the reuse ledger.
+pub fn jr_reuse_add(kind: &'static str, outcome: &'static str, dur: Duration, count: u64) {
     if let Some(ledger) = jr_phase_ledger() {
         let mut reuse = ledger.reuse.lock();
         let entry = reuse.entry((outcome, kind)).or_insert((Duration::ZERO, 0));
         entry.0 += dur;
-        entry.1 += 1;
+        entry.1 += count;
     }
+}
+
+/// CPU time this thread has used so far. `None` where unsupported. Used to
+/// charge codegen and LLVM work to codegen units in CPU, not wall, time.
+#[inline]
+pub fn jr_thread_cpu() -> Option<Duration> {
+    #[cfg(unix)]
+    {
+        let mut ts = std::mem::MaybeUninit::<libc::timespec>::uninit();
+        // SAFETY: plain syscall writing into a local timespec.
+        if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, ts.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        let ts = unsafe { ts.assume_init() };
+        Some(Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32))
+    }
+    #[cfg(not(unix))]
+    None
+}
+
+/// CPU time of waited-for children (the linker). `None` where unsupported.
+pub fn jr_children_cpu() -> Option<Duration> {
+    #[cfg(unix)]
+    {
+        let mut ru = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        // SAFETY: plain syscall writing into a local rusage.
+        if unsafe { libc::getrusage(libc::RUSAGE_CHILDREN, ru.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        let ru = unsafe { ru.assume_init() };
+        let tv = |t: libc::timeval| Duration::new(t.tv_sec as u64, t.tv_usec as u32 * 1000);
+        Some(tv(ru.ru_utime) + tv(ru.ru_stime))
+    }
+    #[cfg(not(unix))]
+    None
+}
+
+/// Charges this thread's CPU time until dropped to (`outcome`, `kind`).
+#[must_use]
+pub struct JrCpuGuard(Option<(&'static str, &'static str, Duration)>);
+
+impl Drop for JrCpuGuard {
+    fn drop(&mut self) {
+        if let Some((kind, outcome, start)) = self.0
+            && let Some(now) = jr_thread_cpu()
+        {
+            jr_reuse_count(kind, outcome, now.saturating_sub(start));
+        }
+    }
+}
+
+/// Start charging this thread's CPU to (`outcome`, `kind`). Free when off.
+#[inline]
+pub fn jr_cpu(kind: &'static str, outcome: &'static str) -> JrCpuGuard {
+    JrCpuGuard(if jr_reuse_enabled() { jr_thread_cpu().map(|t| (kind, outcome, t)) } else { None })
+}
+
+/// Per-crate cost history, kept in the incremental session directory so
+/// reuse can be credited with what the reused work measurably cost in this
+/// crate's own earlier sessions, not a guess. `query_kind -> (secs, count)`
+/// of provider executions summed over sessions, and `cgu name -> cpu secs`
+/// of the last time each codegen unit was actually compiled.
+#[derive(Default)]
+pub struct JrCostHistory {
+    pub queries: FxHashMap<String, (f64, u64)>,
+    pub cgus: FxHashMap<String, f64>,
+}
+
+/// Sidecar file name in the incremental session directory.
+pub const JR_COSTS_FILE: &str = "jr-costs.tsv";
+
+static JR_PRIOR_COSTS: std::sync::OnceLock<JrCostHistory> = std::sync::OnceLock::new();
+
+impl JrCostHistory {
+    fn parse(text: &str) -> Self {
+        let mut h = JrCostHistory::default();
+        for l in text.lines() {
+            let mut f = l.split('\t');
+            match (f.next(), f.next(), f.next(), f.next()) {
+                (Some("q"), Some(q), Some(s), Some(n)) => {
+                    if let (Ok(s), Ok(n)) = (s.parse::<f64>(), n.parse::<u64>())
+                        && s.is_finite()
+                    {
+                        h.queries.insert(q.to_owned(), (s, n));
+                    }
+                }
+                (Some("c"), Some(c), Some(s), None) => {
+                    if let Ok(s) = s.parse::<f64>()
+                        && s.is_finite()
+                    {
+                        h.cgus.insert(c.to_owned(), s);
+                    }
+                }
+                _ => {}
+            }
+        }
+        h
+    }
+}
+
+/// Read the previous session's cost history (once). Best effort.
+pub fn jr_costs_load(old_session_dir: Option<&Path>) {
+    if !jr_reuse_enabled() {
+        return;
+    }
+    let h = old_session_dir
+        .and_then(|d| fs::read_to_string(d.join(JR_COSTS_FILE)).ok())
+        .map(|t| JrCostHistory::parse(&t))
+        .unwrap_or_default();
+    let _ = JR_PRIOR_COSTS.set(h);
+}
+
+/// Mean measured provider seconds of `query` in this crate's history.
+fn jr_prior_query_mean(query: &str) -> Option<f64> {
+    let (s, n) = *JR_PRIOR_COSTS.get()?.queries.get(query)?;
+    (n > 0).then(|| s / n as f64)
+}
+
+/// A codegen unit was reused: credit what it cost when last compiled.
+pub fn jr_cgu_reused(cgu: &str) {
+    if !jr_reuse_enabled() {
+        return;
+    }
+    match JR_PRIOR_COSTS.get().and_then(|h| h.cgus.get(cgu)) {
+        Some(&s) => {
+            jr_reuse_count("<cgu_avoided>", "measured", Duration::from_secs_f64(s));
+            JR_CGU_COSTS.lock().insert(cgu.to_owned(), s);
+        }
+        None => jr_reuse_count("<cgu_avoided>", "unmeasured", Duration::ZERO),
+    }
+}
+
+static JR_CGU_COSTS: std::sync::LazyLock<parking_lot::Mutex<FxHashMap<String, f64>>> =
+    std::sync::LazyLock::new(Default::default);
+static JR_CGU_OUTCOME: std::sync::LazyLock<parking_lot::Mutex<FxHashMap<String, &'static str>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Note what incremental decided for codegen unit `cgu` (`new`, `changed`).
+pub fn jr_cgu_outcome(cgu: &str, outcome: &'static str) {
+    if jr_reuse_enabled() {
+        JR_CGU_OUTCOME.lock().insert(cgu.to_owned(), outcome);
+    }
+}
+
+/// Add CPU spent compiling codegen unit `cgu` this session (frontend
+/// codegen and LLVM), carried into the cost history and charged to the
+/// `<cgu_cpu>` row of the unit's outcome.
+pub fn jr_cgu_cost(cgu: &str, cpu: Duration) {
+    if jr_reuse_enabled() {
+        let outcome = JR_CGU_OUTCOME.lock().get(cgu).copied().unwrap_or("untracked");
+        jr_reuse_add("<cgu_cpu>", outcome, cpu, 0);
+        *JR_CGU_COSTS.lock().entry(cgu.to_owned()).or_insert(0.0) += cpu.as_secs_f64();
+    }
+}
+
+/// Charges this thread's CPU until dropped to codegen unit `cgu`.
+#[must_use]
+pub struct JrCguCpuGuard(Option<(String, Duration)>);
+
+impl Drop for JrCguCpuGuard {
+    fn drop(&mut self) {
+        if let Some((cgu, start)) = self.0.take()
+            && let Some(now) = jr_thread_cpu()
+        {
+            jr_cgu_cost(&cgu, now.saturating_sub(start));
+        }
+    }
+}
+
+/// Start charging this thread's CPU to codegen unit `cgu`. Free when off.
+#[inline]
+pub fn jr_cgu_cpu(cgu: &str) -> JrCguCpuGuard {
+    JrCguCpuGuard(if jr_reuse_enabled() {
+        jr_thread_cpu().map(|t| (cgu.to_owned(), t))
+    } else {
+        None
+    })
+}
+
+/// Record where this session's incremental state came from: `<session>`
+/// rows `warm`, `cold_no_prior`, `cold_out_of_date`, `cold_io_error`, plus
+/// `<sibling_state>` `present` when the incremental dir holds state for
+/// the same crate name under another crate id (another `-C metadata`:
+/// features, profile or target), i.e. a cold start next to reusable work.
+pub fn jr_session_source(outcome: &'static str, siblings: u64) {
+    jr_reuse_count("<session>", outcome, Duration::ZERO);
+    if siblings > 0 {
+        jr_reuse_add("<sibling_state>", "present", Duration::ZERO, siblings);
+    }
+}
+
+/// The linker ran for `cpu` (children CPU while it ran).
+pub fn jr_link_cpu(cpu: Duration) {
+    jr_reuse_count("<link>", "linker", cpu);
+}
+
+/// Write this session's cost history into `new_session_dir`: previous query
+/// totals plus this session's executions, and the cost of every codegen
+/// unit compiled or carried forward. Best effort.
+pub fn jr_costs_save(new_session_dir: &Path) {
+    use std::fmt::Write;
+    let Some(ledger) = jr_phase_ledger() else { return };
+    let mut q: FxHashMap<String, (f64, u64)> =
+        JR_PRIOR_COSTS.get().map(|h| h.queries.clone()).unwrap_or_default();
+    for ((outcome, query), (dur, count)) in ledger.reuse.lock().iter() {
+        if query.starts_with('<') {
+            continue;
+        }
+        if matches!(
+            *outcome,
+            "new" | "changed" | "same" | "green_recompute" | "nohash" | "eval_always"
+                | "eval_always_same" | "eval_always_changed"
+        ) {
+            let e = q.entry((*query).to_owned()).or_insert((0.0, 0));
+            e.0 += dur.as_secs_f64();
+            e.1 += count;
+        }
+    }
+    let mut out = String::new();
+    let mut qs: Vec<_> = q.into_iter().collect();
+    qs.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, (s, n)) in qs {
+        // Keep the history bounded and recent: halve once it is large.
+        let (s, n) = if n > 1 << 24 { (s / 2.0, n / 2) } else { (s, n) };
+        let _ = writeln!(out, "q\t{name}\t{s:.9}\t{n}");
+    }
+    let cgus = JR_CGU_COSTS.lock();
+    let mut cs: Vec<_> = cgus.iter().collect();
+    cs.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, s) in cs {
+        let _ = writeln!(out, "c\t{name}\t{s:.6}");
+    }
+    let path = new_session_dir.join(JR_COSTS_FILE);
+    let tmp = path.with_extension("tsv-tmp");
+    if fs::write(&tmp, out).is_ok() {
+        let _ = fs::rename(&tmp, &path);
+    }
+}
+
+/// Credit loaded query results with this crate's measured mean cost.
+fn jr_credit_loads(reuse: &FxHashMap<(&'static str, &'static str), (Duration, u64)>) -> Vec<(&'static str, Duration, u64, bool)> {
+    let mut v = Vec::new();
+    for ((outcome, query), (_, count)) in reuse.iter() {
+        if *outcome == "loaded" && !query.starts_with('<') {
+            match jr_prior_query_mean(query) {
+                Some(m) => v.push((*query, Duration::from_secs_f64(m * *count as f64), *count, true)),
+                None => v.push((*query, Duration::ZERO, *count, false)),
+            }
+        }
+    }
+    v
 }
 
 static JR_PHASES_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
@@ -1025,7 +1281,16 @@ pub fn jr_phases_write(total: Duration) {
     // `outcome\tquery\tseconds\tcount` per line.
     let mut reuse_out = String::new();
     {
-        let reuse = ledger.reuse.lock();
+        let mut reuse = ledger.reuse.lock();
+        // Loads are credited with their measured history once, at write
+        // time (an early-reply rewrite replaces the previous credit).
+        reuse.retain(|(o, _), _| *o != "loaded_avoided" && *o != "loaded_unmeasured");
+        for (query, dur, count, measured) in jr_credit_loads(&reuse) {
+            let o = if measured { "loaded_avoided" } else { "loaded_unmeasured" };
+            let e = reuse.entry((o, query)).or_insert((Duration::ZERO, 0));
+            e.0 += dur;
+            e.1 += count;
+        }
         let mut rows: Vec<_> = reuse.iter().map(|(k, v)| (*k, *v)).collect();
         rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
         for ((outcome, query), (dur, count)) in rows {

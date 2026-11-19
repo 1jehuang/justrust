@@ -221,6 +221,26 @@ pub fn setup_dep_graph(
     // Emit a fatal error if `-Zassert-incr-state` is present and unsatisfied.
     maybe_assert_incr_state(sess, &load_result);
 
+    // justrust reuse ledger: where this session's state came from, the
+    // crate's measured cost history, and whether reusable state for the
+    // same crate name sat beside a cold start.
+    if rustc_data_structures::profiling::jr_reuse_enabled() {
+        let old = incr_comp_session.paths.old_session_directory.as_deref();
+        rustc_data_structures::profiling::jr_costs_load(old);
+        let source = match (&load_result, old) {
+            (LoadResult::Ok { .. }, _) => "warm",
+            (_, None) => "cold_no_prior",
+            (LoadResult::IoError { .. }, _) => "cold_io_error",
+            (LoadResult::DataOutOfDate, _) => "cold_out_of_date",
+        };
+        let siblings = if source == "warm" {
+            0
+        } else {
+            super::fs::jr_sibling_states(sess, crate_name, stable_crate_id)
+        };
+        rustc_data_structures::profiling::jr_session_source(source, siblings);
+    }
+
     let (prev_graph, prev_work_products) = match load_result {
         LoadResult::IoError { path, err } => {
             sess.dcx().emit_warn(diagnostics::LoadDepGraph { path, err });

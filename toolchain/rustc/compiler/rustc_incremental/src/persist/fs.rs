@@ -299,6 +299,7 @@ pub fn finalize_session_directory(
     let _timer = sess.timer("incr_comp_finalize_session_directory");
 
     let incr_comp_session_dir = &*incr_comp_session.new_session_directory;
+    rustc_data_structures::profiling::jr_costs_save(incr_comp_session_dir);
 
     debug!("finalize_session_directory() - session directory: {}", incr_comp_session_dir.display());
 
@@ -591,6 +592,35 @@ fn crate_path(sess: &Session, crate_name: Symbol, stable_crate_id: StableCrateId
     let crate_name =
         format!("{crate_name}-{}", stable_crate_id.as_u64().to_base_fixed_len(CASE_INSENSITIVE));
     incr_dir.join(crate_name)
+}
+
+/// justrust: finalized session directories in the incremental dir that
+/// belong to the same crate name under a different crate id (another
+/// `-C metadata`: features, profile, target). Read-only.
+pub(crate) fn jr_sibling_states(
+    sess: &Session,
+    crate_name: Symbol,
+    stable_crate_id: StableCrateId,
+) -> u64 {
+    let own = crate_path(sess, crate_name, stable_crate_id);
+    let (Some(incr_dir), Some(own_name)) = (own.parent(), own.file_name()) else { return 0 };
+    let prefix = format!("{crate_name}-");
+    let Ok(entries) = incr_dir.read_dir() else { return 0 };
+    entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name();
+            name != own_name
+                && name.to_str().is_some_and(|n| {
+                    n.strip_prefix(&prefix).is_some_and(|rest| !rest.contains('-'))
+                })
+        })
+        .filter(|e| {
+            e.path().read_dir().into_iter().flatten().filter_map(|s| s.ok()).any(|s| {
+                s.file_name().to_str().is_some_and(|n| is_session_directory(n) && is_finalized(n))
+            })
+        })
+        .count() as u64
 }
 
 fn is_old_enough_to_be_collected(timestamp: SystemTime) -> bool {
