@@ -581,7 +581,7 @@ fn flag_names(args: &[String]) -> Vec<String> {
 
 fn valid_toolchain_pin(pin: &str) -> bool {
     pin.strip_prefix("jr-").is_some_and(|h| {
-        h.len() == 12
+        matches!(h.len(), 12 | 40)
             && h.bytes()
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     })
@@ -794,6 +794,13 @@ pub fn run_data(s: &crate::summary::Summary, agent_mode: bool) -> Value {
     put("avg_cores", json!(r2(r.avg_build_cores)));
     put("min_mem_avail_mb", json!(r.min_mem_available_mb));
     put("remote", json!(s.remote.is_some()));
+    if let Some(level) = u
+        .opt_level
+        .as_deref()
+        .filter(|v| *v == "mixed" || crate::summary::valid_unit_opt_level(v))
+    {
+        put("opt_level", json!(level));
+    }
     if let Some(pin) = s.toolchain.as_deref().filter(|t| valid_toolchain_pin(t)) {
         put("toolchain_pin", json!(pin));
     }
@@ -1639,6 +1646,7 @@ mod tests {
             ..Default::default()
         };
         s.diagnostics.first_error = Some(secret.into());
+        s.units.opt_level = Some(secret.into());
         s.units.depcache_miss_env = vec![secret.into()];
         s.remote = Some(crate::summary::RemoteInfo {
             machine: secret.into(),
@@ -1661,6 +1669,7 @@ mod tests {
         };
         s.phases.build_gaps = 1.25;
         s.units.compiled = 5;
+        s.units.opt_level = Some("mixed".into());
         s.units.with_pass_timings = 2;
         s.units.depcache_miss_secs = 4.5;
         s.units.localcache_saved_secs = 3.25;
@@ -1670,6 +1679,7 @@ mod tests {
         let d = run_data(&s, false);
         for (key, value) in [
             ("schema_version", json!(2)),
+            ("opt_level", json!("mixed")),
             ("run_id", json!(s.id)),
             ("build_gaps_s", json!(1.25)),
             ("phase_total_s", json!(1.25)),
@@ -1777,6 +1787,12 @@ mod tests {
     #[test]
     fn disabled_in_unit_tests() {
         assert!(valid_toolchain_pin("jr-ac20de5e7921"));
+        for len in [11, 13, 39, 40, 41] {
+            assert_eq!(
+                valid_toolchain_pin(&format!("jr-{}", "a".repeat(len))),
+                len == 40
+            );
+        }
         assert!(!valid_toolchain_pin("jr-private-package"));
         assert!(!valid_toolchain_pin("jr-AC20DE5E7921"));
         assert_eq!(disabled_reason(), Some("unit tests"));

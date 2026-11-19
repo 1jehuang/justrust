@@ -149,6 +149,9 @@ pub struct Phases {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct UnitStats {
+    /// Optimization level observed across recorded units, or `mixed` if they differ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opt_level: Option<String>,
     /// rustc invocations that actually ran.
     pub compiled: usize,
     pub local: usize,
@@ -975,6 +978,8 @@ pub fn build(
 
     // Units.
     let mut stats = UnitStats {
+        opt_level: observed_opt_level(units.iter().map(|u| u.opt_level.as_str()))
+            .map(str::to_owned),
         compiled: units.len(),
         local: units.iter().filter(|u| u.local && !u.build_script).count(),
         dependencies: units.iter().filter(|u| !u.local && !u.build_script).count(),
@@ -1273,6 +1278,32 @@ fn is_compile_error(t: &str) -> bool {
         || t.starts_with("error: process didn't exit successfully")
         || t.starts_with("error: no test target")
         || t.starts_with("error: Recipe"))
+}
+
+pub(crate) fn valid_unit_opt_level(level: &str) -> bool {
+    matches!(level, "0" | "1" | "2" | "3" | "s" | "z")
+}
+
+fn observed_opt_level<'a>(levels: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let mut known = levels.filter(|level| valid_unit_opt_level(level));
+    let first = known.next()?;
+    Some(if known.any(|level| level != first) {
+        "mixed"
+    } else {
+        first
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn observed_levels_ignore_unknown_units() {
+    for (levels, expected) in [
+        (vec!["", "unknown", "mixed"], None),
+        (vec!["s", "", "s"], Some("s")),
+        (vec!["0", "3", "0"], Some("mixed")),
+    ] {
+        assert_eq!(observed_opt_level(levels.into_iter()), expected);
+    }
 }
 
 impl UnitStats {
