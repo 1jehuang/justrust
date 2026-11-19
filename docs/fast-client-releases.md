@@ -37,6 +37,34 @@ rerun that workflow before retrying the command. Never move a published tag.
 The local activation helper currently supports Linux x86_64/aarch64. It refuses
 unsupported platforms before creating or pushing a tag.
 
+## Optional exact-source hosted test before tagging
+
+```bash
+python3 scripts/release-client.py --tag "$TAG" --ref "$REVIEWED_FULL_SHA" --test-exact
+```
+
+This command runs a hosted `test --workspace --locked` but does **not** tag,
+install, switch backends or activate anything. To make the test a prerequisite
+of publication, add `--execute` to the same invocation. A subsequent plain
+`--execute` does not import a previous run's evidence. Use the configured hosted
+backend and a full lowercase stable commit ID, not `stable`, `HEAD` or a prefix.
+
+The gate reads committed Git blobs into a private temporary directory. No
+worktree, `.git` directory, untracked credentials or checkout filters are
+copied. It excludes the vendored toolchain, Wrangler state, benchmarks and
+historical run data. Unlike the binary-only `ci/source-sync-release-gate.sh`
+benchmark export, it retains member crates, test fixtures, and files marked
+`export-ignore` or `export-subst` byte for byte. One generated libtest and its
+manifest verify the synchronized files, executable bits and unexpected inputs
+on the Linux host. A matching unique passing test in the same hosted run's
+saved log is required. A missing log or witness is a failure, not a waiver.
+
+Ordinary plans and releases create no new test roots. Each explicit gate uses
+a fresh path so it cannot accidentally accept another run's receipt. Its local
+scratch is cleaned on normal exit or error. The hosted mirror and cold build
+artifacts can outlive that directory and consume substantial hosted disk until
+normal retention/eviction. Do not use this gate as the routine edit loop.
+
 ## Registry source packages
 
 The binary release uses the graph library directly from `crates/graph`. For a
@@ -86,6 +114,7 @@ the developer's test client current.
 ## Validation
 
 ```bash
+python3 -m unittest discover -s scripts -p test_exact_client_gate.py -v
 python3 -m unittest discover -s scripts -p test_release_client.py -v
 python3 -m unittest discover -s scripts -p test_client_ci_concurrency.py -v
 python3 -m unittest discover -s scripts -p test_production_dogfood.py -v

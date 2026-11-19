@@ -52,15 +52,18 @@ def ensure_tag(tag, sha):
             raise ValueError("remote tag already names a different commit, refusing to move it")
         print("Existing remote tag is unchanged. Waiting for its publication.", flush=True)
         return
-    local = subprocess.run(["git", "rev-parse", "--verify", "refs/tags/" + tag + "^{commit}"],
+    local = subprocess.run(["git", "rev-parse", "--verify", "refs/tags/" + tag],
                            cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     if local.returncode == 0:
-        if local.stdout.strip() != sha:
-            raise ValueError("local tag already names a different commit, refusing to move it")
+        object_id = local.stdout.strip()
     else:
         run("git", "tag", tag, sha)
-    # The tag push triggers Release. Never dispatch a duplicate parallel build.
-    run("git", "push", "origin", "refs/tags/" + tag)
+        object_id = run('git', 'rev-parse', '--verify', 'refs/tags/' + tag)
+    if object_id != sha and run('git', 'rev-parse', '--verify', object_id + '^{commit}') != sha:
+        raise ValueError("local tag already names a different commit, refusing to move it")
+    # Push the verified object, not a local tag that could move while queued.
+    # The immutable object also preserves an existing annotated tag.
+    run("git", "push", "origin", object_id + ":refs/tags/" + tag)
 
 
 def release_runs(tag, sha):
@@ -124,13 +127,23 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True, help="exact version matching committed Cargo.toml")
     parser.add_argument("--ref", default="HEAD", help="committed source to release, default HEAD")
+    parser.add_argument('--test-exact', action='store_true', help='test a full --ref SHA on hosted, even without --execute; never tag on gate failure')
     parser.add_argument("--execute", action="store_true", help="push immutable tag, wait, and activate published bytes")
     parser.add_argument("--timeout", type=float, default=1800, help="publication deadline in seconds")
     parser.add_argument("--poll", type=float, default=10, help="publication polling interval in seconds")
     args = parser.parse_args(argv)
     if not 0 < args.timeout <= 7200 or not 0 < args.poll <= 300:
         parser.error("timeout must be 0..7200 seconds and poll 0..300 seconds")
+    if args.test_exact and not re.fullmatch('[0-9a-f]{40}', args.ref):
+        parser.error('--test-exact requires --ref with a full lowercase commit SHA, not a moving ref')
     sha = candidate(args.tag, args.ref)
+    if args.test_exact:
+        from exact_client_gate import gate
+        if sha != args.ref or gate(ROOT, sha) != sha:
+            raise ValueError('exact gate did not verify requested release SHA')
+        if not args.execute:
+            print('Gate only. No tag pushed or executable activated.')
+            return
     print(f"Release plan: {args.tag} from {sha}")
     print("Only committed source is released. Uncommitted edits are never packaged.")
     print("Tag push -> existing Release builds/sanity checks -> shared publication -> exact-byte local activation.")

@@ -42,10 +42,11 @@ class ReleaseClientTests(unittest.TestCase):
     def test_new_tag_is_pushed_once_without_duplicate_workflow_dispatch(self):
         with mock.patch.object(release, "remote_tag", return_value=None), \
                 mock.patch.object(release.subprocess, "run", return_value=SimpleNamespace(returncode=1)), \
-                mock.patch.object(release, "run") as run:
+                mock.patch.object(release, "run", side_effect=['', SHA, '']) as run:
             release.ensure_tag(VERSION, SHA)
             self.assertEqual(run.call_args_list, [mock.call("git", "tag", VERSION, SHA),
-                                                 mock.call("git", "push", "origin", "refs/tags/" + VERSION)])
+                                                 mock.call('git', 'rev-parse', '--verify', 'refs/tags/' + VERSION),
+                                                 mock.call("git", "push", "origin", SHA + ":refs/tags/" + VERSION)])
 
     def test_conflicting_local_tag_fails_without_push(self):
         with mock.patch.object(release, "remote_tag", return_value=None), \
@@ -53,7 +54,15 @@ class ReleaseClientTests(unittest.TestCase):
                 mock.patch.object(release, "run") as run:
             with self.assertRaisesRegex(ValueError, "local tag"):
                 release.ensure_tag(VERSION, SHA)
-            run.assert_not_called()
+            run.assert_called_once_with('git', 'rev-parse', '--verify', 'b' * 40 + '^{commit}')
+
+    def test_annotated_tag_push_uses_verified_object_not_moving_local_tag(self):
+        annotated = 'c' * 40
+        with mock.patch.object(release, 'remote_tag', return_value=None), \
+                mock.patch.object(release.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=annotated)), \
+                mock.patch.object(release, 'run', side_effect=[SHA, '']) as run:
+            release.ensure_tag(VERSION, SHA)
+            self.assertEqual(run.call_args_list[-1], mock.call('git', 'push', 'origin', annotated + ':refs/tags/' + VERSION))
 
     def test_publication_does_not_wait_for_full_workflow_success(self):
         production = SimpleNamespace(target=mock.Mock(return_value="triple"), release_info=mock.Mock(return_value={}))

@@ -49,6 +49,8 @@ jobs:
         run: python3 ci/test-publish-platform-release.py
       - name: Test pinned published bootstrap validation
         run: python3 ci/test-install-published-client.py
+      - name: Test exact-source release gate offline
+        run: python3 -m unittest discover -s scripts -p test_exact_client_gate.py -v
       - name: Test one-command client release activation
         run: python3 -m unittest discover -s scripts -p test_release_client.py -v
       - name: Test production-first release ordering
