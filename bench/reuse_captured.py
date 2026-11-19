@@ -11,6 +11,7 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
 
 
 HITS = {'hit', 'peer', 'local', 'remote', 'prebuilt'}
@@ -32,14 +33,26 @@ def seconds(x):
     return type(x) in (float, int) and math.isfinite(x) and x >= 0
 
 
-def report(path):
+def read_object(path):
+    try:
+        data = json.loads(path.read_bytes())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def run_start(folder, summary):
+    start = summary.get('start')
+    if not seconds(start):
+        start = read_object(folder / 'meta.json').get('start')
+    return start if seconds(start) else None
+
+
+def report(path, summary=None):
     folder = path.parent
     counts, process, ledger, estimates = (Counter() for _ in range(4))
-    summary_path = folder / 'summary.json'
-    try:
-        summary = json.loads(summary_path.read_text())
-    except (OSError, ValueError):
-        summary = {}
+    if summary is None:
+        summary = read_object(folder / 'summary.json')
     for u in records(path):
         counts['unit_rows'] += 1
         if u.get('build_script') and not u.get('crate_types'):
@@ -85,23 +98,38 @@ def report(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('since', nargs='?', type=datetime.fromisoformat)
+    window = parser.add_mutually_exclusive_group()
+    since_help = 'inclusive ISO run start cutoff (local time unless an offset is supplied)'
+    window.add_argument('since', nargs='?', type=datetime.fromisoformat, help=since_help)
+    window.add_argument('--since', dest='since_option', type=datetime.fromisoformat, help=since_help)
     parser.add_argument('--runs', type=Path, default=Path.home() / '.justrust/runs')
     parser.add_argument('--run', type=Path, help='read just this run directory')
     parser.add_argument('--output', type=Path, default=Path(os.environ.get('JCODE_SCRATCH_DIR', '/tmp')) / 'reuse-captured.jsonl')
     args = parser.parse_args()
+    since = args.since_option or args.since
+    cutoff = since.timestamp() if since else None
     paths = [args.run / 'units.jsonl'] if args.run else args.runs.glob('*/units.jsonl')
     totals = {k: Counter() for k in ('counts', 'recorded_unit_cpu_seconds', 'recorded_ledger_seconds', 'estimated_gross_costs')}
-    n = 0
+    n = undated = 0
     with args.output.open('w') as stream:
         for p in paths:
-            if not p.is_file() or (args.since and p.stat().st_mtime < args.since.timestamp()):
+            if not p.is_file():
                 continue
-            row = report(p)
+            summary = read_object(p.parent / 'summary.json')
+            if cutoff is not None:
+                start = run_start(p.parent, summary)
+                if start is None:
+                    undated += 1
+                    continue
+                if start < cutoff:
+                    continue
+            row = report(p, summary)
             print(json.dumps(row), file=stream)
             for key in totals:
                 totals[key].update(row[key])
             n += 1
+    if undated:
+        print(f'Skipped {undated} runs without a recorded start time.', file=sys.stderr)
     print(f'{n} builds, per-build rows: {args.output}')
     print(json.dumps(totals, sort_keys=True))
     print('Maximum safe reuse and captured percentage are not identifiable from these records.')

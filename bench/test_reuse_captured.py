@@ -1,5 +1,7 @@
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -44,6 +46,34 @@ class ReuseEvidence(unittest.TestCase):
         (run / 'units.jsonl').touch()
         subprocess.run(command, check=True, capture_output=True)
         self.assertIsNone(json.loads(out.read_text())['maximum_safe_reuse'])
+
+    def test_window_uses_recorded_start_even_after_copy(self):
+        cutoff = 1795075200  # 2026-11-19 midnight, UTC-08:00
+        old = self.root / 'copied'
+        old.mkdir()
+        (old / 'summary.json').write_text(json.dumps({'start': cutoff - 0.25}))
+        (old / 'meta.json').write_text(json.dumps({'start': cutoff + 1}))
+        (old / 'units.jsonl').touch()
+        boundary = self.root / 'boundary'
+        shutil.copytree(old, boundary)
+        (boundary / 'summary.json').write_text('[]')
+        (boundary / 'meta.json').write_text(json.dumps({'start': cutoff}))
+        os.utime(boundary / 'units.jsonl', (1, 1))
+        os.utime(old / 'units.jsonl', (cutoff + 100, cutoff + 100))
+        undated = self.root / '20991231-future-looking'
+        shutil.copytree(old, undated)
+        (undated / 'summary.json').write_text('{')
+        (undated / 'meta.json').write_text('{"start":true}')
+        out = self.root / 'out'
+        cmd = [sys.executable, str(Path(__file__).with_name('reuse_captured.py')),
+               '--runs', str(self.root), '--output', str(out)]
+        for args in (['2026-11-19'], ['--since', '2026-11-19T08:00:00+00:00']):
+            result = subprocess.run(cmd + args, env={**os.environ, 'TZ': 'PST8'},
+                                    check=True, capture_output=True, text=True)
+            self.assertEqual(json.loads(out.read_text())['run'], 'boundary')
+            self.assertIn('Skipped 1 runs without a recorded start', result.stderr)
+        subprocess.run(cmd + ['--run', str(undated)], check=True, capture_output=True)
+        self.assertEqual(json.loads(out.read_text())['run'], undated.name)
 
 
 if __name__ == '__main__':
