@@ -65,12 +65,25 @@ class HostedProbe:
         # Reject links escaping the owned snapshot. Do not dereference symlinks
         # during rsync, and never mirror target/cache/toolchain trees.
         excluded = {"target", ".git", ".pristine", ".justrust", ".cache", "node_modules", "__pycache__"}
-        for base, dirs, files in os.walk(root, followlinks=False):
-            dirs[:] = [d for d in dirs if d not in excluded]
-            for name in dirs + files:
-                p = Path(base) / name
-                if p.is_symlink() and not p.resolve().is_relative_to(root):
-                    raise RuntimeError(f"synth: source symlink escapes owned snapshot: {p}")
+        pending = [str(root)]
+        while pending:
+            base = pending.pop()
+            # Like os.walk(followlinks=False), recheck before descending in case
+            # a queued directory was replaced by a link. Fail before transport.
+            if os.path.islink(base):
+                raise RuntimeError(f"synth: source directory became a symlink: {base}")
+            with os.scandir(base) as entries:
+                for entry in entries:
+                    # os.walk classifies links to directories as directories for
+                    # pruning. A broken or file link with an excluded name must
+                    # still be checked. Never recurse into links.
+                    if entry.name in excluded and entry.is_dir():
+                        continue
+                    if entry.is_symlink():
+                        if not Path(entry.path).resolve().is_relative_to(root):
+                            raise RuntimeError(f"synth: source symlink escapes owned snapshot: {entry.path}")
+                    elif entry.is_dir(follow_symlinks=False):
+                        pending.append(entry.path)
         self.run("mkdir -p -- " + shlex.quote(str(root)))
         cmd = ["rsync", "-az", "--checksum", "--delete", "--secluded-args", "-e", self.shell]
         for name in sorted(excluded):

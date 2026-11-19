@@ -51,6 +51,36 @@ class TransportTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'escapes'):
                 client.sync(root, cwd)
 
+    def test_sync_directory_exclusions_and_links(self):
+        client = self.client()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(client, 'run') as remote, \
+             mock.patch.object(hosted_probe.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as sync:
+            outside = Path(tmp)
+            root = outside / 'workspace'
+            root.mkdir()
+            (root / 'Cargo.toml').touch()
+            (root / 'target').mkdir()
+            (root / 'target' / 'escape').symlink_to(outside)
+            (root / '.cache').symlink_to(outside)
+            (root / 'internal').symlink_to(root)
+            (root / 'broken').symlink_to('missing')
+            client.sync(root, root)
+            remote.reset_mock()
+            sync.reset_mock()
+            for name, target in [('target-file', outside), ('.git', outside / 'file'),
+                                 ('node_modules', outside / 'missing')]:
+                (outside / 'file').touch()
+                link = root / name
+                link.symlink_to(target)
+                with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'escapes'):
+                    client.sync(root, root)
+                link.unlink()
+            with mock.patch.object(hosted_probe.os, 'scandir', side_effect=PermissionError), \
+                 self.assertRaises(PermissionError):
+                client.sync(root, root)
+            remote.assert_not_called()
+            sync.assert_not_called()
+
     def test_sync_failure_is_fatal(self):
         client = self.client()
         with tempfile.TemporaryDirectory() as tmp:
