@@ -8,6 +8,10 @@ on:
       tag:
         description: "Tag to release (must exist)"
         required: true
+      recover_linux_x86:
+        description: "Publish only a missing Linux x86_64 artifact"
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -101,25 +105,18 @@ jobs:
     concurrency:
       group: ${{ matrix.zig && 'justrust-hosted-linux' || format('justrust-release-{0}-{1}', github.run_id, matrix.target) }}
       cancel-in-progress: false
+      queue: max
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            zig: true
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            zig: true
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            zig: false
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            zig: false
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            zig: false
+        include: >-
+          ${{ fromJSON(inputs.recover_linux_x86 &&
+            '[{"target":"x86_64-unknown-linux-musl","os":"ubuntu-latest","zig":true}]' ||
+            '[{"target":"x86_64-unknown-linux-musl","os":"ubuntu-latest","zig":true},
+              {"target":"aarch64-unknown-linux-musl","os":"ubuntu-latest","zig":true},
+              {"target":"x86_64-apple-darwin","os":"macos-latest","zig":false},
+              {"target":"aarch64-apple-darwin","os":"macos-latest","zig":false},
+              {"target":"x86_64-pc-windows-msvc","os":"windows-latest","zig":false}]') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -322,6 +319,7 @@ jobs:
             --target "${{ matrix.target }}" --dist "$publish_dir" --repo "$GITHUB_REPOSITORY"
 
   release:
+    if: ${{ !inputs.recover_linux_x86 }}
     # This is a completion report, never a publication gate for faster platforms.
     needs: [preflight, build]
     runs-on: ubuntu-latest
