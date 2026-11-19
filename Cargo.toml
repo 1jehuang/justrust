@@ -40,6 +40,11 @@ rcgen = { version = "0.14", default-features = false, features = ["crypto", "rin
 ssh-key = { version = "0.6", default-features = false, features = ["ed25519", "getrandom", "std"] }
 sha2 = "0.10"
 
+# Preserve file:line test backtraces while keeping hosted test artifacts smaller.
+# For local-variable inspection, use --config 'profile.test.package.justrust.debug=2'.
+[profile.test.package.justrust]
+debug = "line-tables-only"
+
 # Large artifact round trips otherwise spend their test time in debug DEFLATE.
 # Keep the client itself unoptimized for fast edit/build loops. Release is unchanged.
 [profile.dev.package.miniz_oxide]
