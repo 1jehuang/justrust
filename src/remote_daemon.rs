@@ -411,6 +411,8 @@ impl Root {
 
 /// Everything network operations touch. Held across them.
 struct Sync {
+    // One whole-root-set receipt, never persisted or shared across connections.
+    receipt: Option<(Vec<std::ffi::OsString>, String)>,
     backend: Backend,
     link: Option<Arc<Link>>,
     roots: BTreeMap<PathBuf, Root>,
@@ -434,12 +436,14 @@ impl Sync {
 
     /// A partial copy invalidates this workspace, not the shared SSH session.
     fn source_sync_failed(&mut self, root: &Path) {
+        self.receipt = None;
         if let Some(r) = self.roots.get_mut(root) {
             r.needs_full_sync = true;
         }
     }
 
     fn invalidate_sources(&mut self) {
+        self.receipt = None;
         self.roots.retain(|r, root| {
             if !r.is_dir() {
                 log(&format!("forgot {} (deleted)", r.display()));
@@ -686,6 +690,7 @@ fn daemon() -> Result<()> {
             ..Default::default()
         }),
         sync: SyncQueue::new(Sync {
+            receipt: None,
             backend,
             link: None,
             roots: BTreeMap::new(),
@@ -794,6 +799,7 @@ fn push_loop(d: &Daemon, rx: Receiver<PathBuf>) {
             if !r.is_dir() {
                 // Deleted (a removed worktree): forget it instead of
                 // dropping the link over a failed rsync.
+                st.receipt = None;
                 st.roots.remove(&r);
                 log(&format!("forgot {} (deleted)", r.display()));
                 continue;
@@ -917,6 +923,7 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
 }
 
 fn drop_link(d: &Daemon, st: &mut Sync) {
+    st.receipt = None;
     if let Some(l) = st.link.take() {
         l.peer.close();
         l.kill();
@@ -1296,6 +1303,7 @@ fn save_mirrors(d: &Daemon) {
         return;
     };
     if let Err(e) = barrier(d, &mut st, &link) {
+        st.receipt = None;
         log(&format!("mirror manifests not saved: {e:#}"));
         return;
     }
@@ -1318,6 +1326,7 @@ fn save_mirrors(d: &Daemon) {
 /// mirror when the machine confirms it, else mirror it in full. Returns
 /// files sent.
 fn mirror_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<usize> {
+    st.receipt = None;
     if !st.roots.contains_key(root) {
         let t = Instant::now();
         match remote_resume::take(st.backend.kind(), &link.mirror, root) {
@@ -1624,6 +1633,16 @@ fn push_scanned(
         let r = st.roots.get(root).context("unknown root")?;
         remote_sync::diff(&r.manifest, &new)
     };
+    if !diff.is_empty()
+        || diff.spelling_changed
+        || !st.roots[root]
+            .oversized
+            .iter()
+            .map(|p| p.as_os_str())
+            .eq(scan.oversized.iter().map(|p| p.as_os_str()))
+    {
+        st.receipt = None;
+    }
     let comparison = diff_started.elapsed();
     let compared = total.elapsed();
     let link = st.link.clone().context("not connected")?;
@@ -1820,6 +1839,9 @@ struct SyncAck {
 /// Both standalone and run-integrated barriers repair the same manifest.
 fn check_sync_failures(st: &mut Sync, ack: &SyncAck) -> Result<()> {
     let failed = &ack.failed;
+    if !failed.is_empty() || !ack.lost.is_empty() {
+        st.receipt = None;
+    }
     for root in &ack.lost {
         // Not what this daemon sent any more, and not known how: mirror it
         // again before anything builds on it.
@@ -1923,10 +1945,20 @@ fn oversized_note(st: &Sync, roots: &[PathBuf]) -> Result<String> {
 
 /// Bind a receipt to the same source manifests used for this submission.
 /// Reattachment does not rescan, remirror, or create a new invocation.
-fn source_receipt(st: &Sync, roots: &[PathBuf]) -> Result<String> {
+fn source_receipt(st: &mut Sync, roots: &[PathBuf]) -> Result<String> {
+    let roots = roots.iter().collect::<std::collections::BTreeSet<_>>();
+    // Path equality normalizes some spellings, but the receipt hashes raw bytes.
+    if let Some((key, value)) = &st.receipt
+        && key
+            .iter()
+            .map(|p| p.as_os_str())
+            .eq(roots.iter().map(|p| p.as_os_str()))
+    {
+        return Ok(value.clone());
+    }
     let mut hash = crate::depcache::H128::new();
     hash.field(b"hosted-session-manifest-v1");
-    for root in roots.iter().collect::<std::collections::BTreeSet<_>>() {
+    for &root in &roots {
         hash.field(root.as_os_str().as_encoded_bytes());
         let source = st
             .roots
@@ -1942,7 +1974,17 @@ fn source_receipt(st: &Sync, roots: &[PathBuf]) -> Result<String> {
             hash.field(path.as_os_str().as_encoded_bytes());
         }
     }
-    Ok(hash.hex())
+    let value = hash.hex();
+    if roots.len() <= 32 && roots.iter().all(|p| p.as_os_str().len() <= 4096) {
+        st.receipt = Some((
+            roots
+                .into_iter()
+                .map(|p| p.as_os_str().to_owned())
+                .collect(),
+            value.clone(),
+        ));
+    }
+    Ok(value)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2015,7 +2057,7 @@ fn run(
                 env.retain(|(key, _)| key != crate::remote_session::SOURCE_ID);
                 env.push((
                     crate::remote_session::SOURCE_ID.into(),
-                    source_receipt(&st, &roots)?,
+                    source_receipt(&mut st, &roots)?,
                 ));
             }
             let (barrier_tx, barrier_rx) = channel();
@@ -2114,6 +2156,7 @@ fn run(
         match res {
             Ok(v) => v,
             Err(e) => {
+                st.receipt = None;
                 // A broken pipe or lost session: start over next time.
                 if let Some(link) = &st.link {
                     let _ = link.send(&Msg::Cancel { id }, &[]);
@@ -2569,6 +2612,7 @@ mod tests {
         let d = Daemon {
             status_hint: None,
             sync: SyncQueue::new(Sync {
+                receipt: None,
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
                 roots: BTreeMap::new(),
@@ -2863,6 +2907,7 @@ mod tests {
             .collect();
         for count in [1, 20] {
             let mut sync = Sync {
+                receipt: None,
                 backend: Backend::Hosted,
                 link: None,
                 roots: (0..count)
@@ -2960,6 +3005,7 @@ mod tests {
         let d = Daemon {
             status_hint: None,
             sync: SyncQueue::new(Sync {
+                receipt: None,
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
                 roots: BTreeMap::from([(a.clone(), make_root(&a)), (b.clone(), make_root(&b))]),
@@ -3071,6 +3117,7 @@ mod tests {
         let d = Daemon {
             status_hint: None,
             sync: SyncQueue::new(Sync {
+                receipt: None,
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
                 roots: BTreeMap::from([(root.clone(), tracked)]),
@@ -3267,6 +3314,7 @@ mod tests {
         let d = Daemon {
             status_hint: None,
             sync: SyncQueue::new(Sync {
+                receipt: None,
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
                 roots: BTreeMap::from([(base.clone(), make_root()), (other.clone(), make_root())]),
@@ -3334,10 +3382,23 @@ mod tests {
             mark: Default::default(),
         };
         let mut sync = Sync {
+            receipt: None,
             backend: Backend::Hosted,
             link: None,
             roots: BTreeMap::from([(root.clone(), make_root()), (other.clone(), make_root())]),
         };
+        let both = [root.clone(), other.clone()];
+        let before = source_receipt(&mut sync, &both).unwrap();
+        // Independent SipHash-2-4 fixture for the existing length-prefixed v1 stream.
+        #[cfg(target_endian = "little")]
+        assert_eq!(before, "b021354f5cc84f2e61bbba7ade2452d8");
+        assert_eq!(
+            before,
+            source_receipt(&mut sync, &[other.clone(), root.clone(), other.clone()]).unwrap()
+        );
+        let other_only = source_receipt(&mut sync, std::slice::from_ref(&other)).unwrap();
+        assert_ne!(before, other_only);
+        assert_eq!(before, source_receipt(&mut sync, &both).unwrap());
         assert!(check_sync_failures(&mut sync, &SyncAck::default()).is_ok());
         assert_eq!(sync.roots[&root].manifest[&entry], stamp);
         assert!(
@@ -3353,6 +3414,12 @@ mod tests {
                 }
             )
             .is_err()
+        );
+        assert!(sync.receipt.is_none());
+        assert_ne!(before, source_receipt(&mut sync, &both).unwrap());
+        assert_eq!(
+            other_only,
+            source_receipt(&mut sync, std::slice::from_ref(&other)).unwrap()
         );
         assert_eq!(sync.roots[&root].manifest[&entry], UNKNOWN);
         assert_eq!(sync.roots[&root].manifest[Path::new("deleted.rs")], UNKNOWN);
@@ -3401,6 +3468,7 @@ mod tests {
             mark: Default::default(),
         };
         let mut sync = Sync {
+            receipt: None,
             backend: Backend::Hosted,
             link: None,
             roots: BTreeMap::from([

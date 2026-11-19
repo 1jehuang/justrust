@@ -432,6 +432,8 @@ fn target_filters_from_listing(root: &Path, listing: &[u8]) -> Vec<String> {
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Diff {
+    // Path comparison ignores some spelling differences that receipts hash verbatim.
+    pub spelling_changed: bool,
     pub changed: Vec<PathBuf>,
     pub deleted: Vec<PathBuf>,
 }
@@ -451,12 +453,18 @@ pub fn diff(old: &Manifest, new: &Manifest) -> Diff {
     // Both manifests are ordered. Visit each entry once instead of performing
     // a tree lookup for every path in both maps. Each output stays path-sorted.
     while let (Some((old_path, old_stamp)), Some((new_path, new_stamp))) = (old_entry, new_entry) {
-        match old_path.cmp(new_path) {
+        let raw_equal = old_path.as_os_str() == new_path.as_os_str();
+        match if raw_equal {
+            std::cmp::Ordering::Equal
+        } else {
+            old_path.cmp(new_path)
+        } {
             std::cmp::Ordering::Less => {
                 d.deleted.push(old_path.clone());
                 old_entry = old_iter.next();
             }
             std::cmp::Ordering::Equal => {
+                d.spelling_changed |= !raw_equal;
                 if old_stamp != new_stamp {
                     d.changed.push(new_path.clone());
                 }
@@ -1503,6 +1511,10 @@ mod tests {
     // Preserve the original lookup algorithm as an independent exact oracle.
     fn lookup_diff(old: &Manifest, new: &Manifest) -> Diff {
         Diff {
+            spelling_changed: new.keys().any(|p| {
+                old.get_key_value(p)
+                    .is_some_and(|(q, _)| q.as_os_str() != p.as_os_str())
+            }),
             changed: new
                 .iter()
                 .filter(|(path, stamp)| old.get(*path) != Some(*stamp))
@@ -1514,6 +1526,16 @@ mod tests {
                 .cloned()
                 .collect(),
         }
+    }
+
+    #[test]
+    fn spelling_only_change_invalidates_receipt_without_transferring_files() {
+        let old = Manifest::from([(PathBuf::from("src//lib.rs"), st(1))]);
+        let new = Manifest::from([(PathBuf::from("src/lib.rs"), st(1))]);
+        let result = diff(&old, &new);
+        assert!(result.is_empty());
+        assert!(result.spelling_changed);
+        assert_eq!(result, lookup_diff(&old, &new));
     }
 
     #[test]
