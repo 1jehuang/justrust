@@ -669,11 +669,16 @@ fn serve_selected_dir(
         // A short match table forgets much of a large previous executable.
         // Limit the denser encoder to measured same-file deltas. Two workers
         // bound its per-worker tables even on very wide hosted machines.
-        let dense = patch
-            && m.len() >= 256 * 1024 * 1024
+        let large = m.len() >= 256 << 20;
+        // The smaller-file measurements cover ELF executables. Other formats,
+        // anchors, and older clients keep their existing compression policy.
+        let medium_elf = patch && req.prediction_v1 && prediction::medium_elf(&snap, m.len());
+        let enough_memory = patch
+            && (large || medium_elf)
             && crate::procfs::meminfo().is_some_and(|mem| {
                 mem.available_mb > (m.len() / (1024 * 1024)).saturating_mul(2) + 1024
             });
+        let dense = large && enough_memory;
         let encode = |dense: bool| -> Result<bool> {
             let mut c = Command::new("zstd");
             c.args(["-q", "-f"]);
@@ -697,7 +702,7 @@ fn serve_selected_dir(
         };
         // Older zstd versions and memory-constrained hosts keep the existing
         // compatible encoder. No frame is emitted until compression succeeds.
-        let predicted = dense
+        let predicted = enough_memory
             && req.prediction_v1
             && m.len() <= prediction::MAX
             && prediction::compress(&sent, &snap, m.len(), &zst).is_ok();

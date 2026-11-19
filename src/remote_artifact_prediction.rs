@@ -11,6 +11,17 @@ const BLOCK: usize = 8192;
 const LITERAL: u32 = u32::MAX;
 pub(super) const MAX: u64 = 512 << 20;
 
+pub(super) fn medium_elf(path: &Path, size: u64) -> bool {
+    if !((16 << 20)..(256 << 20)).contains(&size) {
+        return false;
+    }
+    let mut magic = [0; 4];
+    File::open(path)
+        .and_then(|mut f| f.read_exact(&mut magic))
+        .is_ok()
+        && magic == *b"\x7fELF"
+}
+
 fn read_basis(path: &Path) -> Result<Vec<u8>> {
     let mut f = File::open(path)?;
     let metadata = f.metadata()?;

@@ -161,6 +161,21 @@ fn large_negotiated_prediction_reaches_verified_install() {
 }
 
 #[test]
+fn medium_prediction_checks_size_and_elf_magic() {
+    let f = Fixture::new("medium-format", b"\x7fELF");
+    for size in [16 << 20, (256 << 20) - 1] {
+        assert!(prediction::medium_elf(&f.saved, size));
+    }
+    for size in [(16 << 20) - 1, 256 << 20] {
+        assert!(!prediction::medium_elf(&f.saved, size));
+    }
+    for contents in [b"\x7fEL".as_slice(), b"!<ar", b"MZ\0\0"] {
+        std::fs::write(&f.saved, contents).unwrap();
+        assert!(!prediction::medium_elf(&f.saved, 16 << 20));
+    }
+}
+
+#[test]
 fn exclusive_binary_selection_is_conservative() {
     let args = |values: &[&str]| values.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     assert_eq!(
