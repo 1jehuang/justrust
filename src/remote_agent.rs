@@ -109,9 +109,8 @@ fn evict_now(roots: &crate::remote_evict::Shared) {
     if ev::Mode::from_env() == ev::Mode::On {
         ev::sweep_sent(false, &mut |line| eprintln!("justrust agent: {line}"));
     }
-    let Ok(registry) = roots.lock() else { return };
-    ev::collect(
-        &registry,
+    ev::collect_shared(
+        roots,
         &home,
         ev::Mode::from_env(),
         ev::DEFAULT_GRACE,

@@ -230,6 +230,8 @@ type Snapshot = (BTreeMap<PathBuf, RootState>, Vec<(PathBuf, Skip)>);
 #[derive(Default)]
 pub struct Registry {
     pub roots: BTreeMap<PathBuf, RootState>,
+    // A retry can authenticate a receipt even for an already-known root.
+    enrollment_version: u64,
     #[cfg(unix)]
     store: Option<durable::Store>,
     disabled: Option<String>,
@@ -250,6 +252,7 @@ impl Registry {
         }
         Ok(Self {
             roots,
+            enrollment_version: 0,
             store: Some(store),
             disabled: None,
         })
@@ -263,6 +266,7 @@ impl Registry {
     }
 
     pub fn register(&mut self, root: &Path) -> std::io::Result<()> {
+        self.enrollment_version = self.enrollment_version.wrapping_add(1);
         // Remember synchronization roots even if durable enrollment fails, so
         // a subsequent run cannot bypass the cross-agent lock/record checks.
         self.roots.entry(root.to_path_buf()).or_default();
@@ -569,7 +573,7 @@ impl Probe for System {
 
 /// One collection pass. Return allocated tree bytes, not physical bytes
 /// reclaimed: hardlinks and concurrent filesystem activity can differ.
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 pub fn collect(
     registry: &Registry,
     home: &Path,
@@ -578,7 +582,7 @@ pub fn collect(
     probe: &dyn Probe,
     log: &mut dyn FnMut(String),
 ) -> u64 {
-    collect_report(registry, home, mode, grace, probe, log).bytes
+    collect_with(|| Some(registry), home, mode, grace, probe, log).bytes
 }
 
 #[derive(Default)]
@@ -588,8 +592,24 @@ struct Collection {
 }
 
 #[cfg(unix)]
-fn collect_report(
-    registry: &Registry,
+pub fn collect_shared(
+    registry: &Shared,
+    home: &Path,
+    mode: Mode,
+    grace: Duration,
+    probe: &dyn Probe,
+    log: &mut dyn FnMut(String),
+) -> u64 {
+    // Only collectors serialize here. A second pass must observe the free
+    // space left by the first rather than deleting to the same stale budget.
+    static PASS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let Ok(_pass) = PASS.lock() else { return 0 };
+    collect_with(|| registry.lock().ok(), home, mode, grace, probe, log).bytes
+}
+
+#[cfg(unix)]
+fn collect_with<R: std::ops::Deref<Target = Registry>>(
+    acquire: impl Fn() -> Option<R>,
     home: &Path,
     mode: Mode,
     grace: Duration,
@@ -610,7 +630,15 @@ fn collect_report(
     if need == 0 {
         return Collection::default();
     }
-    let (roots, mut rejected) = match registry.snapshot() {
+    let unavailable = || Collection {
+        failed: true,
+        bytes: 0,
+    };
+    let Some(registry) = acquire() else {
+        return unavailable();
+    };
+    let enrolled = (registry.enrollment_version, registry.roots.len());
+    let (mut roots, mut rejected) = match registry.snapshot() {
         Ok(snapshot) => snapshot,
         Err(e) => {
             log(format!(
@@ -627,7 +655,24 @@ fn collect_report(
         roots.len(),
         grace.as_secs()
     ));
-    let (chosen, skipped) = plan(&roots, need, grace, probe);
+    drop(registry);
+    let (mut chosen, mut skipped) = plan(&roots, need, grace, probe);
+    let Some(registry) = acquire() else {
+        return unavailable();
+    };
+    // Enrollment is append-only. A new root can change orphan exclusions,
+    // so rebuild the plan under the original exclusion in that rare case.
+    // Other activity is checked afresh under each exclusive root lock.
+    if (registry.enrollment_version, registry.roots.len()) != enrolled {
+        (roots, rejected) = match registry.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                log(format!("evict: enrollment changed, snapshot failed: {e}"));
+                return unavailable();
+            }
+        };
+        (chosen, skipped) = plan(&roots, need, grace, probe);
+    }
     rejected.extend(skipped);
     for (root, why) in &rejected {
         log(format!("evict: skip {} ({why:?})", root.display()));
@@ -704,7 +749,7 @@ fn collect_report(
     let remaining = need.saturating_sub(freed);
     if remaining > 0 {
         freed = freed.saturating_add(outputs::collect(
-            registry,
+            &registry,
             &roots,
             remaining,
             mode == Mode::Dry,
@@ -819,8 +864,8 @@ pub fn command(apply: bool, prefix: &str) -> anyhow::Result<()> {
         );
         return Ok(());
     }
-    let result = collect_report(
-        &registry,
+    let result = collect_with(
+        || Some(&registry),
         &home,
         if apply { Mode::On } else { Mode::Dry },
         DEFAULT_GRACE,
@@ -1067,6 +1112,61 @@ mod tests {
         assert_eq!(names, ["old", "mid"]);
         assert_eq!(deficit(200 * GIB, 400 * GIB), 0, "plenty free: nothing");
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pressure_scan_allows_build_activity_and_preserves_target() {
+        struct Activity<'a> {
+            registry: &'a Shared,
+            root: &'a Path,
+            seen: std::cell::Cell<bool>,
+        }
+        impl Probe for Activity<'_> {
+            fn disk(&self, _: &Path) -> Option<(u64, u64)> {
+                Some((GIB, 484 * GIB))
+            }
+            fn now(&self) -> u64 {
+                1_000_000
+            }
+            fn in_use_by_other(&self, _: &Path) -> bool {
+                false
+            }
+            fn size(&self, _: &Path) -> u64 {
+                if !self.seen.replace(true) {
+                    let mut registry = self
+                        .registry
+                        .try_lock()
+                        .expect("planning must not stall builds");
+                    registry.begin(self.root).unwrap();
+                    registry.end(self.root, self.now()).unwrap();
+                }
+                500 * GIB
+            }
+        }
+        let base = scratch("concurrent-plan");
+        let root = mirrored(&base, "root");
+        let registry = Shared::default();
+        registry.lock().unwrap().touch(&root);
+        let activity = Activity {
+            registry: &registry,
+            root: &root,
+            seen: false.into(),
+        };
+        assert_eq!(
+            collect_shared(
+                &registry,
+                &base,
+                Mode::On,
+                DEFAULT_GRACE,
+                &activity,
+                &mut |_| {}
+            ),
+            0
+        );
+        assert!(activity.seen.get());
+        assert!(root.join("target/debug/big").exists());
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     // T6 dry run deletes nothing but reports exact paths and sizes.
