@@ -1261,7 +1261,7 @@ fn acquire_with_probe(args: &[OsString], probe: impl FnOnce(&Path) -> bool) -> O
     let root = target.join("justrust-slots");
     std::fs::create_dir_all(&root).ok()?;
     let can_seed = reflink_available(&root, probe, &mut std::io::stderr().lock());
-    let shared_idle = snapshot_guard(&shared_profile).is_some();
+    let shared_idle = !can_seed && snapshot_guard(&shared_profile).is_some();
 
     let cap = capacity();
     let me = session_key();
@@ -1350,56 +1350,55 @@ fn acquire_with_probe(args: &[OsString], probe: impl FnOnce(&Path) -> bool) -> O
     let mut refreshed_units = 0;
     let slot_profile = slot_dir.join(&profile);
     // Do not hold shared-directory locks across identical-request joining.
-    let shared_guard = snapshot_guard(&shared_profile);
+    let shared_guard = can_seed.then(|| snapshot_guard(&shared_profile)).flatten();
     // Never copy a profile while Cargo can mutate its artifacts. Native
     // fine-grained Cargo writers hold a shared build lock, so snapshot_guard
     // excludes them as well as older directory-locking Cargo versions.
-    let stamp = shared_stamp(&shared_profile);
-    if !can_seed || shared_guard.is_none() {
-        // The slot lease still provides isolation on ext4. Creating an empty
-        // target costs no copied bytes and never waits for the shared Cargo
-        // lock. Keep any existing warm slot artifacts, even if this mount has
-        // lost reflink support since they were built.
-        std::fs::create_dir_all(&slot_profile).ok()?;
-        meta.seeded = true;
-    } else if !meta.seeded || !has_units(&slot_profile) {
-        eprintln!(
-            "justrust: seeding build slot {n} from {} (reflink copy, once per slot)",
-            shared_profile.display()
-        );
-        let t = Instant::now();
-        let ok = seed(&shared_profile, &slot_profile);
-        seed_secs = t.elapsed().as_secs_f64();
-        if !ok {
-            eprintln!("justrust: seeding slot {n} failed, using the shared target dir");
-            return None;
-        }
-        meta.seeded = true;
-        meta.seed_secs = seed_secs;
-        meta.seeded_from = shared_profile.to_string_lossy().into_owned();
-        if shared_guard.is_some() {
+    let stamp = shared_guard.as_ref().map(|_| shared_stamp(&shared_profile));
+    if let Some(stamp) = stamp {
+        if !meta.seeded || !has_units(&slot_profile) {
+            eprintln!(
+                "justrust: seeding build slot {n} from {} (reflink copy, once per slot)",
+                shared_profile.display()
+            );
+            let t = Instant::now();
+            let ok = seed(&shared_profile, &slot_profile);
+            seed_secs = t.elapsed().as_secs_f64();
+            if !ok {
+                eprintln!("justrust: seeding slot {n} failed, using the shared target dir");
+                return None;
+            }
+            meta.seeded = true;
+            meta.seed_secs = seed_secs;
+            meta.seeded_from = shared_profile.to_string_lossy().into_owned();
             meta.shared_stamp = stamp;
-        }
-    } else if shared_guard.is_some()
-        && stamp > meta.shared_stamp
-        && std::env::var("JUSTRUST_SLOT_REFRESH").as_deref() != Ok("0")
-    {
-        let t = Instant::now();
-        match refresh(&shared_profile, &slot_profile) {
-            Some(r) => {
-                refresh_secs = t.elapsed().as_secs_f64();
-                refreshed_units = r.missing + r.newer;
-                meta.shared_stamp = stamp;
-                if refreshed_units > 0 {
-                    eprintln!(
-                        "justrust: slot {n}: copied {} new and {} rebuilt units ({} files) \
+        } else if stamp > meta.shared_stamp
+            && std::env::var("JUSTRUST_SLOT_REFRESH").as_deref() != Ok("0")
+        {
+            let t = Instant::now();
+            match refresh(&shared_profile, &slot_profile) {
+                Some(r) => {
+                    refresh_secs = t.elapsed().as_secs_f64();
+                    refreshed_units = r.missing + r.newer;
+                    meta.shared_stamp = stamp;
+                    if refreshed_units > 0 {
+                        eprintln!(
+                            "justrust: slot {n}: copied {} new and {} rebuilt units ({} files) \
                          from the shared target dir in {refresh_secs:.1}s",
-                        r.missing, r.newer, r.files
-                    );
+                            r.missing, r.newer, r.files
+                        );
+                    }
+                }
+                None => {
+                    eprintln!("justrust: slot {n}: refresh from the shared dir failed, skipped")
                 }
             }
-            None => eprintln!("justrust: slot {n}: refresh from the shared dir failed, skipped"),
         }
+    } else {
+        // The slot lease protects the private profile. Without a guarded source
+        // there is nothing to copy, but existing warm artifacts are still usable.
+        std::fs::create_dir_all(&slot_profile).ok()?;
+        meta.seeded = true;
     }
     drop(shared_guard);
     // A joined slot stays its owner's sticky slot.
