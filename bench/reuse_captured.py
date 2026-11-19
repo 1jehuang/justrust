@@ -111,6 +111,7 @@ def main():
     paths = [args.run / 'units.jsonl'] if args.run else args.runs.glob('*/units.jsonl')
     totals = {k: Counter() for k in ('counts', 'recorded_unit_cpu_seconds', 'recorded_ledger_seconds', 'estimated_gross_costs')}
     n = undated = 0
+    indexed_starts = None
     with args.output.open('w') as stream:
         for p in paths:
             if not p.is_file():
@@ -118,6 +119,15 @@ def main():
             summary = read_object(p.parent / 'summary.json')
             if cutoff is not None:
                 start = run_start(p.parent, summary)
+                if start is None and p.parent.parent.name == 'runs':
+                    # A standard archive can retain the history index after a
+                    # run's metadata is lost. Never consult the user's default
+                    # archive when inspecting a copied or standalone run.
+                    if indexed_starts is None:
+                        index = p.parent.parent.parent / 'index.jsonl'
+                        indexed_starts = {r['id']: r['start'] for r in records(index)
+                                          if isinstance(r.get('id'), str) and seconds(r.get('start'))}
+                    start = indexed_starts.get(p.parent.name)
                 if start is None:
                     undated += 1
                     continue

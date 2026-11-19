@@ -75,6 +75,19 @@ class ReuseEvidence(unittest.TestCase):
         subprocess.run(cmd + ['--run', str(undated)], check=True, capture_output=True)
         self.assertEqual(json.loads(out.read_text())['run'], undated.name)
 
+    def test_archive_index_recovers_start_by_exact_id(self):
+        runs = self.root / 'runs'
+        for rid in ('abc', 'abcd'):
+            (runs / rid).mkdir(parents=True)
+            (runs / rid / 'units.jsonl').touch()
+        (self.root / 'index.jsonl').write_text('broken\n{"id":"abcd","start":1}\n')
+        out = self.root / 'out'
+        result = subprocess.run([sys.executable, str(Path(__file__).with_name('reuse_captured.py')),
+                                 '--since', '1970-01-01T00:00:01Z', '--runs', str(runs),
+                                 '--output', str(out)], check=True, capture_output=True, text=True)
+        self.assertEqual(json.loads(out.read_text())['run'], 'abcd')
+        self.assertIn('Skipped 1 runs', result.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()
