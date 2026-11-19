@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Plan an owned-source toolchain candidate. Builds require explicit --execute."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -96,6 +97,17 @@ def make_plan(root, revision, output, optimize="none"):
     }
 
 
+def build_stages(commands, run):
+    """Overlap the pinned Cargo build with bootstrap, never with PGO training."""
+    compiler, cargo = commands[:-1], commands[-1]
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        cargo_result = pool.submit(run, cargo)
+        run(compiler[0])
+        cargo_result.result()
+    for command in compiler[1:]:
+        run(command)
+
+
 def execute(plan):
     root = Path(plan["source_root"])
     validate_source(root, plan["source_revision"])
@@ -120,11 +132,12 @@ def execute(plan):
         (snapshot / "toolchain/rustc/git-commit-info").write_text(plan["source_metadata"] + "\n")
         # Tells bootstrap to report that revision instead of a source content hash.
         (snapshot / "toolchain/rustc/justrust-release-archive").write_text(plan["source_revision"] + "\n")
-        for command in plan["commands"]:
+        def run(command):
             validate_snapshot_source(root, plan["source_revision"])
             env = dict(os.environ, **command["env"], CI="1", GIT_TERMINAL_PROMPT="0")
             subprocess.run(command["argv"], cwd=command["cwd"], env=env,
                            stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr, check=True)
+        build_stages(plan["commands"], run)
         validate_snapshot_source(root, plan["source_revision"])
         for artifact in (Path(plan["artifacts"]["compiler_sysroot"]) / "bin/rustc",
                          Path(plan["artifacts"]["jr_cargo"])):

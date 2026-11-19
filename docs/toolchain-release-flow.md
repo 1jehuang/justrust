@@ -64,7 +64,7 @@ Python 3.11+ with tarfile's `data` extraction filter, Git, Bash, the compiler bo
 prerequisites, and the installed pinned `nightly-2026-10-08` justrust toolchain
 are required. This is an expensive opt-in compiler build. No interactive input
 is supplied, and helper output goes to stderr so stdout remains machine JSON.
-The existing helpers run, in order:
+The first compiler bootstrap and the pinned Cargo helper start concurrently from the same immutable snapshot, with separate output directories. Both must finish successfully before PGO training, BOLT, or artifact acceptance. Previously released Cargo binaries are not substituted merely because the source trees match. The helpers are:
 
 1. `bash toolchain/rustc/build-jr.sh release`, with `JR_STAGE=1 JR_TOOLS=1`.
 2. `bash toolchain/cargo/build-jr.sh nightly-2026-10-08`, with

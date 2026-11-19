@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -40,6 +41,31 @@ class CandidateTests(unittest.TestCase):
 
     def plan(self):
         return candidate.make_plan(self.root, self.revision, self.output)
+
+    def test_bootstrap_overlaps_cargo_but_training_is_serial(self):
+        rendezvous = threading.Barrier(2, timeout=5)
+        finished = []
+
+        def run(name):
+            if name in ("bootstrap", "cargo"):
+                rendezvous.wait()
+            else:
+                self.assertEqual(set(finished[:2]), {"bootstrap", "cargo"})
+            finished.append(name)
+
+        candidate.build_stages(["bootstrap", "train", "optimize", "bolt", "cargo"], run)
+        self.assertEqual(finished[2:], ["train", "optimize", "bolt"])
+
+    def test_either_parallel_failure_blocks_training(self):
+        for failed in ("bootstrap", "cargo"):
+            seen = []
+            def run(stage):
+                seen.append(stage)
+                if stage == failed:
+                    raise ValueError(failed)
+            with self.assertRaisesRegex(ValueError, failed):
+                candidate.build_stages(["bootstrap", "train", "cargo"], run)
+            self.assertNotIn("train", seen)
 
     def test_plan_identity_and_no_side_effects(self):
         plan = self.plan()
