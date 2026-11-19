@@ -135,9 +135,29 @@ impl Watcher {
     /// Watch every directory in `dirs` not watched yet. Returns how many
     /// were added.
     pub fn watch_all<'a>(&self, dirs: impl IntoIterator<Item = &'a PathBuf>) -> usize {
-        dirs.into_iter()
-            .filter(|d| add(self.fd, &self.w, d))
-            .count()
+        // Build each chunk outside the lock: the caller's iterator can do
+        // arbitrary work. Only bounded map lookups run under the reader's lock.
+        const BATCH: usize = 16;
+        let mut dirs = dirs.into_iter();
+        // A new watcher (and the Windows fallback) has nothing to skip.
+        if self.w.lock().unwrap().by_path.is_empty() {
+            return dirs.filter(|d| add(self.fd, &self.w, d)).count();
+        }
+        let mut batch = Vec::with_capacity(BATCH);
+        let mut added = 0;
+        loop {
+            batch.extend(dirs.by_ref().take(BATCH));
+            if batch.is_empty() {
+                return added;
+            }
+            {
+                let g = self.w.lock().unwrap();
+                batch.retain(|d| !g.by_path.contains_key(*d));
+            }
+            // Recheck misses via add: an event may have registered the path
+            // in the meantime. A failed registration stays eligible next time.
+            added += batch.drain(..).filter(|d| add(self.fd, &self.w, d)).count();
+        }
     }
 
     #[cfg(test)]
@@ -534,6 +554,26 @@ mod tests {
         );
         drop(rx);
         assert!(!changed.send(&tx, PathBuf::from("root/c")));
+    }
+
+    #[test]
+    fn refresh_retries_failed_watches_across_chunks() {
+        let d = std::env::temp_dir().join(format!("jr-watch-refresh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let dirs: Vec<_> = (0..39).map(|i| d.join(i.to_string())).collect();
+        for p in &dirs[..34] {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let w = Watcher::new(tx).unwrap();
+        assert_eq!(w.watch_all(dirs.iter().chain(&dirs)), 34);
+        assert_eq!(w.watch_all(&dirs), 0);
+        for p in &dirs[34..] {
+            std::fs::create_dir(p).unwrap();
+        }
+        assert_eq!(w.watch_all(&dirs), 5);
+        assert_eq!(w.watch_all(&dirs), 0);
+        std::fs::remove_dir_all(d).unwrap();
     }
 
     #[test]
