@@ -79,10 +79,35 @@ pub fn is_evidence(r: &Row) -> bool {
     r.query.starts_with('<') || r.outcome.starts_with("loaded_")
 }
 
-/// A unit with a ledger that loaded nothing from incremental state: a first
-/// build in this target dir, a new compiler or flags, or lost state.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SessionState {
+    Cold,
+    Warm,
+    Unknown,
+}
+
+fn session_state(rows: &[Row]) -> SessionState {
+    let mut cold = false;
+    let mut warm = false;
+    for r in rows.iter().filter(|r| r.count > 0) {
+        match (r.query.as_str(), r.outcome.as_str()) {
+            ("<session>", "cold_no_prior" | "cold_out_of_date" | "cold_io_error") => cold = true,
+            ("<session>", "warm") | ("<cgu>", "loaded") => warm = true,
+            (_, "loaded") if !is_evidence(r) => warm = true,
+            _ => {}
+        }
+    }
+    match (cold, warm) {
+        (true, false) => SessionState::Cold,
+        (false, true) => SessionState::Warm,
+        _ => SessionState::Unknown,
+    }
+}
+
+/// Only a positive compiler session marker establishes a cold start.
+#[cfg(test)]
 pub fn is_cold(rows: &[Row]) -> bool {
-    !rows.is_empty() && !rows.iter().any(|r| r.outcome == "loaded" && r.count > 0)
+    session_state(rows) == SessionState::Cold
 }
 
 /// Totals for one unit, or many.
@@ -99,9 +124,10 @@ pub struct Totals {
     pub necessary_count: u64,
     pub cgu_reused: u64,
     pub cgu_recompiled: u64,
-    /// Units that started without usable incremental state (nothing loaded),
-    /// and their summed query seconds. Their "necessary" work is a cold start,
-    /// not a change.
+    pub warm_units: u64,
+    /// Nonempty ledgers without conclusive session evidence.
+    pub unknown_units: u64,
+    /// Units explicitly reported cold, and their summed recomputed query seconds.
     pub cold_units: u64,
     pub cold_secs: f64,
 }
@@ -143,14 +169,25 @@ impl Totals {
     /// Add one unit, noting whether it started cold.
     pub fn add_unit(&mut self, rows: &[Row]) {
         self.add(rows);
-        if is_cold(rows) {
-            self.cold_units += 1;
-            self.cold_secs += rows
-                .iter()
-                .filter(|r| !is_evidence(r) && class(&r.outcome) != Class::Reused)
-                .map(|r| r.secs)
-                .sum::<f64>();
+        match session_state(rows) {
+            SessionState::Warm => self.warm_units += 1,
+            SessionState::Unknown => self.unknown_units += u64::from(!rows.is_empty()),
+            SessionState::Cold => {
+                self.cold_units += 1;
+                self.cold_secs += rows
+                    .iter()
+                    .filter(|r| !is_evidence(r) && class(&r.outcome) != Class::Reused)
+                    .map(|r| r.secs)
+                    .sum::<f64>();
+            }
         }
+    }
+
+    fn session_counts(&self) -> String {
+        format!(
+            "incremental starts (ledger units): {} cold, {} warm, {} unknown",
+            self.cold_units, self.warm_units, self.unknown_units
+        )
     }
 
     pub fn recomputed_secs(&self) -> f64 {
@@ -181,13 +218,14 @@ pub fn render_run(units: &[crate::shim::Unit]) -> String {
     }
     let mut all = Totals::default();
     for u in &with {
-        all.add(&u.reuse);
+        all.add_unit(&u.reuse);
     }
     let _ = writeln!(
         o,
         "\nIncremental reuse ({} units with a reuse ledger, query seconds summed over threads)",
         with.len()
     );
+    let _ = writeln!(o, "  {}", all.session_counts());
     let _ = writeln!(
         o,
         "  reused {:.2}s to load {} results; recomputed {:.2}s: avoidable {:.2}s ({:.0}%), opaque {:.2}s, necessary {:.2}s",
@@ -433,13 +471,7 @@ pub fn command(days: f64, here: bool, top: usize, json: bool) -> Result<()> {
         "    opaque {:.0}s (unhashed or eval-always), necessary {:.0}s (changed or new values)",
         all.opaque_secs, all.necessary_secs
     );
-    if all.cold_units > 0 {
-        let _ = writeln!(
-            o,
-            "    cold starts: {} of {} units loaded no incremental state ({:.0}s of the recomputed time); fix these before per-query reuse",
-            all.cold_units, ledger_units, all.cold_secs
-        );
-    }
+    let _ = writeln!(o, "    {}", all.session_counts());
     let _ = writeln!(
         o,
         "    codegen units: {} reused, {} recompiled",
@@ -517,7 +549,9 @@ mod tests {
 
     #[test]
     fn cold_units_are_counted_separately() {
-        let cold = parse("new\ttypeck\t2.0\t50\neval_always\tanalysis\t0.5\t1\nnew\t<cgu>\t0\t4\n");
+        let cold = parse(
+            "cold_no_prior\t<session>\t0\t1\nnew\ttypeck\t2.0\t50\neval_always\tanalysis\t0.5\t1\nnew\t<cgu>\t0\t4\n",
+        );
         let warm = parse("loaded\ttypeck\t0.1\t49\nchanged\ttypeck\t0.2\t1\n");
         assert!(is_cold(&cold) && !is_cold(&warm) && !is_cold(&[]));
         let mut t = Totals::default();
@@ -526,6 +560,34 @@ mod tests {
         assert_eq!(t.cold_units, 1);
         assert!((t.cold_secs - 2.5).abs() < 1e-9);
         assert!((t.necessary_secs - 2.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn starts_require_positive_evidence() {
+        let mut totals = Totals::default();
+        totals.add_unit(&[]);
+        for (outcome, query, count, expected) in [
+            ("warm", "<session>", 1, SessionState::Warm),
+            ("loaded", "<cgu>", 2, SessionState::Warm),
+            ("cold_io_error", "<session>", 1, SessionState::Cold),
+            ("cold_out_of_date", "<session>", 1, SessionState::Cold),
+            ("cold_future", "<session>", 1, SessionState::Unknown),
+            ("cold_no_prior", "<session>", 0, SessionState::Unknown),
+            ("loaded", "typeck", 0, SessionState::Unknown),
+            ("new", "typeck", 5, SessionState::Unknown),
+            ("present", "<sibling_state>", 1, SessionState::Unknown),
+        ] {
+            let rows = parse(&format!("{outcome}\t{query}\t0\t{count}"));
+            assert!(
+                session_state(&rows) == expected,
+                "{outcome} {query} {count}"
+            );
+            totals.add_unit(&rows);
+        }
+        assert_eq!(
+            totals.session_counts(),
+            "incremental starts (ledger units): 2 cold, 2 warm, 5 unknown"
+        );
     }
 
     #[test]
