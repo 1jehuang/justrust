@@ -7,6 +7,9 @@ use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Summary {
+    /// Version of the initiating client, not the hosted recorder binary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_version: Option<String>,
     pub id: String,
     pub args: Vec<String>,
     pub subcommand: String,
@@ -405,6 +408,10 @@ pub struct Diagnostics {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct IndexEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolchain_version: Option<String>,
     pub id: String,
     pub start: f64,
     pub cwd: String,
@@ -487,7 +494,19 @@ pub fn units_from_wrapper_procs(procs: &[ProcRecord]) -> Vec<Unit> {
                 // The workspace wrapper only runs for workspace members.
                 local: true,
                 emit,
-                opt_level: "0".into(),
+                // A sampled, possibly truncated command is not evidence of -C opt-level=0.
+                opt_level: args
+                    .iter()
+                    .rev()
+                    .find_map(|arg| {
+                        arg.strip_prefix("-Copt-level=")
+                            .or_else(|| arg.strip_prefix("opt-level="))
+                            .or_else(|| arg.strip_prefix("--codegen=opt-level="))
+                            .or_else(|| (*arg == "-O").then_some("3"))
+                    })
+                    .filter(|level| valid_unit_opt_level(level))
+                    .unwrap_or("")
+                    .into(),
                 start: p.first_seen,
                 end: p.last_seen,
                 wall,
@@ -1199,6 +1218,7 @@ pub fn build(
         .collect::<Vec<_>>();
 
     Summary {
+        client_version: Some(crate::update::VERSION.into()),
         id: meta.id.clone(),
         args: meta.args.clone(),
         subcommand: meta.subcommand.clone(),
@@ -1280,6 +1300,20 @@ fn is_compile_error(t: &str) -> bool {
         || t.starts_with("error: Recipe"))
 }
 
+pub(crate) fn returned_opt_level(dir: &Path) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Level<'a> {
+        opt_level: &'a str,
+    }
+    let bytes = std::fs::read(dir.join("units.jsonl")).ok()?;
+    observed_opt_level(bytes.split(|&c| c == b'\n').filter_map(|line| {
+        serde_json::from_slice::<Level<'_>>(line)
+            .ok()
+            .map(|u| u.opt_level)
+    }))
+    .map(str::to_owned)
+}
+
 pub(crate) fn valid_unit_opt_level(level: &str) -> bool {
     matches!(level, "0" | "1" | "2" | "3" | "s" | "z")
 }
@@ -1292,6 +1326,22 @@ fn observed_opt_level<'a>(levels: impl Iterator<Item = &'a str>) -> Option<&'a s
     } else {
         first
     })
+}
+
+#[cfg(test)]
+#[test]
+fn operation_history_preserves_identity_without_substituting_current_defaults() {
+    let run = Summary {
+        client_version: Some("0.1.0-alpha.47".into()),
+        toolchain: Some("jr-ac20de5e7921".into()),
+        ..Default::default()
+    };
+    let index = run.index_entry();
+    assert_eq!(index.client_version.as_deref(), Some("0.1.0-alpha.47"));
+    assert_eq!(index.toolchain_version.as_deref(), Some("0.1.0"));
+    assert_eq!(recorded_toolchain_label("jr-unknown"), "jr-unknown");
+    let legacy = Summary::default().index_entry();
+    assert!(legacy.toolchain_version.is_none() && legacy.client_version.is_none());
 }
 
 #[cfg(test)]
@@ -1354,6 +1404,20 @@ impl UnitStats {
     }
 }
 
+/// Immutable published IDs from the toolchain release ledger. Keep unknown pins
+/// intact so a newer service or dashboard can resolve them without guessing.
+pub(crate) fn recorded_toolchain_label(pin: &str) -> String {
+    match pin {
+        "jr-ac20de5e7921" => "0.1.0",
+        "jr-3e0f2d191587ef643cf715108034403ebd526178" => "0.1.2",
+        "jr-7f9af92aeb1f3588a3dc40546bddb9262dffd0a9" => "0.1.3",
+        "jr-07e0df7e7efa971e7c02701e3eb8ff9a63b3e9fa" => "0.1.4",
+        "jr-4f130cf20aa90de08dc3bcd56da7fd9771dc762f" => "0.1.5",
+        other => other,
+    }
+    .to_owned()
+}
+
 impl Summary {
     /// Class and short reason of a failed run, as reported to run history.
     pub fn failure_wire(&self) -> Option<crate::failure::Wire> {
@@ -1365,6 +1429,8 @@ impl Summary {
 
     pub fn index_entry(&self) -> IndexEntry {
         IndexEntry {
+            client_version: self.client_version.clone(),
+            toolchain_version: self.toolchain.as_deref().map(recorded_toolchain_label),
             id: self.id.clone(),
             start: self.start,
             cwd: self.cwd.clone(),

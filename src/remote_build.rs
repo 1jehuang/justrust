@@ -2138,6 +2138,11 @@ fn record_remote(
     // The machine recorded the run as local to itself. Persist the client's
     // provenance in every representation, not just the live-run metadata.
     s.place = Some(place.into());
+    s.client_version = Some(crate::update::VERSION.into());
+    // Older hosted recorders return raw unit observations without the aggregate.
+    if s.units.opt_level.is_none() && !run_files.is_empty() {
+        s.units.opt_level = crate::summary::returned_opt_level(&dir);
+    }
     let meta_path = dir.join("meta.json");
     if let Some(mut m) = std::fs::read(&meta_path)
         .ok()
