@@ -768,21 +768,32 @@ else
 fi
 uname -sm
 v() { [ -n "$2" ] && printf 'v\t%s\t%s\n' "$1" "$2"; }
+a=$(ls -t "$HOME"/.justrust/remote/session-executables/*/justrust 2>/dev/null | head -1)
 if [ -n "$JR_TC" ]; then
-  tc="$HOME/.justrust/toolchains/$JR_TC"
-  if [ -x "$tc/bin/rustc" ]; then
-    v toolchain "$JR_TC"
+  root="${JUSTRUST_HOME:-$HOME/.justrust}/toolchains"
+  layout=$([ -n "$a" ] && "$a" __probe-toolchain "$JR_TC" 2>/dev/null)
+  tc=
+  case "$layout" in
+    managed/staged|managed|staged) tc="$root/$layout/$JR_TC";;
+    legacy) tc="$root/$JR_TC";;
+    public) tc="/opt/justrust-public-toolchains/$JR_TC";;
+    absent) v toolchain "$JR_TC (not installed)";;
+    *) # Older or non-hosted agents cannot resolve managed state. Preserve
+       # useful legacy version information without claiming it was selected.
+       if [ -x "$root/$JR_TC/bin/rustc" ]; then
+         layout='legacy installed, selection unverified'; tc="$root/$JR_TC"
+       else v toolchain "$JR_TC (selection unverified: no resolver on agent)"; fi;;
+  esac
+  if [ -n "$tc" ]; then
+    v toolchain "$JR_TC ($layout)"
     v rustc "$("$tc/bin/rustc" -V 2>/dev/null)"
     v llvm "$("$tc/bin/rustc" -vV 2>/dev/null | sed -n 's/^LLVM version: //p')"
     v cargo "$("$tc/bin/cargo" -V 2>/dev/null)"
     [ -x "$tc/bin/jr-cargo" ] && v jr-cargo "$("$tc/bin/jr-cargo" -V 2>/dev/null | sed -n 's/.*(jr-cargo \([0-9a-f]*\)).*/\1/p')"
-  else
-    v toolchain "$JR_TC (not installed)"
   fi
 fi
 w=$(ls -d "$HOME"/.justrust/toolchains/linkers/wild-*/wild 2>/dev/null | tail -1)
 [ -n "$w" ] && v wild "$("$w" --version 2>/dev/null | head -1)"
-a=$(ls -t "$HOME"/.justrust/remote/session-executables/*/justrust 2>/dev/null | head -1)
 if [ -n "$a" ]; then
   v agent "$("$a" --version 2>/dev/null | head -1)"
   case $(uname -s) in Darwin) mt=$(stat -f %m "$a");; *) mt=$(stat -Lc %Y "$a");; esac

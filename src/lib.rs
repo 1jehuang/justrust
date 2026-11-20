@@ -969,6 +969,15 @@ pub fn main() -> anyhow::Result<()> {
     if shim::invoked_as_shim(&argv0) {
         shim::main();
     }
+    // Read-only status RPC, before telemetry, updates or account polling. Use
+    // the build resolver, never a command or executable path from a receipt.
+    if name != "cargo"
+        && std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__probe-toolchain"))
+    {
+        let spec = toolchain::Spec::parse(&std::env::args().nth(2).unwrap_or_default())?;
+        println!("{}", toolchain::probe_location(&spec)?);
+        return Ok(());
+    }
     // Native is explicit and bypasses Cargo-specific defaults, account polling
     // and update notices. Preserve argv, particularly the test runner separator.
     if name != "cargo"

@@ -414,6 +414,25 @@ pub(crate) fn available_for_build(spec: &Spec) -> Option<Toolchain> {
         .or_else(|| shared::for_build(spec))
 }
 
+/// Return only a fixed layout label, not a shell path.
+pub(crate) fn probe_location(spec: &Spec) -> Result<&'static str> {
+    let root = root()?;
+    let Some(tc) = available_for_build(spec) else {
+        return Ok("absent");
+    };
+    for (prefix, label) in [
+        ("managed/staged", "managed/staged"),
+        ("managed", "managed"),
+        ("staged", "staged"),
+        ("", "legacy"),
+    ] {
+        if tc.dir == root.join(prefix).join(spec.id()) {
+            return Ok(label);
+        }
+    }
+    Ok("public")
+}
+
 /// For a recorded run: the pinned toolchain, installed if needed. `None`
 /// means use the system toolchain (no pin, or it failed and was reported).
 pub fn for_build() -> Option<Toolchain> {

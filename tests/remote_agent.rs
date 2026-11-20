@@ -53,6 +53,53 @@ fn spawn_after_copy(command: &mut Command) -> std::io::Result<Child> {
 }
 
 #[test]
+fn probe_resolves_registered_bundle_without_executing_receipt_paths() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    let home = scratch("probe-layout");
+    let root = home.join("toolchains");
+    let id = "jr-deadbee";
+    let probe = || {
+        let out = Command::new(env!("CARGO_BIN_EXE_justrust"))
+            .env("JUSTRUST_HOME", &home)
+            .args(["__probe-toolchain", id])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    assert_eq!(probe(), "absent");
+    let managed = root.join("managed/staged").join(id);
+    fs::create_dir_all(managed.join("bin")).unwrap();
+    let marker = serde_json::json!({"id":id,"manifest_date":"","manifest_sha256":"","rustc_version":"","components":[],"installed_at":0,"install_secs":0});
+    fs::write(managed.join("justrust-toolchain.json"), marker.to_string()).unwrap();
+    for bin in ["cargo", "rustc"] {
+        let path = managed.join("bin").join(bin);
+        fs::write(&path, b"not executable code").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let register = |path: &Path| {
+        fs::write(
+            root.join(".slots.json"),
+            serde_json::json!({"version":1,"active":{"id":id,"path":path},"last_good":id})
+                .to_string(),
+        )
+        .unwrap()
+    };
+    register(&managed);
+    assert_eq!(probe(), "managed/staged");
+    register(Path::new("/not/a/compiler"));
+    assert_eq!(probe(), "absent");
+    fs::create_dir_all(root.join("staged")).unwrap();
+    let staged = root.join("staged").join(id);
+    fs::rename(managed, &staged).unwrap();
+    assert_eq!(probe(), "staged");
+    fs::rename(staged, root.join(id)).unwrap();
+    assert_eq!(probe(), "legacy");
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn copied_executable_waits_for_writer_to_close() {
     let dir = scratch("copy-writer");
     let path = dir.join("justrust");
