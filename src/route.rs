@@ -581,7 +581,7 @@ fn aws_recently_alive(now: f64, last_remote_run: Option<f64>) -> bool {
     if let Some(t) = last_remote_run {
         until = until.max(t + idle_secs);
     }
-    if let Some(p) = std::fs::read(dir.join("probe.json"))
+    if let Some(p) = std::fs::read(dir.join("probe-v2.json"))
         .ok()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
         && p["ok"].as_bool() == Some(true)

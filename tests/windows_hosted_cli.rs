@@ -186,7 +186,7 @@ fn hosted_status_does_not_project_linux_probe_or_daemon_into_windows() {
         "at": at, "ok": true, "ready": true, "spot": false,
         "dest": "ubuntu@linux.example", "platform": "Linux x86_64"
     });
-    std::fs::write(remote.join("probe-hosted.json"), probe.to_string()).unwrap();
+    std::fs::write(remote.join("probe-hosted-v2.json"), probe.to_string()).unwrap();
     let listener = UnixListener::bind(remote.join("daemon.sock")).unwrap();
     // Exactly one ping is expected: Linux. Windows must not query this daemon.
     let daemon = std::thread::spawn(move || {

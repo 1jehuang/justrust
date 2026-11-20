@@ -644,7 +644,7 @@ mod tests {
     fn cache_writes_and_logs_do_not_feedback_into_status() {
         for name in [
             b"status.json".as_slice(),
-            b"probe-hosted.json",
+            b"probe-hosted-v2.json",
             b"daemon.log",
             b"roots.json",
             b"events.log",

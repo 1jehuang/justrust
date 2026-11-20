@@ -425,8 +425,8 @@ Local is always the safe answer.
   id_ed25519      AWS: ssh key for the machine
   known_hosts     AWS: its host key
   ip              AWS: last known IP of the running machine (cleared on down)
-  probe.json      AWS: last ssh probe, reused by status for 30 s
-  probe-hosted.json  hosted: last probe of the hosted machine
+  probe-v2.json      AWS: last ssh probe, reused by status for 30 s
+  probe-hosted-v2.json  hosted: last probe of the hosted machine
   hosted/         hosted: id_ed25519 (fresh per connect), known_hosts (pinned),
                   state.json {address, user, port, ready_at}, status.json (30 s)
   price.json      AWS: hourly price, cached for an hour

@@ -9,7 +9,7 @@
 //! ~/.justrust/remote/
 //!   state.json      instance id, region, type, ssh key, hourly price
 //!   id_ed25519      ssh key used only for the remote machine
-//!   probe.json      last ssh probe (load, cores, toolchain), cached for status
+//!   probe-v2.json      last ssh probe (load, cores, toolchain), cached for status
 //! ```
 
 use anyhow::{Context, Result, bail};
@@ -501,9 +501,9 @@ fn first_line(s: &str) -> String {
         .collect()
 }
 
-const AWS_PROBE: &str = "probe.json";
-const HOSTED_PROBE: &str = "probe-hosted.json";
-const SSH_PROBE: &str = "probe-ssh.json";
+const AWS_PROBE: &str = "probe-v2.json";
+const HOSTED_PROBE: &str = "probe-hosted-v2.json";
+const SSH_PROBE: &str = "probe-ssh-v2.json";
 
 /// This host as `uname -sm` prints it (`Linux x86_64`, `Darwin arm64`).
 pub fn local_platform() -> String {
@@ -1693,7 +1693,7 @@ pub fn up(opts: UpOptions) -> Result<()> {
         created: chrono::Utc::now().to_rfc3339(),
     };
     save_state(&st)?;
-    let _ = std::fs::remove_file(dir()?.join("probe.json"));
+    let _ = std::fs::remove_file(dir()?.join("probe-v2.json"));
     let _ = std::fs::remove_file(dir()?.join("known_hosts"));
     println!("created {id}");
     wait_running(&st)
@@ -1855,7 +1855,7 @@ pub fn destroy() -> Result<()> {
         ],
     )?;
     std::fs::remove_file(dir()?.join("state.json"))?;
-    let _ = std::fs::remove_file(dir()?.join("probe.json"));
+    let _ = std::fs::remove_file(dir()?.join("probe-v2.json"));
     let _ = std::fs::remove_file(dir()?.join("ip"));
     if note.is_none() {
         crate::remote_daemon::stop();
