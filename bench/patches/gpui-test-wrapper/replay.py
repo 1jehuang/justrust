@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from replay_products import finish_successful_trial
 
 GPUI = "be875c56343dcbd45127a9805781a9e128057dd7"
 DESKTOP = "7d38fb72a0beadbca366da1104c915689cc0fd8e"
@@ -22,6 +23,7 @@ def git(repo, *args):
 if not __debug__:
     sys.exit("correctness checks require Python without -O")
 p = argparse.ArgumentParser(description=__doc__)
+p.add_argument('--keep-products', action='store_true', help='Keep generated compiler products after a successful replay')
 p.add_argument(
     "--work-dir",
     required=True,
@@ -235,3 +237,4 @@ assert logs[0] == logs[1]
 msgs = [json.loads(s) for s in logs[0].splitlines()]
 assert sum(m["level"] == "error" and bool(m["spans"]) for m in msgs) == 5
 print("five negative diagnostics byte-identical, including spans and notes")
+finish_successful_trial(r, keep=a.keep_products)

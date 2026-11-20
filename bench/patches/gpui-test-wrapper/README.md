@@ -33,6 +33,8 @@ The harness copies immutable Git blobs into a **new** scratch directory, applies
 
 A pass requires exact output token kind, value, punctuation spacing, delimiter, token span, and group open/close spans for 724 held functions and three edge cases. Five invalid invocations must produce identical error tokens; five actual failing attribute invocations must produce byte-identical rustc diagnostic JSON with the expected error count. These checks cover this corpus, not all possible Rust inputs.
 
+Successful trials retain the sources, logs and diagnostics, but drop the generated replay library and its three metadata outputs. Use `--keep-products` for manual reruns with those binaries. Failed trials retain everything for diagnosis. No previous trial is pruned.
+
 ## Account-private raw evidence
 
 `bench/gpui-wrapper-724-20261120-db8c48b4e737` contains the raw four-round replay, negative diagnostics and the earlier matched whole-edit pairs from a **different** Desktop snapshot (817 GPUI tests). No raw logs or private project sources are checked in. Retrieve the archive and verify it before opening:
