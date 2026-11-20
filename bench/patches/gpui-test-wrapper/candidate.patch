@@ -1,0 +1,102 @@
+diff --git b/crates/gpui_macros/src/fast/mod.rs b/crates/gpui_macros/src/fast/mod.rs
+new file mode 100644
+index 0000000..7ef5571
+--- /dev/null
++++ b/crates/gpui_macros/src/fast/mod.rs
+@@ -0,0 +1 @@
++pub(super) mod test_wrapper;
+diff --git b/crates/gpui_macros/src/fast/test_wrapper.rs b/crates/gpui_macros/src/fast/test_wrapper.rs
+new file mode 100644
+index 0000000..97717db
+--- /dev/null
++++ b/crates/gpui_macros/src/fast/test_wrapper.rs
+@@ -0,0 +1,12 @@
++use proc_macro2::{Ident, TokenStream};
++use quote::quote;
++use syn::{AttrStyle, Attribute};
++
++pub(crate) fn emit(name: Ident, attrs: Vec<Attribute>, body: TokenStream) -> TokenStream {
++    // ItemFn stores both styles together, but prints inner attributes inside the braces.
++    let outer = attrs.iter().filter(|a| matches!(a.style, AttrStyle::Outer));
++    let inner = attrs
++        .iter()
++        .filter(|a| matches!(a.style, AttrStyle::Inner(_)));
++    quote! { #[test] #(#outer)* fn #name() { #(#inner)* #body } }
++}
+diff --git a/crates/gpui_macros/src/gpui_macros.rs b/crates/gpui_macros/src/gpui_macros.rs
+index 50305af..217d098 100644
+--- a/crates/gpui_macros/src/gpui_macros.rs
++++ b/crates/gpui_macros/src/gpui_macros.rs
+@@ -7,6 +7,7 @@ mod derive_visual_context;
+ mod property_test;
+ mod register_action;
+ mod styles;
++mod fast;
+ mod test;
+ 
+ #[cfg(any(feature = "inspector", debug_assertions))]
+diff --git a/crates/gpui_macros/src/test.rs b/crates/gpui_macros/src/test.rs
+index 087e017..ecfc32b 100644
+--- a/crates/gpui_macros/src/test.rs
++++ b/crates/gpui_macros/src/test.rs
+@@ -5,7 +5,6 @@ use std::mem;
+ use syn::{
+     self, Expr, ExprLit, FnArg, ItemFn, Lit, Meta, MetaList, PathSegment, Token, Type,
+     parse::{Parse, ParseStream},
+-    parse_quote,
+     punctuated::Punctuated,
+     spanned::Spanned,
+ };
+@@ -129,7 +128,7 @@ fn generate_test_function(
+     let on_failure_fn_name = &args.on_failure_fn_name;
+     let seeds = quote!( #(#seeds),* );
+ 
+-    let mut outer_fn: ItemFn = if inner_fn.sig.asyncness.is_some() {
++    let body = if inner_fn.sig.asyncness.is_some() {
+         // Pass to the test function the number of app contexts that it needs,
+         // based on its parameter list.
+         let mut cx_vars = proc_macro2::TokenStream::new();
+@@ -182,9 +181,7 @@ fn generate_test_function(
+             return Err(error_with_message("invalid function signature", arg));
+         }
+ 
+-        parse_quote! {
+-            #[test]
+-            fn #outer_fn_name() {
++        quote! {
+                 #inner_fn
+ 
+                 gpui::run_test(
+@@ -206,7 +203,6 @@ fn generate_test_function(
+                     },
+                     #on_failure_fn_name
+                 );
+-            }
+         }
+     } else {
+         // Pass to the test function the number of app contexts that it needs,
+@@ -275,9 +271,7 @@ fn generate_test_function(
+             return Err(error_with_message("invalid function signature", arg));
+         }
+ 
+-        parse_quote! {
+-            #[test]
+-            fn #outer_fn_name() {
++        quote! {
+                 #inner_fn
+ 
+                 gpui::run_test(
+@@ -297,12 +291,9 @@ fn generate_test_function(
+                     },
+                     #on_failure_fn_name,
+                 );
+-            }
+         }
+     };
+-    outer_fn.attrs.extend(inner_fn_attributes);
+-
+-    Ok(TokenStream::from(quote!(#outer_fn)))
++    Ok(crate::fast::test_wrapper::emit(outer_fn_name, inner_fn_attributes, body).into())
+ }
+ 
+ fn parse_usize_from_expr(expr: &Expr) -> Result<usize, syn::Error> {
