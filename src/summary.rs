@@ -327,6 +327,12 @@ pub struct TestStats {
 }
 
 impl TestStats {
+    /// Filtering further would leave no executed test. Its elapsed time is
+    /// still reported, but is not evidence of avoidable wait.
+    pub(crate) fn ran_only_one(&self) -> bool {
+        self.passed + self.failed == 1
+    }
+
     pub(crate) fn has_results(&self) -> bool {
         !self.binaries.is_empty()
             || self.passed > 0

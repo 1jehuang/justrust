@@ -497,6 +497,7 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
         .iter()
         .max_by(|a, b| a.wall.total_cmp(&b.wall))
         && b.wall >= 3.0
+        && !s.tests.ran_only_one()
     {
         let slowest = s.tests.slowest.first().filter(|t| t.secs >= 1.0);
         let msg = match slowest {
@@ -933,6 +934,19 @@ mod tests {
             ..Default::default()
         });
         s
+    }
+
+    #[test]
+    fn single_test_elapsed_is_not_filterable_waste() {
+        let mut s = desktop_ui_test_run(&["test", "--lib", "idle_probe", "--", "--ignored"]);
+        s.tests.filtered_out = 146;
+        s.tests.binaries[0].passed = 0;
+        s.tests.binaries[0].failed = 1;
+        s.tests.failed = 1;
+        assert!(!analyze(&s).iter().any(|f| f.kind == "slow_tests"));
+        s.tests.binaries[0].passed = 1;
+        s.tests.passed = 1;
+        assert!(analyze(&s).iter().any(|f| f.kind == "slow_tests"));
     }
 
     #[test]

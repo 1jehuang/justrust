@@ -45,7 +45,7 @@ pub fn for_run(s: &Summary) -> Vec<Hint> {
     let root = workspace(s);
     // Only a run that paid a candidate cost itself can get a hint: quick runs
     // skip the history read (about 40 ms) entirely.
-    let candidate = s.tests.slowest.iter().any(|t| t.secs >= 2.0)
+    let candidate = (!s.tests.ran_only_one() && s.tests.slowest.iter().any(|t| t.secs >= 2.0))
         || s.top_units.iter().any(|u| u.local && u.wall >= 10.0);
     if root.is_empty() || !candidate {
         return Vec::new();
@@ -133,7 +133,7 @@ pub fn analyze(s: &Summary, history: &[Summary]) -> Vec<Hint> {
     }
     let mut seen = std::collections::HashSet::new();
     for t in &s.tests.slowest {
-        if t.secs < 2.0 || !seen.insert(t.name.as_str()) {
+        if s.tests.ran_only_one() || t.secs < 2.0 || !seen.insert(t.name.as_str()) {
             continue;
         }
         let Some(e) = tests.get(t.name.as_str()) else {
@@ -266,13 +266,17 @@ mod tests {
         let hist: Vec<_> = (0..4)
             .map(|i| run(&i.to_string(), &[("big_oracle", 40.0)], &[]))
             .collect();
-        let now = run("now", &[("big_oracle", 41.0), ("tiny", 0.5)], &[]);
+        let mut now = run("now", &[("big_oracle", 41.0), ("tiny", 0.5)], &[]);
+        now.tests.passed = 2;
         let h = analyze(&now, &hist);
         assert_eq!(h.len(), 1);
         assert_eq!(h[0].runs, 5);
         assert!((h[0].total_secs - 201.0).abs() < 1e-9);
         assert!(h[0].message.contains("--skip big_oracle"));
         assert!(h[0].message.contains("--test oracle`"));
+        now.tests.slowest.pop();
+        now.tests.passed = 1;
+        assert!(analyze(&now, &hist).is_empty());
     }
 
     #[test]
