@@ -95,7 +95,12 @@ fn home_with_socket_bytes(fixture: &Fixture, length: usize, non_utf8: bool) -> P
     let name_length = length - prefix.as_os_str().as_bytes().len() + 1;
     let mut name = vec![b'a'; name_length];
     if non_utf8 {
-        name[0] = 0xff;
+        if cfg!(target_os = "macos") {
+            // APFS rejects malformed UTF-8. Exercise byte vs character length instead.
+            name[..2].copy_from_slice("é".as_bytes());
+        } else {
+            name[0] = 0xff;
+        }
     }
     let home = fixture.root.join(std::ffi::OsString::from_vec(name));
     fs::create_dir(&home).unwrap();

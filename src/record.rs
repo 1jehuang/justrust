@@ -1919,6 +1919,7 @@ mod tests {
         use std::ffi::OsStr;
         use std::path::Path;
 
+        let private = std::env::temp_dir().join("private");
         let compiler = Path::new("/candidate/bin/rustc");
         let shim = Path::new("/production/rustc-shim");
         let select = |directory, toolchain| {
@@ -1928,10 +1929,10 @@ mod tests {
         assert_eq!(select(None, Some("jr-release")).unwrap(), shim);
         assert!(select(Some(OsStr::new("")), Some("jr-candidate")).is_err());
         assert!(select(Some(OsStr::new("relative")), Some("jr-candidate")).is_err());
-        assert!(select(Some(OsStr::new("/private")), None).is_err());
-        assert!(select(Some(OsStr::new("/private")), Some("nightly-2026-10-08")).is_err());
+        assert!(select(Some(private.as_os_str()), None).is_err());
+        assert!(select(Some(private.as_os_str()), Some("nightly-2026-10-08")).is_err());
         assert_eq!(
-            select(Some(OsStr::new("/private")), Some("jr-candidate")).unwrap(),
+            select(Some(private.as_os_str()), Some("jr-candidate")).unwrap(),
             compiler
         );
     }
@@ -1939,6 +1940,9 @@ mod tests {
     fn explicit_resident_components_do_not_impersonate_an_installed_pin() {
         use std::ffi::OsStr;
         use std::path::Path;
+        let private = std::env::temp_dir().join("private");
+        let rustc = private.join("rustc");
+        let cargo = private.join("cargo");
         let pair = |selection: Option<&str>, compiler: Option<&str>, cargo: Option<&str>| {
             super::explicit_resident_candidates(
                 selection.map(OsStr::new),
@@ -1946,38 +1950,18 @@ mod tests {
                 cargo.map(OsStr::new),
             )
         };
-        assert!(pair(
-            Some("system"),
-            Some("/candidate/rustc"),
-            Some("/candidate/cargo")
-        ));
-        assert!(!pair(
-            None,
-            Some("/candidate/rustc"),
-            Some("/candidate/cargo")
-        ));
-        assert!(!pair(
-            Some("jr-release"),
-            Some("/candidate/rustc"),
-            Some("/candidate/cargo")
-        ));
-        assert!(!pair(Some("system"), None, Some("/candidate/cargo")));
-        assert!(!pair(Some("system"), Some("/candidate/rustc"), None));
-        assert!(!pair(
-            Some("system"),
-            Some("rustc"),
-            Some("/candidate/cargo")
-        ));
-        assert!(!pair(
-            Some("system"),
-            Some("/candidate/rustc"),
-            Some("cargo")
-        ));
+        assert!(pair(Some("system"), rustc.to_str(), cargo.to_str()));
+        assert!(!pair(None, rustc.to_str(), cargo.to_str()));
+        assert!(!pair(Some("jr-release"), rustc.to_str(), cargo.to_str()));
+        assert!(!pair(Some("system"), None, cargo.to_str()));
+        assert!(!pair(Some("system"), rustc.to_str(), None));
+        assert!(!pair(Some("system"), Some("rustc"), cargo.to_str()));
+        assert!(!pair(Some("system"), rustc.to_str(), Some("cargo")));
         let compiler = Path::new("/candidate/rustc");
         let shim = Path::new("/installed/shim");
         assert_eq!(
             super::resident_recording_compiler(
-                Some(OsStr::new("/private")),
+                Some(private.as_os_str()),
                 None,
                 true,
                 compiler,
@@ -1988,7 +1972,7 @@ mod tests {
         );
         assert!(
             super::resident_recording_compiler(
-                Some(OsStr::new("/private")),
+                Some(private.as_os_str()),
                 Some("nightly"),
                 true,
                 compiler,

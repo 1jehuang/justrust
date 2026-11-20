@@ -1012,12 +1012,19 @@ mod tests {
         .map(OsString::from)
         .collect();
         share_slot_incremental(&mut a);
-        assert_eq!(a[1], "incremental=/t/debug/incremental");
+        let expected: PathBuf = PathBuf::from("/t/debug/incremental").components().collect();
+        assert_eq!(
+            a[1],
+            OsString::from(format!("incremental={}", expected.display()))
+        );
         let mut b = vec![OsString::from(
             "-Cincremental=/t/justrust-slots/1/debug/incremental",
         )];
         share_slot_incremental(&mut b);
-        assert_eq!(b[0], "-Cincremental=/t/debug/incremental");
+        assert_eq!(
+            b[0],
+            OsString::from(format!("-Cincremental={}", expected.display()))
+        );
     }
 
     #[test]

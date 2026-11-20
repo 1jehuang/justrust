@@ -141,6 +141,7 @@ fn write(root: &Path, state: &State) -> Result<()> {
     file.write_all(&serde_json::to_vec_pretty(state)?)?;
     file.sync_all()?;
     std::fs::rename(path, root.join(".slots.json"))?;
+    #[cfg(unix)]
     File::open(root)?.sync_all()?;
     Ok(())
 }
@@ -348,6 +349,7 @@ fn delete_unused(root: &Path, slot: &Slot) -> Result<bool> {
                 bail!("managed compiler identity changed");
             }
             std::fs::remove_dir_all(&slot.path)?;
+            #[cfg(unix)]
             File::open(slot.path.parent().context("missing parent")?)?.sync_all()?;
         }
         Ok(true)
