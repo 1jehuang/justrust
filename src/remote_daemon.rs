@@ -409,8 +409,46 @@ impl Root {
     }
 }
 
+/// Capacity failures survive individual requests, not daemon restarts. The
+/// receiver may be repaired or replaced, so never turn one into a permanent ban.
+#[derive(Default)]
+struct InstallRetry(Option<(String, Instant, String)>);
+
+impl InstallRetry {
+    fn run<T>(
+        &mut self,
+        dest: &str,
+        now: impl Fn() -> Instant,
+        install: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        if let Some((failed, until, diagnostic)) = &self.0
+            && failed == dest
+            && let Some(left) = until.checked_duration_since(now())
+            && !left.is_zero()
+        {
+            bail!(
+                "remote executable installation paused for {}s on {dest}; free disk space or quota on the build machine: {diagnostic}",
+                left.as_secs() + u64::from(left.subsec_nanos() != 0)
+            );
+        }
+        self.0 = None;
+        let result = install();
+        if let Err(err) = &result
+            && err.is::<remote_sync::InstallDiskFull>()
+        {
+            self.0 = Some((
+                dest.to_owned(),
+                now() + Duration::from_secs(60),
+                format!("{err:#}"),
+            ));
+        }
+        result
+    }
+}
+
 /// Everything network operations touch. Held across them.
 struct Sync {
+    install_retry: InstallRetry,
     // One whole-root-set receipt, never persisted or shared across connections.
     receipt: Option<(Vec<std::ffi::OsString>, String)>,
     backend: Backend,
@@ -690,6 +728,7 @@ fn daemon() -> Result<()> {
             ..Default::default()
         }),
         sync: SyncQueue::new(Sync {
+            install_retry: Default::default(),
             receipt: None,
             backend,
             link: None,
@@ -1050,11 +1089,15 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
         bail!("remote machine is not running");
     }
     let target = st.backend.ensure_ready()?;
-    crate::remote_build::ensure_remote_justrust(&target)?;
+    st.install_retry.run(&target.dest, Instant::now, || {
+        crate::remote_build::ensure_remote_justrust(&target)
+    })?;
     let prefix = resolve_remote_prefix(&st.backend, &target)?;
     save_active_prefix(&prefix);
     let mut command = if st.backend == Backend::Hosted && crate::remote_session::enabled() {
-        crate::remote_session::command(&target, &prefix)?
+        st.install_retry.run(&target.dest, Instant::now, || {
+            crate::remote_session::command(&target, &prefix)
+        })?
     } else {
         let agent_cmd = if prefix.is_empty() {
             "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; exec ~/.cargo/bin/justrust __agent".to_string()
@@ -2345,6 +2388,56 @@ fn peer_sync_loop(d: &Daemon) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn executable_install_disk_pressure_bounds_retries_and_preserves_stderr() {
+        // Exercise the actual kernel ENOSPC without consuming any real disk.
+        let full = || {
+            remote_sync::executable_step(
+                Command::new("sh")
+                    .args(["-c", "LC_ALL=C; export LC_ALL; printf x | cat > /dev/full"]),
+                "rsync executable upload",
+            )
+            .context("copying justrust to the remote machine failed")
+        };
+        let clock = Instant::now();
+        let mut state = InstallRetry::default();
+        let mut attempts = 0;
+        for second in 0..38 {
+            let err = state
+                .run(
+                    "a",
+                    || clock + Duration::from_secs(second),
+                    || {
+                        attempts += 1;
+                        full()
+                    },
+                )
+                .unwrap_err();
+            let diagnostic = format!("{err:#}");
+            assert!(
+                diagnostic.contains("No space left on device"),
+                "{diagnostic}"
+            );
+            assert!(diagnostic.contains("rsync executable upload"));
+            assert!(diagnostic.contains("copying justrust"));
+        }
+        assert_eq!(attempts, 1);
+        // Expiration, a new machine, and non-capacity errors must not pin failures.
+        state
+            .run("a", || clock + Duration::from_secs(60), || Ok(()))
+            .unwrap();
+        state.run("a", || clock, full).unwrap_err();
+        state
+            .run(
+                "b",
+                || clock,
+                || -> Result<()> { anyhow::bail!("broken pipe") },
+            )
+            .unwrap_err();
+        state.run("b", || clock, || Ok(())).unwrap();
+    }
+
     #[test]
     fn mirror_observation_requires_both_preparation_and_scan() {
         let temp = std::env::temp_dir().join(format!("jr-prepare-observe-{}", std::process::id()));
@@ -2702,6 +2795,7 @@ mod tests {
         let d = Daemon {
             status_hint: None,
             sync: SyncQueue::new(Sync {
+                install_retry: Default::default(),
                 receipt: None,
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
@@ -2997,6 +3091,7 @@ mod tests {
             .collect();
         for count in [1, 20] {
             let mut sync = Sync {
+                install_retry: Default::default(),
                 receipt: None,
                 backend: Backend::Hosted,
                 link: None,
@@ -3095,6 +3190,7 @@ mod tests {
         let d = Daemon {
             status_hint: None,
             sync: SyncQueue::new(Sync {
+                install_retry: Default::default(),
                 receipt: None,
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
@@ -3207,6 +3303,7 @@ mod tests {
         let d = Daemon {
             status_hint: None,
             sync: SyncQueue::new(Sync {
+                install_retry: Default::default(),
                 receipt: None,
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
@@ -3404,6 +3501,7 @@ mod tests {
         let d = Daemon {
             status_hint: None,
             sync: SyncQueue::new(Sync {
+                install_retry: Default::default(),
                 receipt: None,
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
@@ -3472,6 +3570,7 @@ mod tests {
             mark: Default::default(),
         };
         let mut sync = Sync {
+            install_retry: Default::default(),
             receipt: None,
             backend: Backend::Hosted,
             link: None,
@@ -3558,6 +3657,7 @@ mod tests {
             mark: Default::default(),
         };
         let mut sync = Sync {
+            install_retry: Default::default(),
             receipt: None,
             backend: Backend::Hosted,
             link: None,

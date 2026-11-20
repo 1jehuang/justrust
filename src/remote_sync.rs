@@ -72,18 +72,45 @@ pub(crate) fn rsync_destination(target: &Target, remote: &str) -> String {
 pub(crate) fn upload_file(target: &Target, source: &Path, remote: &str) -> Result<()> {
     let mut command = Command::new("rsync");
     configure_rsync(&mut command, target);
-    let status = command
+    command
         .arg("--copy-links")
         .arg(source)
         .arg(rsync_destination(target, remote))
-        .stdin(Stdio::null())
-        .status()
-        .context("rsync executable upload (is it installed?)")?;
-    anyhow::ensure!(
-        status.success(),
-        "rsync executable upload failed ({status})"
-    );
-    Ok(())
+        .stdin(Stdio::null());
+    executable_step(&mut command, "rsync executable upload")
+}
+
+#[derive(Debug)]
+pub(crate) struct InstallDiskFull;
+impl std::fmt::Display for InstallDiskFull {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("remote executable install ran out of disk space or quota")
+    }
+}
+impl std::error::Error for InstallDiskFull {}
+
+/// Preserve the receiver diagnostic, not just rsync's generic I/O exit code.
+pub(crate) fn executable_step(command: &mut Command, stage: &str) -> Result<()> {
+    executable_output(command, stage).map(drop)
+}
+
+pub(crate) fn executable_output(
+    command: &mut Command,
+    stage: &str,
+) -> Result<std::process::Output> {
+    let output = command.output().with_context(|| stage.to_owned())?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.status.success() {
+        if !stderr.is_empty() {
+            eprint!("{stderr}");
+        }
+        return Ok(output);
+    }
+    let err = anyhow::anyhow!("{stage} failed ({}): {}", output.status, stderr.trim_end());
+    if stderr.contains("No space left on device") || stderr.contains("Disk quota exceeded") {
+        return Err(err.context(InstallDiskFull));
+    }
+    Err(err)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

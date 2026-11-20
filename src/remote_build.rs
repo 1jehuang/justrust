@@ -675,15 +675,13 @@ pub(crate) fn ensure_session_executable(target: &Target) -> Result<PinnedSession
     );
     let exe = crate::procfs::running_executable_path()?;
     let digest = crate::toolchain::sha256(&exe)?;
-    let result = target
-        .command()
-        .arg(session_executable_prepare_script(&digest))
-        .stdin(Stdio::null())
-        .output()?;
-    anyhow::ensure!(
-        result.status.success(),
-        "private hosted session executable preparation failed"
-    );
+    let result = crate::remote_sync::executable_output(
+        target
+            .command()
+            .arg(session_executable_prepare_script(&digest))
+            .stdin(Stdio::null()),
+        "private hosted session executable preparation",
+    )?;
     let output = std::str::from_utf8(&result.stdout).context("invalid executable receipt")?;
     let fields: Vec<_> = output.lines().collect();
     anyhow::ensure!(
@@ -697,24 +695,19 @@ pub(crate) fn ensure_session_executable(target: &Target) -> Result<PinnedSession
     pin.validate()?;
     if fields[0] == "UPLOAD" {
         let publish = session_executable_publish_script(&pin, fields[2])?;
-        if crate::remote_sync::upload_file(target, &exe, fields[2]).is_err() {
+        if let Err(error) = crate::remote_sync::upload_file(target, &exe, fields[2]) {
             // Only our random private temporary receipt may be removed.
             let _ = target
                 .command()
                 .arg(format!("rm -f -- {}", shell_quote(fields[2])))
                 .stdin(Stdio::null())
                 .status();
-            bail!("uploading exact hosted session executable failed");
+            return Err(error.context("uploading exact hosted session executable failed"));
         }
-        anyhow::ensure!(
-            target
-                .command()
-                .arg(publish)
-                .stdin(Stdio::null())
-                .status()?
-                .success(),
-            "publishing verified hosted session executable failed"
-        );
+        crate::remote_sync::executable_step(
+            target.command().arg(publish).stdin(Stdio::null()),
+            "publishing verified hosted session executable",
+        )?;
     }
     Ok(pin)
 }
@@ -905,23 +898,19 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
     } else if remote_arch == local_arch {
         let exe = crate::procfs::running_executable_path()?;
         let tmp = ".cargo/bin/.justrust.upload";
-        let ok = t
-            .command()
-            .arg("mkdir -p ~/.cargo/bin")
-            .stdin(Stdio::null())
-            .status()?
-            .success()
-            && crate::remote_sync::upload_file(t, &exe, tmp).is_ok()
-            && t.command()
+        crate::remote_sync::executable_step(
+            t.command()
+                .arg("mkdir -p ~/.cargo/bin")
+                .stdin(Stdio::null()),
+            "preparing remote executable directory",
+        )?;
+        crate::remote_sync::upload_file(t, &exe, tmp)
+            .context("copying justrust to the remote machine failed")?;
+        crate::remote_sync::executable_step(t.command()
                 .arg(format!(
                     "chmod +x ~/{tmp} && (command -v codesign >/dev/null 2>&1 && codesign -s - -f ~/{tmp} 2>/dev/null || true) && mv ~/{tmp} ~/.cargo/bin/justrust"
                 ))
-                .stdin(Stdio::null())
-                .status()?
-                .success();
-        if !ok {
-            bail!("copying justrust to the remote machine failed");
-        }
+                .stdin(Stdio::null()), "installing uploaded remote executable")?;
     } else if remote_arch != local_arch && fetch_cross_release_on_machine(t, &remote_arch) {
         crate::remote::log_event(&format!(
             "justrust {} fetched its {remote_arch} release on {} in {:.1}s",
