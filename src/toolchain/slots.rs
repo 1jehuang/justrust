@@ -542,6 +542,27 @@ mod tests {
             })
             .unwrap();
         }
+        #[cfg(not(unix))]
+        fn assert_deletion_refused(&self, command: Command) {
+            let receipt = self.0.join(".slots.json");
+            let before = std::fs::read(&receipt).unwrap();
+            let error = self.run(command).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "cleanup requires inheritable usage leases on this platform"
+            );
+            assert_eq!(std::fs::read(receipt).unwrap(), before);
+            for id in ["jr-aaaaaaa", "jr-bbbbbbb"] {
+                assert!(
+                    self.0
+                        .join("managed/staged")
+                        .join(id)
+                        .join(super::super::MARKER)
+                        .is_file()
+                );
+            }
+        }
+        #[cfg(unix)]
         fn cleanup_until_drained(&self) {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             loop {
@@ -624,20 +645,30 @@ mod tests {
         lease.lock_shared().unwrap();
         f.validate();
         assert!(reject_retired(&f.0, "jr-aaaaaaa").is_err());
-        f.run(Command::Cleanup).unwrap();
-        assert!(f.0.join("managed/staged/jr-aaaaaaa").exists());
-        drop(lease);
-        f.cleanup_until_drained();
-        assert!(!f.0.join("managed/staged/jr-aaaaaaa").exists());
-        assert!(f.0.join("managed/staged/jr-bbbbbbb").exists());
-        assert!(unrelated.exists());
-        assert!(reject_retired(&f.0, "jr-aaaaaaa").is_ok());
-        f.run(Command::Cleanup).unwrap();
-        f.run(Command::Begin {
-            next: "jr-ddddddd".into(),
-        })
-        .unwrap();
-        assert_eq!(read(&f.0).unwrap().unwrap().last_good, "jr-bbbbbbb");
+        #[cfg(not(unix))]
+        {
+            f.assert_deletion_refused(Command::Cleanup);
+            drop(lease);
+            f.assert_deletion_refused(Command::Cleanup);
+            assert!(unrelated.is_dir());
+        }
+        #[cfg(unix)]
+        {
+            f.run(Command::Cleanup).unwrap();
+            assert!(f.0.join("managed/staged/jr-aaaaaaa").exists());
+            drop(lease);
+            f.cleanup_until_drained();
+            assert!(!f.0.join("managed/staged/jr-aaaaaaa").exists());
+            assert!(f.0.join("managed/staged/jr-bbbbbbb").exists());
+            assert!(unrelated.exists());
+            assert!(reject_retired(&f.0, "jr-aaaaaaa").is_ok());
+            f.run(Command::Cleanup).unwrap();
+            f.run(Command::Begin {
+                next: "jr-ddddddd".into(),
+            })
+            .unwrap();
+            assert_eq!(read(&f.0).unwrap().unwrap().last_good, "jr-bbbbbbb");
+        }
     }
 
     #[test]
@@ -665,33 +696,45 @@ mod tests {
         f.begin();
         let held = open_lock(&usage_path(&f.0, "jr-bbbbbbb")).unwrap();
         held.lock_shared().unwrap();
-        f.run(Command::Discard {
-            failed: "jr-bbbbbbb".into(),
-        })
-        .unwrap();
-        assert_eq!(read(&f.0).unwrap().unwrap().active.id, "jr-bbbbbbb");
-        assert!(
+        #[cfg(not(unix))]
+        {
+            let discard = || Command::Discard {
+                failed: "jr-bbbbbbb".into(),
+            };
+            f.assert_deletion_refused(discard());
+            drop(held);
+            f.assert_deletion_refused(discard());
+        }
+        #[cfg(unix)]
+        {
             f.run(Command::Discard {
-                failed: "jr-aaaaaaa".into()
+                failed: "jr-bbbbbbb".into(),
             })
-            .is_err()
-        );
-        drop(held);
-        f.run(Command::Discard {
-            failed: "jr-bbbbbbb".into(),
-        })
-        .unwrap();
-        assert!(!f.0.join("managed/staged/jr-bbbbbbb").exists());
-        assert!(f.0.join("managed/staged/jr-aaaaaaa").exists());
-        let state = read(&f.0).unwrap().unwrap();
-        assert_eq!(state.discarded.as_deref(), Some("jr-bbbbbbb"));
-        assert_eq!(response(Some(&state), "ok")["discarded"], "jr-bbbbbbb");
-        f.run(Command::Begin {
-            next: "jr-ccccccc".into(),
-        })
-        .unwrap();
-        assert_eq!(read(&f.0).unwrap().unwrap().last_good, "jr-aaaaaaa");
-        assert!(read(&f.0).unwrap().unwrap().discarded.is_none());
+            .unwrap();
+            assert_eq!(read(&f.0).unwrap().unwrap().active.id, "jr-bbbbbbb");
+            assert!(
+                f.run(Command::Discard {
+                    failed: "jr-aaaaaaa".into()
+                })
+                .is_err()
+            );
+            drop(held);
+            f.run(Command::Discard {
+                failed: "jr-bbbbbbb".into(),
+            })
+            .unwrap();
+            assert!(!f.0.join("managed/staged/jr-bbbbbbb").exists());
+            assert!(f.0.join("managed/staged/jr-aaaaaaa").exists());
+            let state = read(&f.0).unwrap().unwrap();
+            assert_eq!(state.discarded.as_deref(), Some("jr-bbbbbbb"));
+            assert_eq!(response(Some(&state), "ok")["discarded"], "jr-bbbbbbb");
+            f.run(Command::Begin {
+                next: "jr-ccccccc".into(),
+            })
+            .unwrap();
+            assert_eq!(read(&f.0).unwrap().unwrap().last_good, "jr-aaaaaaa");
+            assert!(read(&f.0).unwrap().unwrap().discarded.is_none());
+        }
     }
 
     #[test]
@@ -708,9 +751,14 @@ mod tests {
         std::fs::write(legacy.dir.join("keep"), b"unleased legacy compiler").unwrap();
         assert!(lease_at(&f.0, &legacy).unwrap().is_none());
         f.validate();
-        f.run(Command::Cleanup).unwrap();
+        #[cfg(not(unix))]
+        f.assert_deletion_refused(Command::Cleanup);
+        #[cfg(unix)]
+        {
+            f.run(Command::Cleanup).unwrap();
+            assert!(!f.0.join("managed/staged/jr-aaaaaaa").exists());
+        }
         assert!(legacy.dir.join("keep").exists());
-        assert!(!f.0.join("managed/staged/jr-aaaaaaa").exists());
         // A legacy prefix can never be adopted by modifying the manager receipt.
         let mut state = read(&f.0).unwrap().unwrap();
         state.active.path = legacy.dir;
@@ -805,12 +853,20 @@ mod tests {
         let lease = lease_at(&f.0, &tc).unwrap();
         drop(selection);
         f.validate();
+        #[cfg(not(unix))]
+        f.assert_deletion_refused(Command::Cleanup);
+        #[cfg(unix)]
         f.run(Command::Cleanup).unwrap();
         assert!(tc.dir.exists());
         assert!(lease_at(&f.0, &tc).is_err());
         drop(lease);
-        f.cleanup_until_drained();
-        assert!(!tc.dir.exists());
+        #[cfg(not(unix))]
+        f.assert_deletion_refused(Command::Cleanup);
+        #[cfg(unix)]
+        {
+            f.cleanup_until_drained();
+            assert!(!tc.dir.exists());
+        }
     }
 
     #[cfg(unix)]
