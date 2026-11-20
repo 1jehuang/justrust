@@ -1,0 +1,15 @@
+# Opt-in held `jcode_base` CGU comparison
+
+`python3 bench/reuse-cgu-library.py ~/jcode` is read-only: resolve the pinned Git blobs and print the baseline, body-edit and downstream probe SHA-256s. The working tree and its dirty files are never inputs. The held source is `27d2a732bb1f9ac852507f27d0611b20876fd7fd`. The one-line edit changes a public config function's returned TOML comment without changing its public signature or parsed configuration. The `menubar_config` integration test checks both its exact marker state and actual parsing after edits and reverts. This compiles the **ordinary library**, not just the library test harness.
+
+On an **already reserved, idle hosted bench machine**, make the pinned jcode Git object available at `/path/to/jcode`, pre-install two distinct immutable `jr-<40 hex>` packages, and supply the operator's actual disk floor and conservative per-arm peak growth bounds. Control and candidate must be built identically except for the non-test rlib placement change. Do not substitute a higher CGU cap or the existing test-only compiler. Example launcher (paths after `--` are on the host):
+
+```sh
+bench/on-remote.sh start --name held-lib-cgu -- python3 bench/reuse-cgu-library.py /path/to/jcode --run \
+  --compiler-pair "$CONTROL_ID" "$CANDIDATE_ID" --scratch /path/to/hosted/scratch \
+  --floor-gib "$PAIR_FLOOR_GIB" --arm-gib "$PER_ARM_BOUND_GIB" --output bench/results/held-lib-cgu-PAIR.json
+```
+
+The gate reuses `reuse-cgu-native-gate.py`'s six alternating warm pairs, four cold-unit pairs, same-input and foreground acceptance criteria, plus `synth/pair_space.py` admission. Only target-package outputs inside new temporary targets are cleaned. Cold here means **fresh library and consumer with primed dependencies**, not a whole cold workspace. Warm rebuilt units must match across arms: the non-test library, the downstream test executable and, if rebuilt, the OpenRouter runtime (a real reverse dev-dependency of the held package). Foreground wall includes build, relink and test execution. Post-metadata time with no other recorded compiler running is an exposure proxy, **not** a causal estimate of time saved. Completed comparisons retain run IDs, source and driver digests, raw samples, verdict, and test/diagnostic run IDs. The runner rejects foreign compiler activity and excess sampled CPU noise. It does not reserve hosts: coordinate the slot before invoking the launcher.
+
+Admission requires a churn-positive warm control, zero new CGUs with reuse on each candidate edit/revert, 5/6 foreground wins and lower median, no more than 5% cold wall or cold/warm library RSS regression, a global definition for the exercised export, a working downstream consumer, matching passing library suite counts, and an expected missing-name diagnostic. This is one rlib/consumer, **not** blanket proof of export/internalization or an authorization to promote. Separately test multi-crate generic, inline, weak/exported-symbol, dylib and cross-target behavior before any broader change. No library-enabled compiler is assumed available.
