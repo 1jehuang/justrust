@@ -1485,22 +1485,45 @@ fn checkpoint(st: &mut Sync, link: &Link, root: &Path, force: bool) -> Result<()
     Ok(())
 }
 
+fn prepare_observing<T>(
+    mirror: &Mirror,
+    root: &Path,
+    observe: impl FnOnce() -> Result<T>,
+) -> Result<(T, Duration, Duration)> {
+    std::thread::scope(|scope| {
+        let prepare = || {
+            let start = Instant::now();
+            mirror.prepare(root).map(|()| start.elapsed())
+        };
+        let job = std::thread::Builder::new().spawn_scoped(scope, prepare);
+        let start = Instant::now();
+        let observed = observe();
+        let scanned = start.elapsed();
+        let prepared = match job {
+            Ok(job) => job
+                .join()
+                .map_err(|_| anyhow::anyhow!("mirror preparation panicked"))?,
+            Err(_) => prepare(),
+        }?;
+        Ok((observed?, prepared, scanned))
+    })
+}
+
 /// Start tracking a root: rsync it once, then remember its manifest.
 fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
     let total = Instant::now();
-    link.mirror.prepare(root)?;
-    let prepared = total.elapsed();
-    // Scan before rsync: a file edited during the copy then differs from
-    // the manifest and is pushed again by the next flush.
-    let scan = remote_sync::scan(root)?;
-    // Capture before the out-of-band copy, never by rereading at checkpoint
-    // or reconnect. Missing evidence forces a full mirror on reconnect.
-    let hashes = if link.checkpoint {
-        snapshot_hashes(root, &scan.files)
-    } else {
-        Default::default()
-    };
-    let scanned = total.elapsed();
+    // Preparation touches only the receiver. Observe the sender concurrently,
+    // but join both operations before seeding or copying any sources.
+    let ((scan, hashes), prepared, scanned) = prepare_observing(&link.mirror, root, || {
+        remote_sync::scan(root).map(|scan| {
+            let hashes = if link.checkpoint {
+                snapshot_hashes(root, &scan.files)
+            } else {
+                Default::default()
+            };
+            (scan, hashes)
+        })
+    })?;
     let t = Instant::now();
     // Keyed by backend, not address: hosted machines change addresses, and
     // a seed whose source is gone on the machine is simply skipped.
@@ -1563,11 +1586,11 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
     let watch_dirs = remote_sync::dirs(root, &scan.files);
     refresh_watches(d, root, &watch_dirs);
     log(&format!(
-        "source mirror {}: total {:.3}s, prepare {:.3}s, scan {:.3}s ({} files, {} oversized), seed {:.3}s, checksum rsync {:.3}s, finalize {:.3}s",
+        "source mirror {}: total {:.3}s, prepare {:.3}s overlapping scan {:.3}s ({} files, {} oversized), seed {:.3}s, checksum rsync {:.3}s, finalize {:.3}s",
         root.display(),
         total.elapsed().as_secs_f64(),
         prepared.as_secs_f64(),
-        (scanned - prepared).as_secs_f64(),
+        scanned.as_secs_f64(),
         scan.files.len(),
         scan.oversized.len(),
         seed_time.as_secs_f64(),
@@ -2322,6 +2345,60 @@ fn peer_sync_loop(d: &Daemon) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mirror_observation_requires_both_preparation_and_scan() {
+        let temp = std::env::temp_dir().join(format!("jr-prepare-observe-{}", std::process::id()));
+        let mirror = Mirror {
+            target: None,
+            prefix: String::new(),
+        };
+        let root = temp.join("mirror");
+        let (value, _, _) = prepare_observing(&mirror, &root, || Ok(42)).unwrap();
+        assert!(root.is_dir());
+        assert_eq!(value, 42);
+        let err = prepare_observing(&mirror, &root, || -> Result<()> {
+            anyhow::bail!("scan failed")
+        })
+        .unwrap_err();
+        assert_eq!(err.to_string(), "scan failed");
+        let file = temp.join("not-a-directory");
+        std::fs::write(&file, []).unwrap();
+        assert!(prepare_observing(&mirror, &file, || Ok(())).is_err());
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    #[ignore = "compares local source scan with live hosted receiver preparation"]
+    fn hosted_mirror_setup_benchmark() {
+        let root = std::env::current_dir().unwrap();
+        let mirror = Mirror {
+            target: Some(
+                crate::remote_backend::Backend::Hosted
+                    .ensure_ready()
+                    .unwrap(),
+            ),
+            prefix: String::new(),
+        };
+        let mut times = [Vec::new(), Vec::new()];
+        for i in 0..12 {
+            let parallel = [false, true, true, false][i % 4];
+            let start = Instant::now();
+            let scan = if parallel {
+                prepare_observing(&mirror, &root, || remote_sync::scan(&root))
+                    .unwrap()
+                    .0
+            } else {
+                mirror.prepare(&root).unwrap();
+                remote_sync::scan(&root).unwrap()
+            };
+            assert!(!scan.files.is_empty());
+            times[usize::from(parallel)].push(start.elapsed().as_millis());
+        }
+        eprintln!(
+            "mirror setup ms serial={:?} overlapped={:?}",
+            times[0], times[1]
+        );
+    }
     #[test]
     fn binary_identity_tracks_bytes_not_copy_metadata() {
         let base = std::env::temp_dir().join(format!("jr-binary-id-{}", std::process::id()));
