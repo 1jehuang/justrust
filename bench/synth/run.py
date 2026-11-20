@@ -40,10 +40,24 @@ sys.path.insert(0, str(HERE))
 import gen  # noqa: E402
 import suite  # noqa: E402
 import versus  # noqa: E402
+from synth.pair_space import PairSpace  # noqa: E402
 
 
 def _target(st: versus.Stack, snap: str) -> Path:
     return versus.WORK / "target" / snap / st.name
+
+
+def _space_paths(st, plan):
+    scen = suite.Scenario("space", plan.snap, plan.cmd, None, "")
+    env = versus.stack_env(st, scen, _target(st, plan.snap), "space")
+    paths = [Path(env["CARGO_TARGET_DIR"]), versus.WORK / "logs"]
+    if st.justrust:
+        if env.get("JUSTRUST_REMOTE") not in ("0", "off"):
+            raise ValueError("bench: constrained pair admission requires local stacks")
+        home = Path(env["JUSTRUST_HOME"])
+        paths.extend([home / "runs", Path(env.get("JUSTRUST_DEPCACHE_DIR", home / "cache/depcache")),
+                      Path(env.get("JUSTRUST_LOCALCACHE_DIR", home / "cache/localcache"))])
+    return paths
 
 
 def _verified_test_time(summary, rid, cmd, cwd, measured_wall):
@@ -347,7 +361,7 @@ def checkpoint_identity(stacks, quiet_wait, only, retry_noisy):
 def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wait: float,
         partial: Path | None = None, only: set[int] | None = None, resume: bool = False,
         identity=None, stop_on_invalid: bool = False, retry_noisy: int = 0,
-        retry_infra: int = 0) -> dict:
+        retry_infra: int = 0, pair_space: PairSpace | None = None) -> dict:
     """`partial`: rewritten after every point, so a killed run keeps what it measured.
     `only`: run just these point indices (debugging one point; not a comparable result).
     `resume`: keep the points already in `partial` when it is the same seed, size,
@@ -369,10 +383,14 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
         raise ValueError("bench: stop_on_invalid cannot be combined with resume")
     if identity is not None and resume:
         raise ValueError("bench: identity demand cannot reuse unaudited resumed samples")
+    if pair_space is not None:
+        pair_space.validate(st.name for st in stacks)
     gen._locked()
     pts, info = gen.sample(seed, points)
     selected = [p for p in pts if not only or p.i in only]
     binding = checkpoint_identity(stacks, quiet_wait, only, retry_noisy) if partial else None
+    if binding is not None and pair_space is not None:
+        binding["pair_space"] = {"floor": pair_space.floor, "arm_bytes": pair_space.arm_bytes}
     if binding is not None and retry_infra:
         binding["retry_infra"] = retry_infra
     base = int(time.time()) % 100000 * 100
@@ -420,8 +438,10 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
                                             **retry_metadata, **stopped}))
             temporary.replace(partial)
 
-    # Replace stale evidence before point zero, even if its pre-build is interrupted.
-    save_checkpoint()
+    # Constrained runs must not clobber the prior receipt on an admission refusal.
+    checkpoint_pending = pair_space is not None
+    if not checkpoint_pending:
+        save_checkpoint()
     for snap in {p.snap for p in plans}:
         gen.restore_all(snap)
     for k, plan in enumerate(plans):
@@ -432,13 +452,20 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
         retried: dict[str, list[dict]] = {}
         for rep in range(reps):
             order = stacks[(k + rep) % len(stacks):] + stacks[:(k + rep) % len(stacks)]
-            for st in order:
+            paths = {st.name: _space_paths(st, plan) for st in order} if pair_space is not None else {}
+            for pos, st in enumerate(order):
                 if st.name in errors:
                     continue
                 if quiet_wait:
                     suite.wait_quiet(quiet_wait)
                 options = {"identity": identity} if identity is not None else {}
                 def measure():
+                    nonlocal checkpoint_pending
+                    if pair_space is not None:
+                        pair_space.admit(paths, [s.name for s in order[pos:]], plan.point.i)
+                        if checkpoint_pending:
+                            save_checkpoint()
+                            checkpoint_pending = False
                     if not retry_infra:
                         return run_point(st, plan, base + k * 10 + rep, **options)
                     value, history = run_point_infra(st, plan, base + k * 10 + rep, retry_infra, **options)

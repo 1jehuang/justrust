@@ -1,5 +1,25 @@
 # Synthetic agent workload
 
+## Constrained local comparison guests
+
+Pass `--pair-floor-bytes "$FLOOR"` and one `--arm-growth-bytes STACK=BYTES`
+for **every** selected stack to `bench/versus.py run --synth`. Custom paired
+launchers can pass `pair_space=run.PairSpace(floor_bytes, bounds_by_stack)` to
+`run.run`. Supply a conservative peak bound for the entire arm, including its
+prebuild, cache writes, edit, and retries. If growth is unknown, defer the pair.
+
+Admission checks before each arm, outside timing. It requires the floor plus
+the remaining arms' bounds on each filesystem used by their targets, caches,
+run records, and logs. Multiple paths on a device share one budget. On split
+devices each arm's full bound is charged to each device it uses. Initial
+refusal raises `SpaceDeferred` without replacing the previous checkpoint.
+Use fresh output paths for independent comparisons. Admission does not reserve
+space, monitor in-flight builds, or govern arbitrary build-script output.
+Keep the guest's continuous free-space guard and its full margin. No targets
+or caches are archived, evicted, shared, or changed by admission.
+
+## Workload overview
+
 One benchmark that covers what agents actually do, instead of a handful of
 hand-picked edits. Three parts:
 

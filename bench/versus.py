@@ -680,6 +680,8 @@ def cmd_list(_args) -> None:
 
 
 def cmd_run(args) -> None:
+    if (args.pair_floor_bytes is not None or args.arm_growth_bytes) and args.synth is None:
+        sys.exit("versus: storage admission flags require --synth")
     if args.synth is None and (args.stop_on_invalid or args.retry_noisy or args.retry_infra):
         sys.exit("versus: --stop-on-invalid, --retry-noisy and --retry-infra require --synth")
     if not 0 <= args.retry_infra <= 3:
@@ -742,6 +744,19 @@ def cmd_run_synth(args, stacks: list[Stack]) -> None:
            "stack_defs": [{"name": s.name, "what": s.what, "env": s.env, "justrust": s.justrust} for s in stacks]}
     only = {int(x) for x in args.only_points.split(",")} if args.only_points else None
     options = {}
+    if args.pair_floor_bytes is not None or args.arm_growth_bytes:
+        bounds = {}
+        try:
+            for entry in args.arm_growth_bytes:
+                arm, count = entry.split("=", 1)
+                if arm in bounds:
+                    raise ValueError(f"duplicate arm bound: {arm}")
+                bounds[arm] = int(count)
+            budget = synth_run.PairSpace(args.pair_floor_bytes, bounds)
+            budget.validate(st.name for st in stacks)
+        except ValueError as exc:
+            sys.exit(f"versus: invalid space budget: {exc}")
+        options["pair_space"] = budget
     if args.stop_on_invalid:
         options["stop_on_invalid"] = True
     if args.retry_noisy:
@@ -856,6 +871,9 @@ def main() -> None:
     r.add_argument("--retry-noisy", type=int, default=0, metavar="N",
                    help="synthetic only: remeasure a noisy sample up to N times after waiting for quiet "
                         "(default 0; discarded attempts retained)")
+    r.add_argument("--pair-floor-bytes", type=int, help="synthetic local comparisons: keep this many bytes free on each benchmark filesystem")
+    r.add_argument("--arm-growth-bytes", action="append", default=[], metavar="STACK=BYTES",
+                   help="constrained comparisons: positive peak growth bound for each arm, including prebuild and retries")
     r.add_argument("--only-points", metavar="I,J",
                    help="synthetic: run only these point indices (debugging, nothing saved)")
     r.set_defaults(fn=cmd_run)

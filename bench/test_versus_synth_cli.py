@@ -82,9 +82,16 @@ class SyntheticGateCliTests(unittest.TestCase):
 
     def test_defaults_do_not_override_engine_or_change_invalid_exit(self):
         kwargs, calls = self.run_mocked([], {'stopped_early': 'noisy'}, ['noisy'])
+        self.assertNotIn('pair_space', kwargs)
         self.assertNotIn('stop_on_invalid', kwargs)
         self.assertNotIn('retry_noisy', kwargs)
         self.assertEqual(calls, 0)
+
+    def test_pair_budget_reaches_engine(self):
+        kwargs, _ = self.run_mocked(['--only', 'stock,justrust', '--pair-floor-bytes', '11',
+                                     '--arm-growth-bytes', 'stock=3', '--arm-growth-bytes', 'justrust=5'],
+                                    {'results': []}, [])
+        self.assertEqual(kwargs['pair_space'], synth_run.PairSpace(11, {'stock': 3, 'justrust': 5}))
 
     def test_controls_forwarded_and_invalid_evidence_saved_uploaded_reported(self):
         kwargs, calls = self.run_mocked(['--stop-on-invalid', '--retry-noisy', '2'],
