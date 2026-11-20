@@ -224,8 +224,12 @@ work behind opt-in flags, canaries that never graduate, or later releases.
   every recorded build and every `bench/*.py` result is uploaded to the
   account-private record store (`justrust records list|show`). Cite run ids.
   Do not hand-write logs, notes files, or exports.
-- `justrust history` mines past Jcode sessions; `justrust runs` lists recorded
-  builds.
+- `justrust history` mines past Jcode sessions. For questions about recent
+  builds or dashboard history, start with `justrust records list`, then
+  `justrust records show run <id>` to verify `data.place`, `machine`, and
+  `cwd`. This feed is account-private, not the multi-user ops dashboard.
+  `justrust runs` reads only the current justrust home's index, so it can
+  miss newer runs even on this machine when a benchmark uses an isolated home.
 
 ## Design rules
 
