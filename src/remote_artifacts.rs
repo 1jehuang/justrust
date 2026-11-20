@@ -1117,7 +1117,7 @@ enum Validation<'a> {
     Arm64,
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn apply(
     dir: &Path,
     name: &str,

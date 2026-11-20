@@ -339,7 +339,7 @@ fn completed_run_reports_exit_while_another_roots_registration_is_blocked() {
         let rc = unsafe { libc::fcntl(receipt.as_raw_fd(), cmd, arg) };
         assert_eq!(rc, 0, "{}", std::io::Error::last_os_error());
     };
-    fcntl(libc::F_SETLEASE, libc::F_WRLCK as i32);
+    fcntl(libc::F_SETLEASE, libc::F_WRLCK);
     fcntl(libc::F_SETOWN, 0);
     assert_ne!(receipt.metadata().unwrap().permissions().mode() & 0o100, 0);
     std::fs::write(a.at("/p/go"), b"").unwrap();
@@ -356,7 +356,7 @@ fn completed_run_reports_exit_while_another_roots_registration_is_blocked() {
         own.try_lock().is_err(),
         "Exit precedes activity finalization"
     );
-    fcntl(libc::F_SETLEASE, libc::F_UNLCK as i32);
+    fcntl(libc::F_SETLEASE, libc::F_UNLCK);
     // The independent root clears its durable activity marker even though
     // the Synced handler is still waiting on the other root's exclusive lock.
     let deadline = Instant::now() + Duration::from_secs(10);

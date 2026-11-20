@@ -131,7 +131,7 @@ mod tests {
         b[offset..offset + 4].copy_from_slice(&[1, 0x1b, 3, 0x3b]);
         b[offset + 8..offset + 12].copy_from_slice(&count.to_le_bytes());
         let (mut pc, mut fde, mut seed) = (pc_bias, fde_bias, 3u32);
-        for row in b[offset + 12..].chunks_exact_mut(ROW) {
+        for row in b[offset + 12..].as_chunks_mut::<ROW>().0 {
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
             pc = pc.wrapping_add((seed >> 16) & 1023);
             fde = fde.wrapping_add(seed >> 24);

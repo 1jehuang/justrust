@@ -996,14 +996,21 @@ pub fn build(
     // Each record tracks one PID + process start tick. Its first and last
     // observations bound that harness's lifetime on the recorder clock.
     // Do not bridge distinct processes or extrapolate a polling interval.
-    test_spans.extend(procs.iter().filter_map(|p| {
-        (p.kind == "target-binary"
-            && harnesses.contains(p.cmdline.split_whitespace().next()?)
-            && p.first_seen.is_finite()
-            && p.last_seen.is_finite()
-            && p.last_seen > p.first_seen)
-            .then(|| (rel(p.first_seen), rel(p.last_seen)))
-    }));
+    test_spans.extend(
+        procs
+            .iter()
+            .filter(|p| {
+                p.kind == "target-binary"
+                    && p.cmdline
+                        .split_whitespace()
+                        .next()
+                        .is_some_and(|exe| harnesses.contains(exe))
+                    && p.first_seen.is_finite()
+                    && p.last_seen.is_finite()
+                    && p.last_seen > p.first_seen
+            })
+            .map(|p| (rel(p.first_seen), rel(p.last_seen))),
+    );
     let test_run = share_time(&test_spans, build_end, wall).1;
     let build_window = (build_end - startup).max(0.0);
     let compile = compile_covered.min(build_window);
