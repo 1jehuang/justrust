@@ -1,0 +1,18 @@
+diff --git a/toolchain/rustc/compiler/rustc_monomorphize/src/partitioning.rs b/toolchain/rustc/compiler/rustc_monomorphize/src/partitioning.rs
+--- a/toolchain/rustc/compiler/rustc_monomorphize/src/partitioning.rs
++++ b/toolchain/rustc/compiler/rustc_monomorphize/src/partitioning.rs
+@@ -509,7 +509,13 @@
+     // then at least one of the biggest N will have to grow. codegen_units[N-1]
+     // is the smallest of those, and so has the most room to grow.
+     let max_codegen_units = cx.tcx.sess.codegen_units().as_usize();
+-    if cx.tcx.sess.is_test_crate()
++    // Held experiment only: do not change placement for other libraries,
++    // dylibs, multi-output invocations, or non-native benchmark targets.
++    let held_rlib = max_codegen_units == 256
++        && cx.tcx.sess.opts.target_triple.to_string() == "x86_64-unknown-linux-gnu"
++        && cx.tcx.crate_types() == [rustc_structures::CrateType::Rlib]
++        && cx.tcx.crate_name(LOCAL_CRATE).as_str() == "jcode_base";
++    if (cx.tcx.sess.is_test_crate() || held_rlib)
+         && cx.tcx.sess.opts.incremental.is_some()
+         && cx.tcx.sess.opts.optimize == OptLevel::No
+         && max_codegen_units >= 256
