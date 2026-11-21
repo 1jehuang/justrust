@@ -226,7 +226,7 @@ still required before production promotion.
 
 ### Hash-bearing mirror checkpoints
 
-Link checkpoints remain opt-in with `JUSTRUST_REMOTE_CHECKPOINT=1` and work over
+Link checkpoints are on by default (`JUSTRUST_REMOTE_CHECKPOINT=0` disables them) and work over
 the selected byte stream, including SSH. Commit `d373f2c2c` closes the prior
 settled same-size external-mutation hole:
 

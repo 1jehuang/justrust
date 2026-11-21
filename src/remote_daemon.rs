@@ -1681,13 +1681,32 @@ fn snapshot_hashes(
     root: &Path,
     manifest: &Manifest,
 ) -> std::collections::BTreeMap<PathBuf, String> {
-    manifest
-        .iter()
-        .filter_map(|(path, stamp)| {
-            let bytes = read_settled(&root.join(path), Some(*stamp))?;
-            Some((path.clone(), remote_checkpoint::digest(&bytes)))
-        })
-        .collect()
+    // Hash on every core: serially this reads and hashes ~1.4 GB for a
+    // large root and delays the first mirror by seconds.
+    let entries: Vec<_> = manifest.iter().collect();
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, 16);
+    let chunk = entries.len().div_ceil(threads).max(1);
+    std::thread::scope(|scope| {
+        let jobs: Vec<_> = entries
+            .chunks(chunk)
+            .map(|part| {
+                scope.spawn(move || {
+                    part.iter()
+                        .filter_map(|(path, stamp)| {
+                            let bytes = read_settled(&root.join(path), Some(**stamp))?;
+                            Some(((*path).clone(), remote_checkpoint::digest(&bytes)))
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        jobs.into_iter()
+            .flat_map(|j| j.join().unwrap_or_default())
+            .collect()
+    })
 }
 
 /// Push every difference between `root` and its manifest. Returns files sent.

@@ -38,7 +38,8 @@
 //! distinct from the legacy size-only `checkpoint` capability: older peers
 //! never interpret the new list format. Both use the same token file as
 //! `remote_resume`, so old clients still invalidate checkpoints on writes.
-//! Opt-in: `JUSTRUST_REMOTE_CHECKPOINT=1` in the daemon's environment.
+//! On by default (every full mirror after a dropped link cost 10-200 s).
+//! `JUSTRUST_REMOTE_CHECKPOINT=0` in the daemon's environment turns it off.
 
 use std::collections::{BTreeSet, HashMap};
 #[cfg(unix)]
@@ -51,7 +52,7 @@ pub const TOKEN_FILE: &str = ".justrust/mirror-token";
 
 /// Unix clients only: relative paths travel as raw bytes.
 pub fn enabled() -> bool {
-    cfg!(unix) && std::env::var("JUSTRUST_REMOTE_CHECKPOINT").as_deref() == Ok("1")
+    cfg!(unix) && std::env::var("JUSTRUST_REMOTE_CHECKPOINT").as_deref() != Ok("0")
 }
 
 /// Checkpoint again once this many paths would have to be sent twice.
