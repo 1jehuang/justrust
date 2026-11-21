@@ -1,0 +1,1028 @@
+{
+ "schema": 1,
+ "what": "warm edit loop, stock cargo on this machine vs justrust hosted",
+ "started": "20261121-010532",
+ "rounds": 5,
+ "identity": {
+  "stock_cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+  "stock_rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)",
+  "justrust": "justrust 0.1.16",
+  "justrust_sha256": "950cc8ffa0aef5f032428e7431033e9dd10c776fcfb3900eee49293bc5fe4237",
+  "machine": "xps14",
+  "cpu_count": 16,
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H"
+ },
+ "logs": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm",
+ "rows": {
+  "jcode": {
+   "pin": "557173275060be087a3763e5f448f124371b54c6",
+   "file": "crates/jcode-tui/src/tui/jarvis.rs",
+   "command": "test -p jcode-tui --lib jarvis"
+  },
+  "ripgrep": {
+   "pin": "4649aa9700619f94cf9c66876e9549d83420e16c",
+   "file": "crates/ignore/src/gitignore.rs",
+   "command": "test -p ignore --lib --locked"
+  },
+  "uv": {
+   "pin": "44b2e5877ef752e360acc02c7d198ba71ddf948d",
+   "file": "crates/uv-resolver/src/manifest.rs",
+   "command": "check -p uv-resolver --locked"
+  }
+ },
+ "samples": [
+  {
+   "repo": "jcode",
+   "stack": "stock",
+   "tag": "w0",
+   "wall": 13.273938446000102,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/jcode-w0-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 15,
+   "proof": null
+  },
+  {
+   "repo": "jcode",
+   "stack": "remote",
+   "tag": "w0",
+   "wall": 197.47453312799917,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/jcode-w0-remote.log",
+   "run_id": "warm-three-083185392a3d4ad7bcfebfefd3482960",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "units_compiled": 684,
+   "units_local": 77,
+   "rebuild_reasons": [],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 1750.823995,
+    "prepare_ms": 6.467474,
+    "execute_ms": 194491.881993,
+    "finalize_ms": 0.00157,
+    "records_ms": 20.419373
+   },
+   "passed": 15,
+   "early": false,
+   "recompiled": true,
+   "proof": null
+  },
+  {
+   "repo": "jcode",
+   "stack": "stock",
+   "tag": "w1",
+   "wall": 10.072777493998728,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/jcode-w1-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 15,
+   "proof": null
+  },
+  {
+   "repo": "jcode",
+   "stack": "remote",
+   "tag": "w1",
+   "wall": 8.194547766001051,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/jcode-w1-remote.log",
+   "run_id": "warm-three-8446055bf18c4815a161a24b314e4a4f",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "units_compiled": 1,
+   "units_local": 1,
+   "rebuild_reasons": [
+    {
+     "package": "jcode-tui",
+     "reason": "couldn't read metadata for file `target/debug/build/jcode-tui/ee43d8bca4592e94/out/jcode_tui-ee43d8bca4592e94`"
+    }
+   ],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 61.086794,
+    "prepare_ms": 6.685725,
+    "execute_ms": 7389.466893,
+    "finalize_ms": 0.00147,
+    "records_ms": 1.267109
+   },
+   "passed": 15,
+   "early": false,
+   "recompiled": true,
+   "proof": null
+  },
+  {
+   "repo": "jcode",
+   "stack": "stock",
+   "tag": "r1",
+   "wall": 10.20528541600288,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/jcode-r1-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 15,
+   "proof": true
+  },
+  {
+   "repo": "jcode",
+   "stack": "remote",
+   "tag": "r1",
+   "wall": 8.152707573997759,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/jcode-r1-remote.log",
+   "run_id": "warm-three-05f4f9fcf84f45fb87f1afdbe035760d",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "units_compiled": 1,
+   "units_local": 1,
+   "rebuild_reasons": [
+    {
+     "package": "jcode-tui",
+     "reason": "couldn't read metadata for file `target/debug/build/jcode-tui/ee43d8bca4592e94/out/jcode_tui-ee43d8bca4592e94`"
+    }
+   ],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 55.916356,
+    "prepare_ms": 6.213825,
+    "execute_ms": 7481.108037,
+    "finalize_ms": 0.00152,
+    "records_ms": 1.2471489999999998
+   },
+   "passed": 15,
+   "early": false,
+   "recompiled": true,
+   "proof": true
+  },
+  {
+   "repo": "jcode",
+   "stack": "remote",
+   "tag": "r2",
+   "wall": 8.107960615998309,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/jcode-r2-remote.log",
+   "run_id": "warm-three-b8c832d15e314c6a9a2be72d826bb221",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "units_compiled": 0,
+   "units_local": 0,
+   "rebuild_reasons": [],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 52.493441000000004,
+    "prepare_ms": 6.682144999999999,
+    "execute_ms": 7346.696199,
+    "finalize_ms": 0.0014,
+    "records_ms": 0.908919
+   },
+   "passed": 15,
+   "early": false,
+   "recompiled": false,
+   "proof": true
+  },
+  {
+   "repo": "jcode",
+   "stack": "stock",
+   "tag": "r2",
+   "wall": 10.53476992799915,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/jcode-r2-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 15,
+   "proof": true
+  },
+  {
+   "repo": "jcode",
+   "stack": "stock",
+   "tag": "r3",
+   "wall": 8.934510571001738,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/jcode-r3-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 15,
+   "proof": true
+  },
+  {
+   "repo": "jcode",
+   "stack": "remote",
+   "tag": "r3",
+   "wall": 8.255974741998216,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/jcode-r3-remote.log",
+   "run_id": "warm-three-e426079c439e4a0dac9b5685a0b40eff",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "units_compiled": 1,
+   "units_local": 1,
+   "rebuild_reasons": [
+    {
+     "package": "jcode-tui",
+     "reason": "couldn't read metadata for file `target/debug/build/jcode-tui/ee43d8bca4592e94/out/jcode_tui-ee43d8bca4592e94`"
+    }
+   ],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 68.698306,
+    "prepare_ms": 7.151664,
+    "execute_ms": 7469.975787,
+    "finalize_ms": 0.00139,
+    "records_ms": 1.216499
+   },
+   "passed": 15,
+   "early": false,
+   "recompiled": true,
+   "proof": true
+  },
+  {
+   "repo": "jcode",
+   "stack": "remote",
+   "tag": "r4",
+   "wall": 8.052181184000801,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/jcode-r4-remote.log",
+   "run_id": "warm-three-0790cd05d92449d2b98e7d5a0da76c2c",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "units_compiled": 0,
+   "units_local": 0,
+   "rebuild_reasons": [],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 52.187072,
+    "prepare_ms": 6.517935,
+    "execute_ms": 7357.0059009999995,
+    "finalize_ms": 0.00148,
+    "records_ms": 0.818199
+   },
+   "passed": 15,
+   "early": false,
+   "recompiled": false,
+   "proof": true
+  },
+  {
+   "repo": "jcode",
+   "stack": "stock",
+   "tag": "r4",
+   "wall": 9.843877791998239,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/jcode-r4-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 15,
+   "proof": true
+  },
+  {
+   "repo": "jcode",
+   "stack": "stock",
+   "tag": "r5",
+   "wall": 10.697497417000704,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/jcode-r5-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 15,
+   "proof": true
+  },
+  {
+   "repo": "jcode",
+   "stack": "remote",
+   "tag": "r5",
+   "wall": 8.035741126997891,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/jcode-r5-remote.log",
+   "run_id": "warm-three-2801328d76d547d3b9b30822b26ddfe2",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "units_compiled": 1,
+   "units_local": 1,
+   "rebuild_reasons": [
+    {
+     "package": "jcode-tui",
+     "reason": "couldn't read metadata for file `target/debug/build/jcode-tui/ee43d8bca4592e94/out/jcode_tui-ee43d8bca4592e94`"
+    }
+   ],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 77.528283,
+    "prepare_ms": 7.483334,
+    "execute_ms": 7391.990261,
+    "finalize_ms": 0.0014,
+    "records_ms": 1.2988190000000002
+   },
+   "passed": 15,
+   "early": false,
+   "recompiled": true,
+   "proof": true
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "stock",
+   "tag": "w0",
+   "wall": 0.4876154539997515,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/ripgrep-w0-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 139,
+   "proof": null
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "remote",
+   "tag": "w0",
+   "wall": 0.8834959689993411,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/ripgrep-w0-remote.log",
+   "run_id": "warm-three-23765f2d0cc440daa12d9fa90fceb58f",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "units_compiled": 1,
+   "units_local": 1,
+   "rebuild_reasons": [
+    {
+     "package": "ignore",
+     "reason": "the file `crates/ignore/src/gitignore.rs` has changed"
+    }
+   ],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 46.227583,
+    "prepare_ms": 6.884854,
+    "execute_ms": 257.054886,
+    "finalize_ms": 0.0012699999999999999,
+    "records_ms": 0.45231
+   },
+   "passed": 139,
+   "early": false,
+   "recompiled": true,
+   "proof": null
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "stock",
+   "tag": "w1",
+   "wall": 0.39900505200057523,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/ripgrep-w1-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 139,
+   "proof": null
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "remote",
+   "tag": "w1",
+   "wall": 0.886352514000464,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/ripgrep-w1-remote.log",
+   "run_id": "warm-three-dafa83d4b32a48b196a726c01536927e",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "units_compiled": 0,
+   "units_local": 0,
+   "rebuild_reasons": [],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 48.959717,
+    "prepare_ms": 7.743164,
+    "execute_ms": 263.49241,
+    "finalize_ms": 0.0011799999999999998,
+    "records_ms": 0.31196
+   },
+   "passed": 139,
+   "early": false,
+   "recompiled": false,
+   "proof": null
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "stock",
+   "tag": "r1",
+   "wall": 0.3213072940015991,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/ripgrep-r1-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 139,
+   "proof": true
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "remote",
+   "tag": "r1",
+   "wall": 0.782147255999007,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/ripgrep-r1-remote.log",
+   "run_id": "warm-three-6012aa5a1f3a4528b60c1559f5eea27f",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "units_compiled": 0,
+   "units_local": 0,
+   "rebuild_reasons": [],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 42.291476,
+    "prepare_ms": 6.383225,
+    "execute_ms": 165.176252,
+    "finalize_ms": 0.00055,
+    "records_ms": 0.29362000000000005
+   },
+   "passed": 139,
+   "early": false,
+   "recompiled": false,
+   "proof": true
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "remote",
+   "tag": "r2",
+   "wall": 0.784698325998761,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/ripgrep-r2-remote.log",
+   "run_id": "warm-three-864fc331790e4bfb81fce2a82953ed96",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "units_compiled": 0,
+   "units_local": 0,
+   "rebuild_reasons": [],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 50.179094,
+    "prepare_ms": 6.287174,
+    "execute_ms": 133.914179,
+    "finalize_ms": 0.0005600000000000001,
+    "records_ms": 0.305549
+   },
+   "passed": 139,
+   "early": false,
+   "recompiled": false,
+   "proof": true
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "stock",
+   "tag": "r2",
+   "wall": 0.2552453729986155,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/ripgrep-r2-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 139,
+   "proof": true
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "stock",
+   "tag": "r3",
+   "wall": 0.26847649900082615,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/ripgrep-r3-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 139,
+   "proof": true
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "remote",
+   "tag": "r3",
+   "wall": 0.7778662890013948,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/ripgrep-r3-remote.log",
+   "run_id": "warm-three-8482d907728f494cb21a532fb79f8c2b",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "units_compiled": 0,
+   "units_local": 0,
+   "rebuild_reasons": [],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 95.991097,
+    "prepare_ms": 6.784985000000001,
+    "execute_ms": 99.593057,
+    "finalize_ms": 0.00128,
+    "records_ms": 0.315729
+   },
+   "passed": 139,
+   "early": false,
+   "recompiled": false,
+   "proof": true
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "remote",
+   "tag": "r4",
+   "wall": 0.7572836260005715,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/ripgrep-r4-remote.log",
+   "run_id": "warm-three-688eaeb437ff45589fadb2541b21b1a2",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "units_compiled": 0,
+   "units_local": 0,
+   "rebuild_reasons": [],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 50.941584,
+    "prepare_ms": 6.239365,
+    "execute_ms": 145.993488,
+    "finalize_ms": 0.0006,
+    "records_ms": 0.29495
+   },
+   "passed": 139,
+   "early": false,
+   "recompiled": false,
+   "proof": true
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "stock",
+   "tag": "r4",
+   "wall": 0.34788703300000634,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/ripgrep-r4-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 139,
+   "proof": true
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "stock",
+   "tag": "r5",
+   "wall": 0.31233387300017057,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/ripgrep-r5-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 139,
+   "proof": true
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "remote",
+   "tag": "r5",
+   "wall": 0.7686866860021837,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/ripgrep-r5-remote.log",
+   "run_id": "warm-three-d496a49b7d2b4a63bab4b7953df2ecd8",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "units_compiled": 0,
+   "units_local": 0,
+   "rebuild_reasons": [],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 44.259656,
+    "prepare_ms": 6.691725,
+    "execute_ms": 141.321422,
+    "finalize_ms": 0.00081,
+    "records_ms": 0.29799
+   },
+   "passed": 139,
+   "early": false,
+   "recompiled": false,
+   "proof": true
+  },
+  {
+   "repo": "uv",
+   "stack": "stock",
+   "tag": "w0",
+   "wall": 0.6441113850014517,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/uv-w0-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 0,
+   "proof": null
+  },
+  {
+   "repo": "uv",
+   "stack": "remote",
+   "tag": "w0",
+   "wall": 1.3936937660000694,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/uv-w0-remote.log",
+   "run_id": "warm-three-eb3875e8382b48048529585f968796a9",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": null,
+   "units_compiled": 1,
+   "units_local": 1,
+   "rebuild_reasons": [
+    {
+     "package": "uv-resolver",
+     "reason": "the dependency `uv-fs` was rebuilt"
+    }
+   ],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 47.319686,
+    "prepare_ms": 6.362965,
+    "execute_ms": 530.487847,
+    "finalize_ms": 0.00149,
+    "records_ms": 0.833759
+   },
+   "passed": 0,
+   "early": false,
+   "recompiled": true,
+   "proof": null
+  },
+  {
+   "repo": "uv",
+   "stack": "stock",
+   "tag": "w1",
+   "wall": 0.4895366999990074,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/uv-w1-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 0,
+   "proof": null
+  },
+  {
+   "repo": "uv",
+   "stack": "remote",
+   "tag": "w1",
+   "wall": 1.2311996300013561,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/uv-w1-remote.log",
+   "run_id": "warm-three-154f99cb0dfd406b89208fabe76f7038",
+   "errors": [],
+   "shared_run": null,
+   "machine": "hosted",
+   "toolchain": null,
+   "units_compiled": 1,
+   "units_local": 1,
+   "rebuild_reasons": [
+    {
+     "package": "uv-resolver",
+     "reason": "the file `crates/uv-resolver/src/manifest.rs` has changed"
+    }
+   ],
+   "attached": false,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 83.933938,
+    "prepare_ms": 7.481064,
+    "execute_ms": 556.844785,
+    "finalize_ms": 0.00103,
+    "records_ms": 0.43491
+   },
+   "passed": 0,
+   "early": false,
+   "recompiled": true,
+   "proof": null
+  },
+  {
+   "repo": "uv",
+   "stack": "stock",
+   "tag": "r1",
+   "wall": 0.5915568550008174,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/uv-r1-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 0,
+   "proof": true
+  },
+  {
+   "repo": "uv",
+   "stack": "remote",
+   "tag": "r1",
+   "wall": 1.0277371119991585,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/uv-r1-remote.log",
+   "run_id": "warm-three-ad983c9a681540ddbf66908f9a4ee679",
+   "errors": [],
+   "shared_run": "20261121-091105002-1990-pre",
+   "machine": "hosted",
+   "toolchain": null,
+   "units_compiled": 1,
+   "units_local": 1,
+   "rebuild_reasons": [
+    {
+     "package": "uv-resolver",
+     "reason": "the file `crates/uv-resolver/src/manifest.rs` has changed"
+    }
+   ],
+   "attached": true,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 88.855424,
+    "prepare_ms": 7.5470440000000005,
+    "execute_ms": 266.833787,
+    "finalize_ms": 0.00064,
+    "records_ms": 0.40713
+   },
+   "passed": 0,
+   "early": false,
+   "recompiled": true,
+   "proof": true
+  },
+  {
+   "repo": "uv",
+   "stack": "remote",
+   "tag": "r2",
+   "wall": 1.0243752159985888,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/uv-r2-remote.log",
+   "run_id": "warm-three-27a5bfa0addf4525a7e60c249e62621e",
+   "errors": [],
+   "shared_run": "20261121-091105993-1990-pre",
+   "machine": "hosted",
+   "toolchain": null,
+   "units_compiled": 1,
+   "units_local": 1,
+   "rebuild_reasons": [
+    {
+     "package": "uv-resolver",
+     "reason": "the file `crates/uv-resolver/src/manifest.rs` has changed"
+    }
+   ],
+   "attached": true,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 51.659097,
+    "prepare_ms": 6.302975,
+    "execute_ms": 354.042935,
+    "finalize_ms": 0.00174,
+    "records_ms": 0.47135900000000003
+   },
+   "passed": 0,
+   "early": false,
+   "recompiled": true,
+   "proof": true
+  },
+  {
+   "repo": "uv",
+   "stack": "stock",
+   "tag": "r2",
+   "wall": 0.5201264669994998,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/uv-r2-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 0,
+   "proof": true
+  },
+  {
+   "repo": "uv",
+   "stack": "stock",
+   "tag": "r3",
+   "wall": 0.6628797329976805,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/uv-r3-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 0,
+   "proof": true
+  },
+  {
+   "repo": "uv",
+   "stack": "remote",
+   "tag": "r3",
+   "wall": 1.0372871500003384,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/uv-r3-remote.log",
+   "run_id": "warm-three-c5643519aedf403fb3de000af9f010b3",
+   "errors": [],
+   "shared_run": "20261121-091108207-1990-pre",
+   "machine": "hosted",
+   "toolchain": null,
+   "units_compiled": 1,
+   "units_local": 1,
+   "rebuild_reasons": [
+    {
+     "package": "uv-resolver",
+     "reason": "the file `crates/uv-resolver/src/manifest.rs` has changed"
+    }
+   ],
+   "attached": true,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 86.07729,
+    "prepare_ms": 7.425394,
+    "execute_ms": 345.476972,
+    "finalize_ms": 0.00044,
+    "records_ms": 0.42812999999999996
+   },
+   "passed": 0,
+   "early": false,
+   "recompiled": true,
+   "proof": true
+  },
+  {
+   "repo": "uv",
+   "stack": "remote",
+   "tag": "r4",
+   "wall": 1.049343710001267,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/uv-r4-remote.log",
+   "run_id": "warm-three-6fe769e9e513475c8f59be5995d39866",
+   "errors": [],
+   "shared_run": "20261121-091109248-1990-pre",
+   "machine": "hosted",
+   "toolchain": null,
+   "units_compiled": 1,
+   "units_local": 1,
+   "rebuild_reasons": [
+    {
+     "package": "uv-resolver",
+     "reason": "the file `crates/uv-resolver/src/manifest.rs` has changed"
+    }
+   ],
+   "attached": true,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 45.790069,
+    "prepare_ms": 6.991154,
+    "execute_ms": 344.068453,
+    "finalize_ms": 0.0005,
+    "records_ms": 0.45314
+   },
+   "passed": 0,
+   "early": false,
+   "recompiled": true,
+   "proof": true
+  },
+  {
+   "repo": "uv",
+   "stack": "stock",
+   "tag": "r4",
+   "wall": 0.6322745090001263,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/uv-r4-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 0,
+   "proof": true
+  },
+  {
+   "repo": "uv",
+   "stack": "stock",
+   "tag": "r5",
+   "wall": 0.658447501999035,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/uv-r5-stock.log",
+   "run_id": null,
+   "errors": [],
+   "recompiled": true,
+   "passed": 0,
+   "proof": true
+  },
+  {
+   "repo": "uv",
+   "stack": "remote",
+   "tag": "r5",
+   "wall": 1.0388004460000957,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/warm-three/results-lstj9osm/uv-r5-remote.log",
+   "run_id": "warm-three-5a44934a031341f5a93f977e70a18121",
+   "errors": [],
+   "shared_run": "20261121-091111597-1990-pre",
+   "machine": "hosted",
+   "toolchain": null,
+   "units_compiled": 1,
+   "units_local": 1,
+   "rebuild_reasons": [
+    {
+     "package": "uv-resolver",
+     "reason": "the file `crates/uv-resolver/src/manifest.rs` has changed"
+    }
+   ],
+   "attached": true,
+   "replayed": false,
+   "remote_phases": {
+    "sync_ms": 53.451715,
+    "prepare_ms": 6.001125,
+    "execute_ms": 371.11239,
+    "finalize_ms": 0.00041,
+    "records_ms": 0.45647899999999997
+   },
+   "passed": 0,
+   "early": false,
+   "recompiled": true,
+   "proof": true
+  }
+ ],
+ "summary": {
+  "jcode": {
+   "stock": {
+    "n": 5,
+    "failed": 0,
+    "median": 10.20528541600288,
+    "min": 8.934510571001738,
+    "max": 10.697497417000704
+   },
+   "remote": {
+    "n": 5,
+    "failed": 0,
+    "median": 8.107960615998309,
+    "min": 8.035741126997891,
+    "max": 8.255974741998216
+   }
+  },
+  "ripgrep": {
+   "stock": {
+    "n": 5,
+    "failed": 0,
+    "median": 0.31233387300017057,
+    "min": 0.2552453729986155,
+    "max": 0.34788703300000634
+   },
+   "remote": {
+    "n": 5,
+    "failed": 0,
+    "median": 0.7778662890013948,
+    "min": 0.7572836260005715,
+    "max": 0.784698325998761
+   }
+  },
+  "uv": {
+   "stock": {
+    "n": 5,
+    "failed": 0,
+    "median": 0.6322745090001263,
+    "min": 0.5201264669994998,
+    "max": 0.6628797329976805
+   },
+   "remote": {
+    "n": 5,
+    "failed": 0,
+    "median": 1.0372871500003384,
+    "min": 1.0243752159985888,
+    "max": 1.049343710001267
+   }
+  }
+ },
+ "finished": "20261121-011112"
+}
