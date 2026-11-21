@@ -1031,9 +1031,11 @@ fn record(
     CHILD_PID.store(0, Ordering::SeqCst);
     let _ = t_out.join();
     let _ = t_err.join();
+    let mut pooled_spans = Vec::new();
     if let Some(p) = pool {
         // Binaries cargo handed over may still be running.
         let o = p.finish();
+        pooled_spans = o.process_spans;
         cpu_user += o.cpu_secs;
         if o.any_failed && code == 0 {
             code = 101;
@@ -1093,6 +1095,7 @@ fn record(
         &lines,
         &samples,
         &procs,
+        &pooled_spans,
     ) {
         Ok(failure) => lifecycle.set_failure(failure),
         Err(e) => {
@@ -1160,6 +1163,7 @@ fn finish(
     lines: &[OutputLine],
     samples: &[Sample],
     procs: &[ProcRecord],
+    pooled_spans: &[(f64, f64)],
 ) -> Result<Option<crate::failure::Wire>> {
     write_jsonl(&run_dir.join("samples.jsonl"), samples)?;
     std::fs::write(
@@ -1169,7 +1173,17 @@ fn finish(
     let mut units = summary::load_units(run_dir);
     units.extend(summary::units_from_wrapper_procs(procs));
     let mut s = summary::build(
-        meta, git, start, end, code, cpu_secs, lines, samples, procs, &units,
+        meta,
+        git,
+        start,
+        end,
+        code,
+        cpu_secs,
+        lines,
+        samples,
+        procs,
+        &units,
+        pooled_spans,
     );
     s.sched = sched;
     s.savings = crate::savings::from_dir(run_dir);

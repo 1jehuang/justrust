@@ -171,6 +171,7 @@ struct State {
     overlapped: HashSet<usize>,
     next_id: usize,
     results: Vec<Finished>,
+    process_spans: Vec<(f64, f64)>,
     cpu_secs: f64,
     /// Fail-fast tripped: a binary failed, so queued and later binaries are
     /// not run (cargo's default stops at the first failing binary).
@@ -226,6 +227,7 @@ pub struct Pool {
 pub struct Outcome {
     pub any_failed: bool,
     pub cpu_secs: f64,
+    pub process_spans: Vec<(f64, f64)>,
 }
 
 static LIVE_PIDS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
@@ -361,6 +363,7 @@ impl Pool {
         Outcome {
             any_failed,
             cpu_secs: st.cpu_secs,
+            process_spans: std::mem::take(&mut st.process_spans),
         }
     }
 }
@@ -530,6 +533,7 @@ fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finishe
             };
         }
     };
+    let spawned = paths::now();
     let job = crate::sys::Job::for_child(&child);
     let pid = child.id() as i32;
     LIVE_PIDS.lock().unwrap().push(pid);
@@ -579,13 +583,18 @@ fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finishe
     let to = read(Box::new(child.stdout.take().unwrap()), "o");
     let te = read(Box::new(child.stderr.take().unwrap()), "e");
     let u = crate::sys::wait_usage(&mut child, job.as_ref());
+    let reaped = paths::now();
     let (exit, cpu) = (u.code, u.user + u.sys);
     let mut lines = to.join().unwrap_or_default();
     lines.extend(te.join().unwrap_or_default());
     lines.sort_by(|a, b| a.0.total_cmp(&b.0));
     LIVE_PIDS.lock().unwrap().retain(|&p| p != pid);
     track_signal_pid(pid, false);
-    inner.state.lock().unwrap().cpu_secs += cpu;
+    {
+        let mut state = inner.state.lock().unwrap();
+        state.cpu_secs += cpu;
+        state.process_spans.push((spawned, reaped));
+    }
     let outcomes = lines
         .iter()
         .filter_map(|(_, _, l)| test_outcome(&String::from_utf8_lossy(l)))
@@ -1912,6 +1921,8 @@ mod tests {
             .map(String::from)
             .collect();
         let out = sink.0.lock().unwrap().clone();
+        assert_eq!(o.process_spans.len(), ran.len());
+        assert!(o.process_spans.iter().all(|(start, end)| end >= start));
         (o.any_failed, ran, out)
     }
 

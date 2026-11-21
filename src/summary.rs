@@ -746,6 +746,7 @@ pub fn build(
     samples: &[Sample],
     procs: &[ProcRecord],
     units: &[Unit],
+    pooled_spans: &[(f64, f64)],
 ) -> Summary {
     // Parked Cargo workers are outside wait4's child tree. These measurements
     // overlap, so never add them. Sampled processes cover detached linkers too.
@@ -1016,6 +1017,15 @@ pub fn build(
                     && p.last_seen > p.first_seen
             })
             .map(|p| (rel(p.first_seen), rel(p.last_seen))),
+    );
+    // Pooled processes may retry in isolation without replaying their output.
+    // Union their observed lifetimes with log and sampler evidence, never
+    // charging overlapping tests or a concurrent build twice.
+    test_spans.extend(
+        pooled_spans
+            .iter()
+            .filter(|(a, b)| a.is_finite() && b.is_finite() && b > a)
+            .map(|&(a, b)| (rel(a), rel(b))),
     );
     let test_run = share_time(&test_spans, build_end, wall).1;
     let build_window = (build_end - startup).max(0.0);
@@ -2013,6 +2023,7 @@ mod tests {
                 &[],
                 &[],
                 &units,
+                &[],
             );
             assert!(!s.diagnostics.compile_failed);
             assert!(!s.index_entry().compile_failed);
@@ -2054,6 +2065,7 @@ mod tests {
             &[],
             &[],
             &units,
+            &[],
         );
         assert!(s.diagnostics.compile_failed);
         assert_eq!(
@@ -2093,6 +2105,7 @@ mod tests {
             &[],
             &[],
             &units,
+            &[],
         );
         assert!(s.diagnostics.compile_failed);
         assert_eq!(s.diagnostics.compile_errors, 0);
@@ -2126,6 +2139,7 @@ mod tests {
             &[],
             &[],
             &units,
+            &[],
         );
         let hidden = crate::agent_output::Hidden::default();
         let report = s.agent_report("ok", &hidden);
@@ -2172,6 +2186,7 @@ mod tests {
                 &[],
                 &[],
                 &units,
+                &[],
             );
             assert!(s.diagnostics.compile_failed);
             assert!(s.index_entry().compile_failed);
@@ -2209,6 +2224,7 @@ mod tests {
             &[],
             &[],
             &units,
+            &[],
         );
         assert!(!s.diagnostics.compile_failed);
         assert!(!s.index_entry().compile_failed);
@@ -2253,6 +2269,7 @@ mod tests {
             101,
             1.0,
             &lines,
+            &[],
             &[],
             &[],
             &[],
@@ -2325,6 +2342,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
         let names: Vec<_> = s.tests.binaries.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(names, ["a-1", "b-2"]);
@@ -2382,10 +2400,36 @@ mod tests {
             &[],
             &procs,
             &[],
+            &[],
         );
         assert_eq!(
             (s.phases.startup, s.phases.test_run, s.phases.tail),
             (10.0, 6.0, 4.0)
+        );
+    }
+    #[test]
+    fn pooled_retry_processes_count_once_without_output() {
+        let lines = [OutputLine {
+            t: 102.0,
+            s: "e".into(),
+            l: "Finished `test` profile in 2s".into(),
+        }];
+        let s = build(
+            &Meta::default(),
+            GitInfo::default(),
+            100.,
+            110.,
+            0,
+            0.,
+            &lines,
+            &[],
+            &[],
+            &[],
+            &[(101., 105.), (104., 106.), (107., 109.)],
+        );
+        assert_eq!(
+            (s.phases.startup, s.phases.test_run, s.phases.tail),
+            (2., 6., 2.)
         );
     }
     #[test]
@@ -2434,6 +2478,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
         assert_eq!(s.tests.passed, 824);
         assert_eq!(s.tests.filtered_out, 0, "a nested rerun filters nothing");
@@ -2479,6 +2524,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
         assert_eq!(s.tests.binaries.len(), 1);
         assert_eq!(s.tests.binaries[0].name, "app-abc");
@@ -2508,6 +2554,7 @@ mod tests {
             0,
             0.0,
             &lines,
+            &[],
             &[],
             &[],
             &[],
@@ -2548,6 +2595,7 @@ mod tests {
                 &[],
                 procs,
                 &units,
+                &[],
             )
         };
         let sampled = make(0.02, &procs);
