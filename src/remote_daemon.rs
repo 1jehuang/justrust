@@ -1358,7 +1358,7 @@ fn save_mirrors(d: &Daemon) {
         log("mirror manifests not saved: no live connection");
         return;
     };
-    if let Err(e) = barrier(d, &mut st, &link) {
+    if let Err(e) = barrier(d, &mut st, &link, None) {
         st.receipt = None;
         log(&format!("mirror manifests not saved: {e:#}"));
         return;
@@ -1907,7 +1907,7 @@ fn repair_sources(d: &Daemon, st: &mut Sync, link: &Link) -> Result<usize> {
 /// Wait until the agent has applied everything sent so far. Paths the agent
 /// failed to write or delete fail the barrier, and are marked so the next
 /// push sends them again.
-fn barrier(d: &Daemon, st: &mut Sync, link: &Link) -> Result<()> {
+fn barrier(d: &Daemon, st: &mut Sync, link: &Link, run_roots: Option<&[PathBuf]>) -> Result<()> {
     let id = d.id();
     let (tx, rx) = channel();
     {
@@ -1921,7 +1921,7 @@ fn barrier(d: &Daemon, st: &mut Sync, link: &Link) -> Result<()> {
     let ack = rx
         .recv_timeout(BARRIER_TIMEOUT)
         .map_err(|_| anyhow::anyhow!("remote machine did not acknowledge the sync"))?;
-    check_sync_failures(st, &ack)
+    check_sync_failures(st, &ack, run_roots)
 }
 
 /// The agent's answer to a barrier: paths it could not apply, and whether
@@ -1935,7 +1935,12 @@ struct SyncAck {
 }
 
 /// Both standalone and run-integrated barriers repair the same manifest.
-fn check_sync_failures(st: &mut Sync, ack: &SyncAck) -> Result<()> {
+/// `run_roots` are the roots a build reads. A root another connection
+/// displaced is mirrored in full next time either way, but it rejects only
+/// builds that read it (`None`: every root counts). An unrelated workspace,
+/// for example a checkout deleted here after its build, must not fail the
+/// next build of a different one.
+fn check_sync_failures(st: &mut Sync, ack: &SyncAck, run_roots: Option<&[PathBuf]>) -> Result<()> {
     let failed = &ack.failed;
     if !failed.is_empty() || !ack.lost.is_empty() {
         st.receipt = None;
@@ -1951,11 +1956,26 @@ fn check_sync_failures(st: &mut Sync, ack: &SyncAck) -> Result<()> {
             "source mirror {root}: changed by another connection, full mirror next"
         ));
     }
+    let blocking: Vec<&str> = ack
+        .lost
+        .iter()
+        .map(String::as_str)
+        .filter(|lost| {
+            run_roots
+                .filter(|roots| !roots.is_empty())
+                .is_none_or(|roots| {
+                    let lost = Path::new(lost);
+                    roots
+                        .iter()
+                        .any(|r| r.starts_with(lost) || lost.starts_with(r))
+                })
+        })
+        .collect();
     if failed.is_empty() {
-        if !ack.lost.is_empty() {
+        if !blocking.is_empty() {
             bail!(
                 "another connection changed the source mirror of {} on the remote machine; it is mirrored again on the next build",
-                ack.lost.join(", ")
+                blocking.join(", ")
             );
         }
         return Ok(());
@@ -2147,7 +2167,7 @@ fn run(
             let note = oversized_note(&st, &roots)?;
             setup_phase(w, "applying sources")?;
             if !pipeline {
-                barrier(d, &mut st, &link)?;
+                barrier(d, &mut st, &link, Some(&roots))?;
             }
             if st.backend == Backend::Hosted && crate::remote_session::enabled() {
                 // A correlation fingerprint of this acknowledged mirror, not
@@ -2217,7 +2237,7 @@ fn run(
                         );
                     }
                 };
-                if let Err(e) = check_sync_failures(&mut st, &ack) {
+                if let Err(e) = check_sync_failures(&mut st, &ack, Some(&roots)) {
                     // The agent confirmed it never launched this request.
                     // A local fallback is safe only after this rejection.
                     write_frame(
@@ -3148,7 +3168,8 @@ mod tests {
                             &SyncAck {
                                 failed,
                                 ..Default::default()
-                            }
+                            },
+                            None,
                         )
                         .is_err()
                     );
@@ -3232,7 +3253,7 @@ mod tests {
             disk_full: true,
             lost: Vec::new(),
         };
-        assert!(check_sync_failures(&mut st, &full).is_err());
+        assert!(check_sync_failures(&mut st, &full, None).is_err());
         assert_eq!(st.repair_roots(), vec![a.clone()]);
         // B is the next requested workspace. Repair A first, even though A
         // has no new local changes, and do not resend unrelated source.
@@ -3260,9 +3281,9 @@ mod tests {
         assert!(st.repair_roots().is_empty());
         // Sending retries is not proof of remote success. An outstanding
         // ENOSPC receipt still rejects the build and schedules them again.
-        assert!(check_sync_failures(&mut st, &full).is_err());
+        assert!(check_sync_failures(&mut st, &full, None).is_err());
         assert_eq!(repair_sources(&d, &mut st, &link).unwrap(), 2);
-        assert!(check_sync_failures(&mut st, &SyncAck::default()).is_ok());
+        assert!(check_sync_failures(&mut st, &SyncAck::default(), None).is_ok());
         assert!(st.repair_roots().is_empty());
         assert_eq!(repair_sources(&d, &mut st, &link).unwrap(), 0);
         // A unavailable or changed into a non-regular source must not be
@@ -3272,7 +3293,7 @@ mod tests {
             disk_full: false,
             lost: Vec::new(),
         };
-        assert!(check_sync_failures(&mut st, &receipt).is_err());
+        assert!(check_sync_failures(&mut st, &receipt, None).is_err());
         std::fs::remove_file(a.join("lib.rs")).unwrap();
         std::fs::create_dir(a.join("lib.rs")).unwrap();
         assert!(repair_sources(&d, &mut st, &link).is_err());
@@ -3457,7 +3478,14 @@ mod tests {
             lost: vec![name.clone()],
             ..Default::default()
         };
-        assert!(check_sync_failures(&mut st, &displaced).is_err());
+        // A build of another workspace still runs; the root is remirrored.
+        let elsewhere = [PathBuf::from("/elsewhere/other-checkout")];
+        assert!(check_sync_failures(&mut st, &displaced, Some(&elsewhere)).is_ok());
+        assert!(st.needs_mirror(&root));
+        assert!(
+            check_sync_failures(&mut st, &displaced, Some(std::slice::from_ref(&root))).is_err()
+        );
+        assert!(check_sync_failures(&mut st, &displaced, None).is_err());
         assert!(st.needs_mirror(&root));
         assert!(st.roots[&root].mark.token.is_none());
         assert!(reverify(&d, &mut st, &link, &root).is_none());
@@ -3607,7 +3635,7 @@ mod tests {
         let other_only = source_receipt(&mut sync, std::slice::from_ref(&other)).unwrap();
         assert_ne!(before, other_only);
         assert_eq!(before, source_receipt(&mut sync, &both).unwrap());
-        assert!(check_sync_failures(&mut sync, &SyncAck::default()).is_ok());
+        assert!(check_sync_failures(&mut sync, &SyncAck::default(), None).is_ok());
         assert_eq!(sync.roots[&root].manifest[&entry], stamp);
         assert!(
             check_sync_failures(
@@ -3619,7 +3647,8 @@ mod tests {
                     ],
                     disk_full: false,
                     lost: Vec::new(),
-                }
+                },
+                None,
             )
             .is_err()
         );
@@ -3639,6 +3668,7 @@ mod tests {
                 disk_full: false,
                 lost: Vec::new(),
             },
+            None,
         )
         .unwrap_err()
         .to_string();
@@ -3650,6 +3680,7 @@ mod tests {
                 disk_full: true,
                 lost: Vec::new(),
             },
+            None,
         )
         .unwrap_err()
         .to_string();
