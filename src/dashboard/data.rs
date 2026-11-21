@@ -69,6 +69,7 @@ pub(crate) type TimeCache = std::collections::HashMap<
         Option<String>,
         Option<String>,
         Ledger,
+        Option<(u64, u64)>,
     ),
 >;
 
@@ -574,10 +575,15 @@ impl Bucket {
     }
 }
 
-/// Only the timing fields of a run summary, so older or newer summaries with
-/// other shapes elsewhere still parse.
+/// Preserve explicit zero counts without treating missing counts as zero.
+fn cargo_units(units: &Value) -> Option<(u64, u64)> {
+    Some((units["fresh"].as_u64()?, units["compiled"].as_u64()?))
+}
+
 #[derive(serde::Deserialize)]
 struct Timing {
+    #[serde(default)]
+    units: Value,
     toolchain: Option<String>,
     #[serde(default)]
     wall: f64,
@@ -656,6 +662,9 @@ pub(crate) struct RunRow {
     /// Who a failed run is on, when the recorder classified it.
     pub failure: Option<crate::failure::Class>,
     pub compile_failed: bool,
+    /// Cargo artifact counts (fresh, compiled), only when both were recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cargo_units: Option<(u64, u64)>,
     /// Where the wait went. Only for runs whose summary is on this client.
     pub time: Option<Times>,
     /// What the compiler's time went to. Only for runs with units recorded here.
@@ -696,9 +705,10 @@ pub(crate) fn local_snapshot(
     match rows {
         Ok(mut rows) => {
             for row in &mut rows {
-                if let Some((time, compile, reuse, timeline, opt, toolchain, _)) =
+                if let Some((time, compile, reuse, timeline, opt, toolchain, _, units)) =
                     cache.get(&row.id)
                 {
+                    row.cargo_units = *units;
                     row.time = *time;
                     row.compile = *compile;
                     row.reuse = *reuse;
@@ -805,6 +815,7 @@ fn enrich_rows_at(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path, now: s
                                     .as_deref()
                                     .map(crate::summary::recorded_toolchain_label);
                             }
+                            row.cargo_units = cargo_units(&timing.units);
                             row.time = measured_times(timing);
                         }
                         let (compile, reuse, timeline, opt) =
@@ -836,6 +847,7 @@ fn enrich_rows_at(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path, now: s
                 row.opt_level.clone(),
                 row.toolchain_version.clone(),
                 ledger,
+                row.cargo_units,
             ),
         );
     }
@@ -1030,6 +1042,7 @@ fn index_rows(tail: &str) -> Vec<RunRow> {
             origin: "local".into(),
             failure: entry.failure,
             compile_failed: entry.compile_failed,
+            cargo_units: None,
             time: None,
             compile: None,
             reuse: None,
@@ -1100,6 +1113,7 @@ fn hosted_row(value: &Value) -> Option<RunRow> {
             .into(),
         origin: "hosted".into(),
         failure: serde_json::from_value(summary["failure"].clone()).ok(),
+        cargo_units: cargo_units(&summary["units"]),
         compile_failed: summary["compile_failed"].as_bool().unwrap_or(false),
         time: None,
         compile: None,
@@ -1779,6 +1793,7 @@ mod tests {
             time,
             compile,
             opt_level: Some("s".into()),
+            cargo_units: Some((4, 2)),
             ..Default::default()
         }];
         let mut cache = TimeCache::from([
@@ -1792,11 +1807,12 @@ mod tests {
                     Some("s".into()),
                     None,
                     Ledger::Complete,
+                    Some((4, 2)),
                 ),
             ),
             (
                 "expired".into(),
-                (None, None, None, None, None, None, Ledger::Unknown),
+                (None, None, None, None, None, None, Ledger::Unknown, None),
             ),
         ]);
         enrich_rows(
@@ -1816,7 +1832,8 @@ mod tests {
                 None,
                 Some("s".into()),
                 None,
-                Ledger::Complete
+                Ledger::Complete,
+                Some((4, 2)),
             )
         );
     }
@@ -1851,6 +1868,7 @@ mod tests {
                 None,
                 Some("old".into()),
                 cached_ledger(&rows[0]),
+                None,
             ),
         )]);
         let mut refresh = |second, rows: &mut [RunRow]| {
@@ -1865,7 +1883,11 @@ mod tests {
             Ledger::Probe(_, Some((0, _)))
         ));
         fs::write(&units, b"invalid").unwrap();
-        fs::write(run.join("summary.json"), br#"{"toolchain":"old"}"#).unwrap();
+        fs::write(
+            run.join("summary.json"),
+            br#"{"toolchain":"old","units":{"fresh":3,"compiled":0}}"#,
+        )
+        .unwrap();
         assert!(matches!(
             refresh(20, &mut rows),
             Ledger::Probe(_, Some((7, _)))
@@ -1885,6 +1907,7 @@ mod tests {
         assert!(rows[0].compile.is_some());
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(refresh(70, &mut rows), Ledger::Complete);
+        assert_eq!(rows[0].cargo_units, Some((3, 0)));
         assert_eq!(rows[0].toolchain_version.as_deref(), Some("new"));
     }
 
@@ -2330,6 +2353,22 @@ mod tests {
                 .reuse
                 .is_none()
         );
+    }
+
+    #[test]
+    fn hosted_cargo_counts_require_two_explicit_unsigned_integers() {
+        use serde_json::json;
+        for (units, expected) in [
+            (json!({"fresh":0,"compiled":0}), Some((0, 0))),
+            (json!({"fresh":6,"compiled":2}), Some((6, 2))),
+            (json!({"compiled":2}), None),
+            (json!({"fresh":3,"compiled":-1}), None),
+            (json!({"fresh":"3","compiled":2}), None),
+            (Value::Null, None),
+        ] {
+            let row = hosted_row(&json!({"id":"cloud", "summary":{"units":units}})).unwrap();
+            assert_eq!(row.cargo_units, expected);
+        }
     }
 
     #[test]
