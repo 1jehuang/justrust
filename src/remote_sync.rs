@@ -524,8 +524,16 @@ pub fn diff(old: &Manifest, new: &Manifest) -> Diff {
 pub fn dirs(root: &Path, m: &Manifest) -> BTreeSet<PathBuf> {
     let mut out = BTreeSet::new();
     out.insert(root.to_path_buf());
+    let mut previous_parent = None;
     for p in m.keys() {
         let mut d = p.parent();
+        // Siblings are commonly adjacent in the manifest. The first already
+        // inserted every ancestor, so avoid even constructing an absolute key.
+        let spelling = d.map(Path::as_os_str);
+        if spelling == previous_parent {
+            continue;
+        }
+        previous_parent = spelling;
         while let Some(x) = d {
             if x.as_os_str().is_empty() || !out.insert(root.join(x)) {
                 break;
@@ -1850,6 +1858,34 @@ mod tests {
         assert_eq!(recovered.files.len(), 2);
         assert!(recovered.oversized.is_empty());
         std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn watch_dirs_include_all_ancestors_across_sibling_groups() {
+        let root = Path::new("workspace");
+        let mut m = Manifest::new();
+        let stamp = Stamp {
+            mtime_ns: 0,
+            size: 0,
+            mode: 0,
+        };
+        for file in [
+            "root.rs",
+            "src/a",
+            "src/b",
+            "src/m/n/x",
+            "src/m/n/y",
+            "src/z",
+            "tests/unit/t",
+        ] {
+            m.insert(PathBuf::from(file), stamp);
+        }
+        let expected = ["src", "src/m", "src/m/n", "tests", "tests/unit"]
+            .into_iter()
+            .map(|p| root.join(p))
+            .chain(std::iter::once(root.to_path_buf()))
+            .collect();
+        assert_eq!(dirs(root, &m), expected);
     }
 
     #[test]
