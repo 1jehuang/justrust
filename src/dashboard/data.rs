@@ -282,6 +282,8 @@ pub(crate) struct DashboardProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     overall: Option<Times>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    overall_v2: Option<[f64; 13]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     compile: Option<CompileTimes>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reuse: Option<ReuseStats>,
@@ -340,7 +342,70 @@ impl DashboardProfile {
     }
     pub(crate) fn set_overall(&mut self, s: &crate::summary::Summary) {
         self.overall = measured_parts(s.wall, Some(&s.phases), s.e2e.as_ref());
+        self.overall_v2 = Some(overall_v2(s));
     }
+}
+
+// Wire slots 0..8 retain their legacy labels. Only claim known work for
+// recognized keys: legacy Bucket::of deliberately accepts unknown prefixes.
+fn overall_v2(s: &crate::summary::Summary) -> [f64; 13] {
+    const UNATTRIBUTED: usize = 8;
+    const GAPS: usize = 9;
+    const AFTER: usize = 10;
+    const CARGO_UNKNOWN: usize = 11;
+    const REMOTE_UNKNOWN: usize = 12;
+    let mut out = [0.; 13];
+    let mut add = |slot: usize, secs: f64| {
+        if secs.is_finite() && secs > 0. {
+            out[slot] += secs;
+        }
+    };
+    let (wall, residual) = if let Some(e) = s.e2e.as_ref().filter(|e| !e.segments.is_empty()) {
+        for seg in &e.segments {
+            let key = seg.key.as_str();
+            let slot = match key.split_once('.') {
+                Some(("build" | "host", "build_gaps")) => GAPS,
+                Some(("build" | "host", "tail")) => AFTER,
+                Some(("build" | "host", "other")) => CARGO_UNKNOWN,
+                Some(("build" | "host", "compile" | "tests" | "cargo_startup" | "lock_wait"))
+                | Some(("remote", "admission" | "preflight" | "daemon_connect" | "artifacts"))
+                | Some(("host", "prepare" | "slot_wait" | "finalize" | "records"))
+                | Some(("sync", "lock_wait" | "link" | "push" | "barrier" | "other" | "total"))
+                | Some(("client", "setup" | "route" | "roots" | "report")) => {
+                    Bucket::of(key) as usize
+                }
+                Some(("remote" | "host", _)) => REMOTE_UNKNOWN,
+                Some(("build", _)) => CARGO_UNKNOWN,
+                _ => UNATTRIBUTED,
+            };
+            add(slot, seg.secs);
+        }
+        (e.wall, UNATTRIBUTED)
+    } else {
+        let p = &s.phases;
+        for (slot, secs) in [
+            (Bucket::Startup as usize, p.startup),
+            (Bucket::Lock as usize, p.lock_wait),
+            (Bucket::Compile as usize, p.compile),
+            (Bucket::Tests as usize, p.test_run),
+            (GAPS, p.build_gaps),
+            (AFTER, p.tail),
+        ] {
+            add(slot, secs);
+        }
+        (s.wall, CARGO_UNKNOWN)
+    };
+    let total: f64 = out.iter().sum();
+    if wall.is_finite() && wall > 0. {
+        if total > wall {
+            for value in &mut out {
+                *value *= wall / total;
+            }
+        } else {
+            out[residual] += wall - total;
+        }
+    }
+    out
 }
 
 /// Summary and sidecars travel together from the recorder. Neither their
@@ -1548,6 +1613,56 @@ mod tests {
     }
 
     #[test]
+    fn overall_v2_preserves_clock_domain_and_marks_unknown_causes() {
+        let keys = [
+            "host.compile",
+            "build.tests",
+            "sync.push",
+            "remote.artifacts",
+            "host.prepare",
+            "host.cargo_startup",
+            "host.lock_wait",
+            "client.setup",
+            "future.compile",
+            "host.build_gaps",
+            "build.tail",
+            "host.other",
+            "host.recorder",
+            "remote.host_overhead",
+            "remote.other",
+        ];
+        let mut s = crate::summary::Summary {
+            wall: 70.,
+            e2e: Some(crate::e2e::E2e {
+                wall: 16.,
+                segments: keys
+                    .into_iter()
+                    .map(|k| crate::e2e::Segment {
+                        key: k.into(),
+                        secs: 1.,
+                    })
+                    .collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            overall_v2(&s),
+            [1., 1., 1., 1., 1., 1., 1., 1., 2., 1., 1., 1., 3.]
+        );
+        s.e2e = None;
+        s.phases.compile = 60.;
+        s.phases.build_gaps = 3.;
+        s.phases.tail = 2.;
+        assert_eq!(
+            overall_v2(&s),
+            [60., 0., 0., 0., 0., 0., 0., 0., 0., 3., 2., 5., 0.]
+        );
+        s.wall = 32.5;
+        assert_eq!(overall_v2(&s).iter().sum::<f64>(), 32.5);
+    }
+
+    #[test]
     fn private_profile_matches_legacy_and_current_recorders() {
         let u = crate::shim::Unit {
             local: true,
@@ -1570,6 +1685,10 @@ mod tests {
         assert_eq!(
             json["overall"],
             serde_json::json!([0., 0., 0., 0., 0., 0., 0., 0., 3.])
+        );
+        assert_eq!(
+            json["overall_v2"],
+            serde_json::json!([0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 3., 0.])
         );
         assert_eq!(
             json["compile"],
