@@ -714,10 +714,7 @@ fn spawn_daemon(root: &Path, dir: &Path) -> Result<()> {
             .into_iter()
             .filter(|(d, _)| d != dir)
             .collect();
-        for victim in lru_victims(
-            &live,
-            daemon_cap(crate::procfs::meminfo().map(|m| m.total_mb)),
-        ) {
+        for victim in lru_victims(&live, daemon_cap(crate::procfs::installed_mb())) {
             stop_daemon(&victim);
         }
     }

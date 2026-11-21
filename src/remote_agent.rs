@@ -725,9 +725,7 @@ fn machine_jobs(args: &[String], env: &[(String, String)]) -> Option<usize> {
         return None;
     }
     let cpus = std::thread::available_parallelism().ok()?.get();
-    let mem_gib = crate::procfs::meminfo()
-        .filter(|m| m.total_mb > 0)
-        .map(|m| (m.total_mb >> 10) as usize);
+    let mem_gib = crate::procfs::installed_mb().map(|mb| (mb >> 10) as usize);
     Some(jobs_for(cpus, mem_gib))
 }
 

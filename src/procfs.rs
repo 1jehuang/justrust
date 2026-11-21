@@ -22,6 +22,15 @@ pub use imp::{
     pressure, read_stat,
 };
 
+/// Installed memory in MiB, for sizing builds: MemTotal, or more if a
+/// balloon is currently holding part of it (Linux memory blocks).
+pub fn installed_mb() -> Option<u64> {
+    let total = meminfo()?.total_mb;
+    #[cfg(target_os = "linux")]
+    let total = total.max(linux::online_block_mb().unwrap_or(0));
+    (total > 0).then_some(total)
+}
+
 #[cfg(unix)]
 pub fn page_size() -> u64 {
     // SAFETY: sysconf has no preconditions.
@@ -470,6 +479,29 @@ mod linux {
             }
         }
         Some(m)
+    }
+
+    /// Installed memory from the online memory blocks. A virtio balloon
+    /// lowers MemTotal: hosted inflates an idle slot's balloon to ~6 GiB and
+    /// deflates it within seconds of new work, so a build sized from MemTotal
+    /// at start got `CARGO_BUILD_JOBS=2` on a 96-CPU, 30-GiB guest (cold
+    /// release jcode 584 s vs 214 s at 14 jobs). Blocks are not ballooned.
+    pub(super) fn online_block_mb() -> Option<u64> {
+        let dir = std::path::Path::new("/sys/devices/system/memory");
+        let block = std::fs::read_to_string(dir.join("block_size_bytes")).ok()?;
+        let states = std::fs::read_dir(dir).ok()?.flatten().filter_map(|e| {
+            e.file_name()
+                .to_str()?
+                .starts_with("memory")
+                .then(|| std::fs::read_to_string(e.path().join("state")).ok())?
+        });
+        online_mb(&block, states)
+    }
+
+    pub(super) fn online_mb(block_hex: &str, states: impl Iterator<Item = String>) -> Option<u64> {
+        let block = u64::from_str_radix(block_hex.trim(), 16).ok()?;
+        let online = states.filter(|s| s.trim() == "online").count() as u64;
+        (online > 0).then(|| block.saturating_mul(online) >> 20)
     }
 
     fn psi_some_total(kind: &str) -> Option<u64> {
@@ -1300,6 +1332,22 @@ mod tests {
         assert!(m.total_mb > 0 && m.available_mb > 0 && m.available_mb <= m.total_mb);
         assert!(boot_time().is_some_and(|b| b > 1e9));
         assert!(!hostname().is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn installed_memory_counts_ballooned_blocks() {
+        // The hosted guest: 236 online 128-MiB blocks while the balloon
+        // left MemTotal at 5.4 GiB.
+        let states = (0..240).map(|i| if i < 236 { "online\n" } else { "offline\n" }.to_string());
+        assert_eq!(super::linux::online_mb("8000000\n", states), Some(30208));
+        assert_eq!(super::linux::online_mb("8000000", std::iter::empty()), None);
+        assert_eq!(
+            super::linux::online_mb("zz", ["online".to_string()].into_iter()),
+            None
+        );
+        let m = meminfo().unwrap();
+        assert!(installed_mb().unwrap() >= m.total_mb);
     }
 
     /// A child's tree link, CPU, start, and argv are read like `record`

@@ -815,7 +815,7 @@ fn record(
         agent_session: std::env::var("JCODE_SESSION_ID").ok(),
         tty,
         ncpu: procfs::ncpu(),
-        mem_total_mb: procfs::meminfo().map(|m| m.total_mb).unwrap_or(0),
+        mem_total_mb: procfs::installed_mb().unwrap_or(0),
         env,
         slot: slot.as_ref().map(|s| s.info.clone()),
         toolchain: pinned.as_ref().map(|tc| tc.id.clone()),
