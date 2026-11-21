@@ -1833,6 +1833,7 @@ fn connect_with_mode(
         json!({ "public_key": public_key.trim(), "platform": "linux", "native_transport": native_mode != Some(false), "native_only": native_only_requested(native_mode) })
     };
     let mut last = String::new();
+    let mut retried_unavailable = false;
     loop {
         let r = request(c, "POST", "build/host/connect", Some(&body))?;
         if !windows
@@ -1874,6 +1875,14 @@ fn connect_with_mode(
                     progress(&msg);
                     last = msg;
                 }
+            }
+            503 if r.body["error"]["code"] == "build_unavailable"
+                && !retried_unavailable
+                && start.elapsed().saturating_add(poll) < timeout =>
+            {
+                // Connect already polls with this exact key. No build has been submitted.
+                retried_unavailable = true;
+                progress("Hosted admission temporarily unavailable, retrying once...");
             }
             _ => return Err(api_error(&r)),
         }
@@ -2899,6 +2908,26 @@ mod tests {
         assert_eq!(seen[0].auth.as_deref(), Some("Bearer sk-secret-123"));
         let b: Value = serde_json::from_str(&seen[0].body).unwrap();
         assert_eq!(b["public_key"], "ssh-ed25519 AAAA me");
+    }
+
+    #[test]
+    fn transient_admission_503_retries_once_with_same_key() {
+        let down = (503, r#"{"error":{"code":"build_unavailable"}}"#);
+        for (second, succeeds) in [((200, READY), true), (down, false)] {
+            let (c, seen) = mock(vec![down, second]);
+            let mut messages = vec![];
+            let result = connect_with(&c, "k", Duration::ZERO, Duration::from_secs(5), |m| {
+                messages.push(m.to_owned())
+            });
+            assert_eq!(result.is_ok(), succeeds);
+            if let Err(error) = result {
+                assert!(error.to_string().contains("unavailable right now"));
+            }
+            assert_eq!(messages.len(), 1);
+            let requests = seen.lock().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0].body, requests[1].body);
+        }
     }
 
     #[test]
