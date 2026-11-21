@@ -1956,21 +1956,10 @@ fn check_sync_failures(st: &mut Sync, ack: &SyncAck, run_roots: Option<&[PathBuf
             "source mirror {root}: changed by another connection, full mirror next"
         ));
     }
-    let blocking: Vec<&str> = ack
-        .lost
-        .iter()
-        .map(String::as_str)
-        .filter(|lost| {
-            run_roots
-                .filter(|roots| !roots.is_empty())
-                .is_none_or(|roots| {
-                    let lost = Path::new(lost);
-                    roots
-                        .iter()
-                        .any(|r| r.starts_with(lost) || lost.starts_with(r))
-                })
-        })
-        .collect();
+    let blocking: Vec<&str> = match run_roots {
+        Some(roots) => remote_checkpoint::blocking(&ack.lost, roots),
+        None => ack.lost.iter().map(String::as_str).collect(),
+    };
     if failed.is_empty() {
         if !blocking.is_empty() {
             bail!(
@@ -2208,7 +2197,9 @@ fn run(
                     cwd: cwd.clone(),
                     args,
                     env,
-                    roots: Vec::new(),
+                    // The roots this build reads: the agent rejects it for
+                    // a displaced mirror only under one of them.
+                    roots: roots.iter().map(|r| r.display().to_string()).collect(),
                     start: false,
                     run_id,
                 }

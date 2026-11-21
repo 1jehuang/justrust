@@ -239,9 +239,49 @@ pub fn take_lost(owned: &mut HashMap<PathBuf, Held>) -> Vec<String> {
     lost
 }
 
+/// The displaced roots (`take_lost`) that reject a build reading
+/// `run_roots`. Every displaced root is still reported and mirrored again,
+/// but only one the build reads (itself, inside, or around one of its roots)
+/// stops it: a deleted or rebuilt unrelated checkout must not fail the build
+/// of another. No run roots (an older daemon, a bare barrier): all of them.
+pub fn blocking<'a, L: AsRef<str>, R: AsRef<Path>>(lost: &'a [L], run_roots: &[R]) -> Vec<&'a str> {
+    lost.iter()
+        .map(AsRef::as_ref)
+        .filter(|lost| {
+            let lost = Path::new(lost);
+            run_roots.is_empty()
+                || run_roots
+                    .iter()
+                    .any(|r| r.as_ref().starts_with(lost) || lost.starts_with(r.as_ref()))
+        })
+        .collect()
+}
+
+pub fn blocks_run(lost: &[String], run_roots: &[String]) -> bool {
+    !blocking(lost, run_roots).is_empty()
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_displaced_roots_a_build_reads_block_it() {
+        let lost = ["/home/u/runs/a".to_string()];
+        let none: [String; 0] = [];
+        assert!(blocks_run(&lost, &none));
+        assert!(blocks_run(&lost, &["/home/u/runs/a".into()]));
+        assert!(blocks_run(&lost, &["/home/u/runs/a/sub".into()]));
+        assert!(blocks_run(&lost, &["/home/u/runs".into()]));
+        assert!(!blocks_run(&lost, &["/home/u/runs/b".into()]));
+        // A path prefix is not a parent directory.
+        assert!(!blocks_run(&lost, &["/home/u/runs/ab".into()]));
+        assert!(blocks_run(
+            &lost,
+            &["/home/u/runs/b".into(), "/home/u/runs/a".into()]
+        ));
+        assert!(!blocks_run(&none, &["/home/u/runs/a".into()]));
+    }
 
     fn list(files: &[(&str, u64)]) -> Vec<u8> {
         let hashes: Vec<_> = files

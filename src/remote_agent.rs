@@ -463,6 +463,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                 args,
                 env,
                 run_id,
+                roots: run_roots,
                 ..
             }
             | Msg::RunSync {
@@ -471,12 +472,13 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                 args,
                 env,
                 run_id,
+                roots: run_roots,
                 ..
             } => {
                 let received = std::time::Instant::now();
                 if sync_run {
                     let lost = crate::remote_checkpoint::take_lost(&mut held);
-                    let displaced = !lost.is_empty();
+                    let displaced = crate::remote_checkpoint::blocks_run(&lost, &run_roots);
                     send(
                         &out,
                         &Msg::BarrierAck {
