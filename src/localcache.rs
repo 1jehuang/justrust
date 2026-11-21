@@ -76,7 +76,7 @@ pub fn cache_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("JUSTRUST_LOCALCACHE_DIR") {
         return Some(PathBuf::from(d));
     }
-    paths::home().ok().map(|h| h.join("cache/localcache"))
+    paths::cache_root().map(|c| c.join("localcache"))
 }
 
 /// Key a local unit. `salt`: arguments the shim adds to the compile

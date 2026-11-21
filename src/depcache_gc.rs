@@ -325,6 +325,12 @@ fn auto(root: &Path) {
     };
     let start = paths::now();
     let p = prune(root, max_bytes(), false);
+    if paths::cache_namespace() == Ok(None)
+        && let Some(c) = paths::cache_root()
+        && root == c.join("depcache")
+    {
+        prune_namespaces(&c.join("ns"), NAMESPACE_MAX_AGE_SECS);
+    }
     if p.entries > 0 {
         let line = serde_json::json!({
             "t": start,
@@ -334,6 +340,44 @@ fn auto(root: &Path) {
         });
         let _ = paths::append_line(&root.join("gc.jsonl"), &line.to_string());
     }
+}
+
+/// Namespaced caches (`JUSTRUST_DEPCACHE_NAMESPACE`, one per cold benchmark
+/// sample) unused for this long are removed whole by the default cache's
+/// collection. Nothing else would ever reclaim them on a build machine.
+const NAMESPACE_MAX_AGE_SECS: f64 = 2.0 * 86400.0;
+
+/// Remove namespace dirs under `ns` whose newest entry (the dir, its cache
+/// dirs and their `o/` dirs, which every store and restore touches) is older
+/// than `max_age`.
+fn prune_namespaces(ns: &Path, max_age: f64) -> usize {
+    let Ok(rd) = std::fs::read_dir(ns) else {
+        return 0;
+    };
+    let cutoff = paths::now() - max_age;
+    let mut removed = 0;
+    for d in rd.flatten() {
+        let dir = d.path();
+        if !d.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let newest = [
+            dir.clone(),
+            dir.join("depcache"),
+            dir.join("depcache/o"),
+            dir.join("depcache/m"),
+            dir.join("localcache"),
+            dir.join("localcache/o"),
+        ]
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| mtime(&m))
+        .fold(f64::MIN, f64::max);
+        if newest < cutoff && std::fs::remove_dir_all(&dir).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 fn gb(b: u64) -> String {
@@ -597,6 +641,21 @@ pub fn command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_cache_namespaces_are_removed_whole_fresh_ones_kept() {
+        let ns = std::env::temp_dir().join(format!("jr-gc-ns-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ns);
+        std::fs::create_dir_all(ns.join("fresh/depcache/o")).unwrap();
+        std::fs::write(ns.join("not-a-dir"), b"").unwrap();
+        assert_eq!(prune_namespaces(&ns, 3600.0), 0);
+        assert_eq!(prune_namespaces(&ns.join("missing"), 0.0), 0);
+        // Everything just written is newer than a negative age cutoff allows.
+        assert_eq!(prune_namespaces(&ns, -3600.0), 1);
+        assert!(!ns.join("fresh").exists());
+        assert!(ns.join("not-a-dir").exists());
+        std::fs::remove_dir_all(&ns).unwrap();
+    }
 
     #[test]
     fn parses_sizes() {

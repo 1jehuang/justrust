@@ -80,6 +80,9 @@ const SYNC_MAX_ITEMS: usize = 400;
 
 pub fn enabled() -> bool {
     depcache::enabled()
+        // The relay serves the daemon's default cache, which would make a
+        // namespaced (deliberately empty) cache warm again.
+        && matches!(paths::cache_namespace(), Ok(None))
         && !matches!(
             std::env::var("JUSTRUST_PEER_CACHE").as_deref(),
             Ok("0") | Ok("off") | Ok("false") | Ok("no")

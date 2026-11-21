@@ -85,6 +85,8 @@ const FORWARDED_ENV: &[&str] = &[
     "JUSTRUST_SLOT_SESSION",
     "JUSTRUST_REMOTE_EVICT_INTERVAL_SECS",
     "JUSTRUST_DEPCACHE",
+    // A name, never a path: the machine resolves it under its own home.
+    "JUSTRUST_DEPCACHE_NAMESPACE",
     "JUSTRUST_LOCALCACHE",
     "JUSTRUST_LOCALCACHE_TARGET_BOUND",
     "JUSTRUST_PEER_CACHE",

@@ -94,7 +94,7 @@ pub fn cache_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("JUSTRUST_DEPCACHE_DIR") {
         return Some(PathBuf::from(d));
     }
-    paths::home().ok().map(|h| h.join("cache/depcache"))
+    paths::cache_root().map(|c| c.join("depcache"))
 }
 
 /// 128-bit content hash from two independently keyed SipHash-2-4 streams.

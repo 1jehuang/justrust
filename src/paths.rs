@@ -28,6 +28,48 @@ pub fn home() -> Result<PathBuf> {
         .join(".justrust"))
 }
 
+/// `JUSTRUST_DEPCACHE_NAMESPACE`: run with private, initially empty
+/// dependency and local unit caches under `cache/ns/<name>/`, and without
+/// the peer tier (which would serve the default cache). The public prebuilt
+/// store still applies. Benchmarks use it to measure what a new account's
+/// first build gets on hosted machines that already have warm caches.
+/// `Err` for a name that is not 1-64 of `[A-Za-z0-9_-]`, so a typo never
+/// falls back to the warm default cache.
+pub fn cache_namespace() -> Result<Option<String>, String> {
+    let v = std::env::var_os("JUSTRUST_DEPCACHE_NAMESPACE");
+    parse_cache_namespace(v.as_deref().map(|v| v.to_string_lossy()).as_deref())
+}
+
+fn parse_cache_namespace(v: Option<&str>) -> Result<Option<String>, String> {
+    match v {
+        None | Some("") => Ok(None),
+        Some(v)
+            if v.len() <= 64
+                && v.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') =>
+        {
+            Ok(Some(v.to_owned()))
+        }
+        Some(v) => Err(format!("invalid JUSTRUST_DEPCACHE_NAMESPACE {v:?}")),
+    }
+}
+
+/// Parent of the dependency and local unit caches (`cache/`, or
+/// `cache/ns/<name>/` under [`cache_namespace`]). `None` for an invalid
+/// namespace: caching is off rather than silently warm.
+pub fn cache_root() -> Option<PathBuf> {
+    cache_root_in(&home().ok()?, cache_namespace())
+}
+
+fn cache_root_in(home: &Path, ns: Result<Option<String>, String>) -> Option<PathBuf> {
+    let base = home.join("cache");
+    match ns {
+        Ok(None) => Some(base),
+        Ok(Some(ns)) => Some(base.join("ns").join(ns)),
+        Err(_) => None,
+    }
+}
+
 pub fn runs_dir() -> Result<PathBuf> {
     Ok(home()?.join("runs"))
 }
@@ -176,4 +218,22 @@ pub fn append_line(path: &Path, line: &str) -> Result<()> {
     buf.push(b'\n');
     f.write_all(&buf)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod cache_namespace_tests {
+    use super::*;
+
+    #[test]
+    fn namespace_selects_a_separate_cache_root_and_rejects_paths() {
+        let h = Path::new("/h");
+        let root = |v| cache_root_in(h, parse_cache_namespace(v));
+        assert_eq!(root(None), Some(h.join("cache")));
+        assert_eq!(root(Some("")), Some(h.join("cache")));
+        assert_eq!(root(Some("cold-1_a")), Some(h.join("cache/ns/cold-1_a")));
+        // A typo or a path must never fall back to the warm default cache.
+        for bad in ["..", "../x", "a/b", "x y", ".", &"n".repeat(65)] {
+            assert_eq!(root(Some(bad)), None, "{bad}");
+        }
+    }
 }
