@@ -186,9 +186,11 @@ def summarize(samples: list[dict]) -> dict:
         row = {}
         for stack in ('stock', 'remote'):
             mine = [s for s in samples if s['repo'] == name and s['stack'] == stack]
-            good = [s for s in mine if not s['errors']]
+            good = [s for s in mine if not s['errors'] and not s.get('superseded')]
+            row_failed = len([s for s in mine if s['errors']])
             walls = [s['wall'] for s in good]
-            row[stack] = {'n': len(good), 'failed': len(mine) - len(good),
+            row[stack] = {'n': len(good), 'failed': row_failed,
+                          'superseded': len(mine) - len(good) - row_failed,
                           'median': statistics.median(walls) if walls else None,
                           'min': min(walls) if walls else None, 'max': max(walls) if walls else None}
             if stack == 'remote' and good:

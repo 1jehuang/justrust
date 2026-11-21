@@ -1,0 +1,677 @@
+{
+ "schema": 1,
+ "what": "first build of a fresh checkout, stock cargo on this machine vs justrust hosted as a new account",
+ "started": "20261121-023119",
+ "identities": [
+  {
+   "stock_cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+   "stock_rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)",
+   "justrust": "justrust 0.1.17",
+   "justrust_sha256": "c7a9c5d8eaa5fb6d8bd1c4eedfb7c99572b1f908b528b71ad60b56e0ca868894",
+   "machine": "xps14",
+   "cpu_count": 16,
+   "cpu": "Intel(R) Core(TM) Ultra X9 388H"
+  },
+  {
+   "stock_cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+   "stock_rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)",
+   "justrust": "justrust 0.1.17",
+   "justrust_sha256": "c7a9c5d8eaa5fb6d8bd1c4eedfb7c99572b1f908b528b71ad60b56e0ca868894",
+   "machine": "xps14",
+   "cpu_count": 16,
+   "cpu": "Intel(R) Core(TM) Ultra X9 388H"
+  },
+  {
+   "stock_cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+   "stock_rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)",
+   "justrust": "justrust 0.1.18",
+   "justrust_sha256": "f3ad8d6acdf8e5379b20b834fc29ca4ec108f93b604f6a3b302559596179c910",
+   "machine": "xps14",
+   "cpu_count": 16,
+   "cpu": "Intel(R) Core(TM) Ultra X9 388H"
+  },
+  {
+   "stock_cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+   "stock_rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)",
+   "justrust": "justrust 0.1.20",
+   "justrust_sha256": "da4a9622d386f34d386a90d33e0be63ecd7219b71a4775c886c39b2fa5488ba7",
+   "machine": "xps14",
+   "cpu_count": 16,
+   "cpu": "Intel(R) Core(TM) Ultra X9 388H"
+  },
+  {
+   "stock_cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+   "stock_rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)",
+   "justrust": "justrust 0.1.19",
+   "justrust_sha256": "32f9809537947b1b52245bfbacc4e5056e7b78f2c59e0ac0ab0dcbc09e8115a2",
+   "machine": "xps14",
+   "cpu_count": 16,
+   "cpu": "Intel(R) Core(TM) Ultra X9 388H"
+  },
+  {
+   "stock_cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+   "stock_rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)",
+   "justrust": "justrust 0.1.20",
+   "justrust_sha256": "da4a9622d386f34d386a90d33e0be63ecd7219b71a4775c886c39b2fa5488ba7",
+   "machine": "xps14",
+   "cpu_count": 16,
+   "cpu": "Intel(R) Core(TM) Ultra X9 388H"
+  },
+  {
+   "stock_cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+   "stock_rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)",
+   "justrust": "justrust 0.1.20",
+   "justrust_sha256": "da4a9622d386f34d386a90d33e0be63ecd7219b71a4775c886c39b2fa5488ba7",
+   "machine": "xps14",
+   "cpu_count": 16,
+   "cpu": "Intel(R) Core(TM) Ultra X9 388H"
+  }
+ ],
+ "rows": {
+  "jcode": {
+   "pin": "b33d94f006ce2488bbc3b4b5ec818505ac750b28",
+   "url": "https://github.com/1jehuang/jcode.git",
+   "command": "build --release -p jcode --bin jcode --locked",
+   "binary": "jcode"
+  },
+  "ripgrep": {
+   "pin": "e89fff89ac9af12e8d4ce9d5fd07beb408ca730f",
+   "url": "https://github.com/BurntSushi/ripgrep.git",
+   "command": "build --release --locked",
+   "binary": "rg"
+  },
+  "uv": {
+   "pin": "6b2d39dcc390293d51c9c0d2bbcd650f4bcbfdce",
+   "url": "https://github.com/astral-sh/uv.git",
+   "command": "build --release -p uv --locked",
+   "binary": "uv"
+  }
+ },
+ "samples": [
+  {
+   "repo": "jcode",
+   "stack": "stock",
+   "tag": "r1",
+   "wall": 588.3824368709975,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-u15kze1x/jcode-r1-stock.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/jcode-r1-stock-dffaf987",
+   "run_id": null,
+   "namespace": null,
+   "binary": "jcode v1.0.3-dev (unknown, dirty)",
+   "errors": [],
+   "superseded": "stock on battery with EPP balance_power; rerun with EPP performance"
+  },
+  {
+   "repo": "jcode",
+   "stack": "stock",
+   "tag": "r2",
+   "wall": 592.7814960020005,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-u15kze1x/jcode-r2-stock.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/jcode-r2-stock-459a526f",
+   "run_id": null,
+   "namespace": null,
+   "binary": "jcode v1.0.3-dev (unknown, dirty)",
+   "errors": [],
+   "superseded": "stock on battery with EPP balance_power; rerun with EPP performance"
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "stock",
+   "tag": "r1",
+   "wall": 10.7629073959979,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-u15kze1x/ripgrep-r1-stock.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/ripgrep-r1-stock-1fccd8fc",
+   "run_id": null,
+   "namespace": null,
+   "binary": "ripgrep 15.2.0",
+   "errors": [],
+   "superseded": "stock on battery with EPP balance_power; rerun with EPP performance"
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "stock",
+   "tag": "r2",
+   "wall": 12.369118082999194,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-u15kze1x/ripgrep-r2-stock.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/ripgrep-r2-stock-3b06cf23",
+   "run_id": null,
+   "namespace": null,
+   "binary": "ripgrep 15.2.0",
+   "errors": [],
+   "superseded": "stock on battery with EPP balance_power; rerun with EPP performance"
+  },
+  {
+   "repo": "uv",
+   "stack": "stock",
+   "tag": "r1",
+   "wall": 667.2640196079992,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-u15kze1x/uv-r1-stock.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/uv-r1-stock-30330674",
+   "run_id": null,
+   "namespace": null,
+   "binary": "uv 0.13.9 (x86_64-unknown-linux-gnu)",
+   "errors": [],
+   "superseded": "stock on battery with EPP balance_power; rerun with EPP performance"
+  },
+  {
+   "repo": "uv",
+   "stack": "stock",
+   "tag": "r2",
+   "wall": 664.8459801110002,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-u15kze1x/uv-r2-stock.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/uv-r2-stock-69deacd2",
+   "run_id": null,
+   "namespace": null,
+   "binary": "uv 0.13.9 (x86_64-unknown-linux-gnu)",
+   "errors": [],
+   "superseded": "stock on battery with EPP balance_power; rerun with EPP performance"
+  },
+  {
+   "repo": "jcode",
+   "stack": "remote",
+   "tag": "r1",
+   "wall": 213.80703160700068,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-i3zvbeci/jcode-r1-remote.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/jcode-r1-remote-9cf4860c",
+   "run_id": "cold-three-e85f70e72d074e5ba98471a7834c48ea",
+   "namespace": "cold-67f3398ef8df49e38d5f",
+   "binary": "jcode v1.0.3-dev (unknown)",
+   "errors": [],
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "real_rustc": "/home/ubuntu/.justrust/toolchains/managed/staged/jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77/bin/rustc",
+   "units_compiled": 699,
+   "depcache_hits": 565,
+   "depcache_misses": 40,
+   "prebuilt_hits": 565,
+   "localcache_hits": 0,
+   "remote_phases": {
+    "sync_ms": 72278.434179,
+    "prepare_ms": 6.54411,
+    "execute_ms": 131607.885105,
+    "finalize_ms": 0.00101,
+    "records_ms": 21.685609000000003
+   },
+   "host_wall": 131.3868763446808,
+   "superseded": "hosted client <0.1.20 sized jobs from ballooned MemTotal (r2 ran CARGO_BUILD_JOBS=2)"
+  },
+  {
+   "repo": "jcode",
+   "stack": "remote",
+   "tag": "r2",
+   "wall": 9.42284721499891,
+   "exit": 1,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-i3zvbeci/jcode-r2-remote.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/jcode-r2-remote-f831f82e",
+   "run_id": "cold-three-706dfcdff6cd42699487725b3d5292c3",
+   "namespace": "cold-b1747c9ff60d4b4abe47",
+   "binary": "missing jcode",
+   "errors": [
+    "exit 1",
+    "binary not usable here: missing jcode",
+    "no run record: [Errno 2] No such file or directory: '/home/jeremy/.justrust/runs/cold-three-706dfcdff6cd42699487725b3d5292c3/summary.json'"
+   ]
+  },
+  {
+   "repo": "jcode",
+   "stack": "remote",
+   "tag": "r1",
+   "wall": 7.839005960002396,
+   "exit": 1,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-izesuhu8/jcode-r1-remote.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/jcode-r1-remote-d9f7f1ab",
+   "run_id": "cold-three-555627610c61475caf38932e2fb1cf03",
+   "namespace": "cold-f0180ddec5504772b2d7",
+   "binary": "missing jcode",
+   "errors": [
+    "exit 1",
+    "binary not usable here: missing jcode",
+    "no run record: [Errno 2] No such file or directory: '/home/jeremy/.justrust/runs/cold-three-555627610c61475caf38932e2fb1cf03/summary.json'"
+   ]
+  },
+  {
+   "repo": "jcode",
+   "stack": "remote",
+   "tag": "r2",
+   "wall": 584.130863639999,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-izesuhu8/jcode-r2-remote.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/jcode-r2-remote-de3f8391",
+   "run_id": "cold-three-65937788db5a44a2a567a8b2dde81545",
+   "namespace": "cold-1de728169bb84ab7ac50",
+   "binary": "jcode v1.0.3-dev (unknown)",
+   "errors": [],
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "real_rustc": "/home/ubuntu/.justrust/toolchains/managed/staged/jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77/bin/rustc",
+   "units_compiled": 699,
+   "depcache_hits": 565,
+   "depcache_misses": 40,
+   "prebuilt_hits": 565,
+   "localcache_hits": 0,
+   "remote_phases": {
+    "sync_ms": 8048.217636,
+    "prepare_ms": 6.67247,
+    "execute_ms": 565550.65087,
+    "finalize_ms": 0.00106,
+    "records_ms": 24.851789
+   },
+   "host_wall": 565.1327402591705,
+   "superseded": "hosted client <0.1.20 sized jobs from ballooned MemTotal (r2 ran CARGO_BUILD_JOBS=2)"
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "remote",
+   "tag": "r1",
+   "wall": 10.144431666001765,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-izesuhu8/ripgrep-r1-remote.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/ripgrep-r1-remote-5041ad69",
+   "run_id": "cold-three-4e69475b42734d86a13cef6ddb8ccbb5",
+   "namespace": "cold-9e608f7a61df490abfed",
+   "binary": "ripgrep 15.2.0",
+   "errors": [],
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "real_rustc": "/home/ubuntu/.justrust/toolchains/managed/staged/jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77/bin/rustc",
+   "units_compiled": 44,
+   "depcache_hits": 34,
+   "depcache_misses": 0,
+   "prebuilt_hits": 34,
+   "localcache_hits": 0,
+   "remote_phases": {
+    "sync_ms": 1204.358485,
+    "prepare_ms": 6.511,
+    "execute_ms": 7412.645218,
+    "finalize_ms": 0.00148,
+    "records_ms": 1.09084
+   },
+   "host_wall": 7.387932300567627
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "remote",
+   "tag": "r2",
+   "wall": 6.717109705001349,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-izesuhu8/ripgrep-r2-remote.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/ripgrep-r2-remote-cbd05987",
+   "run_id": "cold-three-9336bddc4ccd42d6a27617f9d231e529",
+   "namespace": "cold-5b12d64cd6224693b94e",
+   "binary": "ripgrep 15.2.0",
+   "errors": [],
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "real_rustc": "/home/ubuntu/.justrust/toolchains/managed/staged/jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77/bin/rustc",
+   "units_compiled": 44,
+   "depcache_hits": 34,
+   "depcache_misses": 0,
+   "prebuilt_hits": 34,
+   "localcache_hits": 0,
+   "remote_phases": {
+    "sync_ms": 1205.927043,
+    "prepare_ms": 6.570880000000001,
+    "execute_ms": 3816.677672,
+    "finalize_ms": 0.0015999999999999999,
+    "records_ms": 0.9675499999999999
+   },
+   "host_wall": 3.792314291000366
+  },
+  {
+   "repo": "jcode",
+   "stack": "remote",
+   "tag": "r1",
+   "wall": 146.31209886599754,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-o1i_y3xe/jcode-r1-remote.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/jcode-r1-remote-670989a2",
+   "run_id": "cold-three-99ded8bc77fd409c9f279c1b1cfef3a8",
+   "namespace": "cold-ae27499200214bb3b7f8",
+   "binary": "jcode v1.0.3-dev (unknown)",
+   "power": {
+    "ac": false,
+    "battery": "Discharging",
+    "epp": "balance_power",
+    "governor": "powersave",
+    "platform_profile": "balanced"
+   },
+   "errors": [],
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "real_rustc": "/home/ubuntu/.justrust/toolchains/managed/staged/jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77/bin/rustc",
+   "units_compiled": 699,
+   "depcache_hits": 565,
+   "depcache_misses": 40,
+   "prebuilt_hits": 565,
+   "localcache_hits": 0,
+   "remote_phases": {
+    "sync_ms": 15678.768409,
+    "prepare_ms": 6.62949,
+    "execute_ms": 121220.697164,
+    "finalize_ms": 0.00363,
+    "records_ms": 22.787399
+   },
+   "host_wall": 121.1194429397583
+  },
+  {
+   "repo": "jcode",
+   "stack": "remote",
+   "tag": "r2",
+   "wall": 127.90144453299945,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-o1i_y3xe/jcode-r2-remote.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/jcode-r2-remote-bbba28ec",
+   "run_id": "cold-three-d0f6d1ecb05548cdb4117346389ef79e",
+   "namespace": "cold-b17eea6535064a78a30f",
+   "binary": "jcode v1.0.3-dev (unknown)",
+   "power": {
+    "ac": false,
+    "battery": "Discharging",
+    "epp": "balance_power",
+    "governor": "powersave",
+    "platform_profile": "balanced"
+   },
+   "errors": [],
+   "machine": "hosted",
+   "toolchain": "jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77",
+   "real_rustc": "/home/ubuntu/.justrust/toolchains/managed/staged/jr-af1ccf355620fb93ddfbcb48b4f9348160cf2e77/bin/rustc",
+   "units_compiled": 699,
+   "depcache_hits": 565,
+   "depcache_misses": 40,
+   "prebuilt_hits": 565,
+   "localcache_hits": 0,
+   "remote_phases": {
+    "sync_ms": 12452.608847000001,
+    "prepare_ms": 6.74145,
+    "execute_ms": 106579.084397,
+    "finalize_ms": 0.00132,
+    "records_ms": 20.995559
+   },
+   "host_wall": 106.47977113723755
+  },
+  {
+   "repo": "uv",
+   "stack": "remote",
+   "tag": "r1",
+   "wall": 411.19682238599853,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-o1i_y3xe/uv-r1-remote.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/uv-r1-remote-536bb9be",
+   "run_id": "cold-three-4ea11e77afaf49cdaeb039db23909375",
+   "namespace": "cold-e043801d727b49f2b1c4",
+   "binary": "uv 0.13.9 (x86_64-unknown-linux-gnu)",
+   "power": {
+    "ac": false,
+    "battery": "Discharging",
+    "epp": "balance_power",
+    "governor": "powersave",
+    "platform_profile": "balanced"
+   },
+   "errors": [],
+   "machine": "hosted",
+   "toolchain": null,
+   "real_rustc": "/home/ubuntu/.cargo/bin/rustc",
+   "units_compiled": 600,
+   "depcache_hits": 479,
+   "depcache_misses": 29,
+   "prebuilt_hits": 479,
+   "localcache_hits": 0,
+   "remote_phases": {
+    "sync_ms": 3047.296813,
+    "prepare_ms": 6.471710000000001,
+    "execute_ms": 367585.09693,
+    "finalize_ms": 0.0012300000000000002,
+    "records_ms": 22.003688
+   },
+   "host_wall": 367.5387260913849
+  },
+  {
+   "repo": "uv",
+   "stack": "remote",
+   "tag": "r2",
+   "wall": 355.250983173999,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-o1i_y3xe/uv-r2-remote.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/uv-r2-remote-b78ef3f7",
+   "run_id": "cold-three-44f0bc05597b44deb34031f0c24d0335",
+   "namespace": "cold-5a2a0219a4a54ad79a18",
+   "binary": "uv 0.13.9 (x86_64-unknown-linux-gnu)",
+   "power": {
+    "ac": false,
+    "battery": "Discharging",
+    "epp": "balance_power",
+    "governor": "powersave",
+    "platform_profile": "balanced"
+   },
+   "errors": [],
+   "machine": "hosted",
+   "toolchain": null,
+   "real_rustc": "/home/ubuntu/.cargo/bin/rustc",
+   "units_compiled": 600,
+   "depcache_hits": 479,
+   "depcache_misses": 29,
+   "prebuilt_hits": 479,
+   "localcache_hits": 0,
+   "remote_phases": {
+    "sync_ms": 2599.463476,
+    "prepare_ms": 7.236889,
+    "execute_ms": 347265.472692,
+    "finalize_ms": 0.00081,
+    "records_ms": 16.083019
+   },
+   "host_wall": 347.2241961956024
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "stock",
+   "tag": "r1",
+   "wall": 8.934050150000985,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-sorshkzi/ripgrep-r1-stock.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/ripgrep-r1-stock-489b3b93",
+   "run_id": null,
+   "namespace": null,
+   "binary": "ripgrep 15.2.0",
+   "power": {
+    "ac": false,
+    "battery": "Discharging",
+    "epp": "performance",
+    "governor": "powersave",
+    "platform_profile": "balanced"
+   },
+   "errors": []
+  },
+  {
+   "repo": "ripgrep",
+   "stack": "stock",
+   "tag": "r2",
+   "wall": 10.550419890998455,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-sorshkzi/ripgrep-r2-stock.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/ripgrep-r2-stock-75128e5a",
+   "run_id": null,
+   "namespace": null,
+   "binary": "ripgrep 15.2.0",
+   "power": {
+    "ac": false,
+    "battery": "Discharging",
+    "epp": "performance",
+    "governor": "powersave",
+    "platform_profile": "balanced"
+   },
+   "errors": []
+  },
+  {
+   "repo": "jcode",
+   "stack": "stock",
+   "tag": "r1",
+   "wall": 535.3718542589995,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-2lyalzg4/jcode-r1-stock.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/jcode-r1-stock-75a6c4cd",
+   "run_id": null,
+   "namespace": null,
+   "binary": "jcode v1.0.3-dev (unknown, dirty)",
+   "power": {
+    "ac": false,
+    "battery": "Discharging",
+    "epp": "performance",
+    "governor": "powersave",
+    "platform_profile": "balanced"
+   },
+   "errors": []
+  },
+  {
+   "repo": "uv",
+   "stack": "stock",
+   "tag": "r1",
+   "wall": 551.5029017150009,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-2lyalzg4/uv-r1-stock.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/uv-r1-stock-96e65388",
+   "run_id": null,
+   "namespace": null,
+   "binary": "uv 0.13.9 (x86_64-unknown-linux-gnu)",
+   "power": {
+    "ac": false,
+    "battery": "Discharging",
+    "epp": "performance",
+    "governor": "powersave",
+    "platform_profile": "balanced"
+   },
+   "errors": []
+  },
+  {
+   "repo": "uv",
+   "stack": "stock",
+   "tag": "r2",
+   "wall": 547.172865212,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-njnpwza4/uv-r1-stock.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/uv-r1-stock-47e68620",
+   "run_id": null,
+   "namespace": null,
+   "binary": "uv 0.13.9 (x86_64-unknown-linux-gnu)",
+   "power": {
+    "ac": false,
+    "battery": "Discharging",
+    "epp": "performance",
+    "governor": "powersave",
+    "platform_profile": "balanced"
+   },
+   "errors": []
+  },
+  {
+   "repo": "jcode",
+   "stack": "stock",
+   "tag": "r2",
+   "wall": 542.5534283859997,
+   "exit": 0,
+   "log": "/home/jeremy/.jcode/scratch/cold-three/logs-njnpwza4/jcode-r1-stock.log",
+   "checkout": "/home/jeremy/.jcode/scratch/cold-three/runs/jcode-r1-stock-95cf4d80",
+   "run_id": null,
+   "namespace": null,
+   "binary": "jcode v1.0.3-dev (unknown, dirty)",
+   "power": {
+    "ac": false,
+    "battery": "Discharging",
+    "epp": "performance",
+    "governor": "powersave",
+    "platform_profile": "balanced"
+   },
+   "errors": []
+  }
+ ],
+ "summary": {
+  "jcode": {
+   "stock": {
+    "n": 2,
+    "failed": 0,
+    "superseded": 2,
+    "median": 538.9626413224996,
+    "min": 535.3718542589995,
+    "max": 542.5534283859997
+   },
+   "remote": {
+    "n": 2,
+    "failed": 2,
+    "superseded": 2,
+    "median": 137.1067716994985,
+    "min": 127.90144453299945,
+    "max": 146.31209886599754,
+    "prebuilt_hits": [
+     565,
+     565
+    ],
+    "depcache_misses": [
+     40,
+     40
+    ]
+   }
+  },
+  "ripgrep": {
+   "stock": {
+    "n": 2,
+    "failed": 0,
+    "superseded": 2,
+    "median": 9.74223502049972,
+    "min": 8.934050150000985,
+    "max": 10.550419890998455
+   },
+   "remote": {
+    "n": 2,
+    "failed": 0,
+    "superseded": 0,
+    "median": 8.430770685501557,
+    "min": 6.717109705001349,
+    "max": 10.144431666001765,
+    "prebuilt_hits": [
+     34,
+     34
+    ],
+    "depcache_misses": [
+     0,
+     0
+    ]
+   }
+  },
+  "uv": {
+   "stock": {
+    "n": 2,
+    "failed": 0,
+    "superseded": 2,
+    "median": 549.3378834635005,
+    "min": 547.172865212,
+    "max": 551.5029017150009
+   },
+   "remote": {
+    "n": 2,
+    "failed": 0,
+    "superseded": 0,
+    "median": 383.22390277999875,
+    "min": 355.250983173999,
+    "max": 411.19682238599853,
+    "prebuilt_hits": [
+     479,
+     479
+    ],
+    "depcache_misses": [
+     29,
+     29
+    ]
+   }
+  }
+ },
+ "finished": "20261121-042656",
+ "notes": [
+  "Laptop on battery throughout (no AC available); stock samples counted were run with EPP set to performance on all CPUs via sudo, RAPL 65 W.",
+  "Superseded samples are kept for audit and excluded from the summary."
+ ]
+}
