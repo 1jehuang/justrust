@@ -109,6 +109,8 @@ It uses the same credentials as `justrust login`, without operator access or a
 separate installation. Local history works while signed out or offline. Hosted
 refresh failures keep the last successful data visible with its age and error.
 
+The Runs card reports two independent percentages. **FRESH** is the share of observed Cargo units that Cargo skipped as up to date: fresh / (fresh + compiled). **CGU** is the share of measured codegen units reused by the compiler. A `check` or `clippy` run can skip most Cargo units without reporting any codegen units. A dash means there is no percentage to calculate, not 0%. Neither percentage measures wall time saved.
+
 The Runs card shows the toolchain and client recorded for each operation. Each is colored against its own service-selected release: green matches, amber is one or two patch or prerelease numbers behind, and red is further behind. Ahead or incomparable versions stay neutral. A dash means the value was not recorded, not that the run used the current version.
 
 Use **↑/↓** to select a run, **Enter** for details, **l** for the last 2,000 local
