@@ -1281,8 +1281,13 @@ fn warm_admit_body_ok(body: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .is_some_and(|v| {
+            let update_active = !v["update"].is_null()
+                && matches!(
+                    v["update"]["state"].as_str(),
+                    None | Some("announced" | "restarting")
+                );
             v["admission"] == "maintenance-v1"
-                && v["update"].is_null()
+                && !update_active
                 && crate::remote_hosted::Builds::from(&v["builds"]).is_some_and(|b| {
                     b.can_build
                         && (b.left() >= 2
@@ -4316,6 +4321,9 @@ cmp "$base/expected-lib" "$live/src/lib.rs"
         ));
         assert!(!warm_admit_body_ok(
             r#"{"admission":"maintenance-v1","update":null,"builds":{"can_build":false,"included":100,"included_used":0}}"#
+        ));
+        assert!(warm_admit_body_ok(
+            r#"{"admission":"maintenance-v1","update":{"id":"u0","state":"completed"},"builds":{"can_build":true,"included":100,"included_used":10}}"#
         ));
         assert!(!warm_admit_body_ok(
             r#"{"admission":"maintenance-v1","update":{"id":"u1","state":"announced"},"builds":{"can_build":true,"included":100,"included_used":0}}"#

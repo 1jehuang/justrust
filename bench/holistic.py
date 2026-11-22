@@ -527,7 +527,7 @@ def main() -> None:
         doc['samples'].extend(run_warm('warm-heavy', [
             ('warm-jcode-test', 'jcode', 'test', ['-p', 'jcode-tui', '--lib', 'jarvis_listen', '--locked'], True),
             ('warm-jcode-bin', 'jcode', 'check', ['-p', 'jcode', '--bin', 'jcode', '--locked'], False),
-            ('warm-jcode-suite', 'jcode', 'test', ['-p', 'jcode-tui', '--lib', '--locked'], True),
+            ('warm-jcode-clippy', 'jcode', 'clippy', ['-p', 'jcode-tui', '--lib', '--locked'], False),
         ], stacks, args.rounds))
         save()
     if 'swarm-4' in cats:
