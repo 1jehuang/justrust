@@ -413,12 +413,20 @@ mod linux {
     /// keeps the flock's fd, and with it the lock, for hours after the build
     /// that started it exited (a bench lock was held by `justrust __daemon`).
     pub fn close_inherited_fds(cmd: &mut std::process::Command) {
-        // SAFETY: close_range is async-signal-safe and touches only fds >= 3,
-        // which the child does not use (stdio is set up before pre_exec runs).
+        // SAFETY: close_range is async-signal-safe. CLOSE_RANGE_CLOEXEC marks
+        // fds >= 3 close-on-exec without closing Rust std's own CLOEXEC error
+        // pipe before execve; if execve fails, std still reports the errno
+        // cleanly instead of aborting on a closed error pipe. Fall back to
+        // immediate close only if the kernel rejects CLOSE_RANGE_CLOEXEC (pre-5.11).
+        const CLOSE_RANGE_CLOEXEC: u32 = 1 << 2;
         unsafe {
             use std::os::unix::process::CommandExt;
             cmd.pre_exec(|| {
-                libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32);
+                if libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, CLOSE_RANGE_CLOEXEC) != 0
+                    && *libc::__errno_location() == libc::EINVAL
+                {
+                    libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32);
+                }
                 Ok(())
             });
         }
@@ -1315,6 +1323,21 @@ mod tests {
         clean.wait().unwrap();
         let _ = std::fs::remove_file(&p);
         let _ = std::fs::remove_file(p.with_extension(""));
+    }
+
+    /// Regression test: `close_inherited_fds` must not close Rust std's own
+    /// internal exec-error pipe fd, otherwise a failed `execve` (e.g. ENOENT
+    /// after binary replacement) aborts the child with SIGABRT instead of
+    /// returning an `io::Error`.
+    #[cfg(unix)]
+    #[test]
+    fn close_inherited_fds_reports_exec_failure_cleanly() {
+        let mut c = std::process::Command::new("/nonexistent/justrust-close-range-test");
+        close_inherited_fds(&mut c);
+        let err = c
+            .spawn()
+            .expect_err("nonexistent binary must fail to spawn");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]

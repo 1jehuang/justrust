@@ -432,6 +432,43 @@ fn link_run(shared: Option<&str>) {
     }
 }
 
+fn live_exe() -> Result<PathBuf> {
+    let exe = std::env::current_exe().context("locating current justrust executable")?;
+    Ok(resolve_live_exe(&exe))
+}
+
+fn resolve_live_exe(exe: &Path) -> PathBuf {
+    // On Linux, /proc/self/exe appends " (deleted)" when the running binary is
+    // atomically replaced (e.g. during release activation or auto-update).
+    if let Some(s) = exe.to_str()
+        && let Some(stripped) = s.strip_suffix(" (deleted)")
+    {
+        let candidate = PathBuf::from(stripped);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    exe.to_path_buf()
+}
+
+fn current_exe_identity() -> Option<(PathBuf, (u64, u64))> {
+    let exe = std::env::current_exe().ok()?;
+    let md = std::fs::metadata(&exe).ok()?;
+    Some((exe, crate::sys::file_id(&md)))
+}
+
+fn exe_is_replaced(initial: Option<&(PathBuf, (u64, u64))>, current: Option<&Path>) -> bool {
+    if let Some(cur) = current
+        && cur.to_str().is_some_and(|s| s.ends_with(" (deleted)"))
+    {
+        return true;
+    }
+    if let Some((path, id)) = initial {
+        return !std::fs::metadata(path).is_ok_and(|m| crate::sys::file_id(&m) == *id);
+    }
+    false
+}
+
 fn spawn() -> Result<()> {
     let d = dir()?;
     std::fs::create_dir_all(&d)?;
@@ -439,7 +476,7 @@ fn spawn() -> Result<()> {
         .create(true)
         .append(true)
         .open(d.join("daemon.log"))?;
-    let mut c = Command::new(std::env::current_exe()?);
+    let mut c = Command::new(live_exe()?);
     c.arg(DAEMON_ARG)
         .current_dir("/")
         .stdin(Stdio::null())
@@ -844,7 +881,31 @@ struct Daemon {
     watched: Mutex<std::collections::HashSet<PathBuf>>,
     /// (path, dev, ino) of our socket: removed on exit only if still ours.
     sock: (PathBuf, (u64, u64)),
+    /// (path, dev, ino) of our executable at startup: detect atomic replacement.
+    exe: Option<(PathBuf, (u64, u64))>,
     draining: std::sync::atomic::AtomicBool,
+}
+
+impl Daemon {
+    fn exe_replaced(&self) -> bool {
+        let cur = std::env::current_exe().ok();
+        exe_is_replaced(self.exe.as_ref(), cur.as_deref())
+    }
+}
+
+fn drain_and_exit(dm: &Arc<Daemon>, reason: &str) {
+    if dm.draining.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    remove_sock(dm);
+    log(reason);
+    let dm = dm.clone();
+    std::thread::spawn(move || {
+        while !dm.state.lock().unwrap().builds.is_empty() {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        std::process::exit(0);
+    });
 }
 
 fn log(msg: &str) {
@@ -897,6 +958,7 @@ fn daemon() -> Result<()> {
         watcher,
         watched: Mutex::default(),
         sock: (sock, crate::sys::file_id(&md)),
+        exe: current_exe_identity(),
         draining: Default::default(),
     });
     {
@@ -966,17 +1028,8 @@ fn serve(dm: &Arc<Daemon>, mut s: UnixStream) -> Result<()> {
             Ok(())
         }
         b'S' => {
-            dm.draining.store(true, std::sync::atomic::Ordering::SeqCst);
-            remove_sock(dm);
             write_msg(&mut s, b'I', &serde_json::to_vec(&info(dm, false))?)?;
-            log("shutdown requested, draining");
-            let dm = dm.clone();
-            std::thread::spawn(move || {
-                while !dm.state.lock().unwrap().builds.is_empty() {
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                std::process::exit(0);
-            });
+            drain_and_exit(dm, "shutdown requested, draining");
             Ok(())
         }
         b'R' => {
@@ -985,16 +1038,15 @@ fn serve(dm: &Arc<Daemon>, mut s: UnixStream) -> Result<()> {
                 // Another justrust build: hand back and step aside, so the
                 // client's next request starts a daemon of its own build.
                 write_msg(&mut s, b'F', b"build daemon is another justrust build")?;
-                dm.draining.store(true, std::sync::atomic::Ordering::SeqCst);
-                remove_sock(dm);
-                log("replaced by another justrust build, draining");
-                let dm = dm.clone();
-                std::thread::spawn(move || {
-                    while !dm.state.lock().unwrap().builds.is_empty() {
-                        std::thread::sleep(Duration::from_millis(100));
-                    }
-                    std::process::exit(0);
-                });
+                drain_and_exit(dm, "replaced by another justrust build, draining");
+                return Ok(());
+            }
+            if dm.exe_replaced() {
+                // The binary on disk was replaced (e.g. atomic upgrade) while
+                // this daemon was running: step aside so the client starts a
+                // fresh daemon instead of this one trying to exec `(deleted)`.
+                write_msg(&mut s, b'F', b"build daemon binary was replaced on disk")?;
+                drain_and_exit(dm, "binary replaced on disk, draining");
                 return Ok(());
             }
             run(dm, req, s)
@@ -1361,7 +1413,7 @@ fn peer_closed(s: &UnixStream) -> bool {
 }
 
 fn start(req: &Request, stamp: Option<String>, cwd: &Path) -> Result<Arc<Build>> {
-    let mut c = Command::new(std::env::current_exe()?);
+    let mut c = Command::new(live_exe()?);
     c.args(&req.argv)
         .current_dir(cwd)
         .env_clear()
@@ -1691,6 +1743,10 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
         };
         dirty.clear();
         retry.clear();
+        if dm.draining.load(std::sync::atomic::Ordering::SeqCst) || dm.exe_replaced() {
+            drain_and_exit(dm, "binary replaced on disk, stopping prebuilds");
+            return;
+        }
         for (key, mut req, roots) in wanted {
             let cwd = PathBuf::from(&req.cwd);
             let (stamp, _) = source_stamp(&roots, &cwd, &req.env);
@@ -2146,6 +2202,7 @@ mod tests {
             watcher: None,
             watched: Mutex::default(),
             sock: (PathBuf::new(), (0, 0)),
+            exe: None,
             draining: std::sync::atomic::AtomicBool::new(false),
         };
         let mut b = fake_build();
@@ -2175,6 +2232,7 @@ mod tests {
             watcher: None,
             watched: Mutex::default(),
             sock: (PathBuf::new(), (0, 0)),
+            exe: None,
             draining: std::sync::atomic::AtomicBool::new(false),
         });
         let mut owner = fake_build();
@@ -2218,6 +2276,7 @@ mod tests {
             watcher: None,
             watched: Mutex::default(),
             sock: (PathBuf::new(), (0, 0)),
+            exe: None,
             draining: std::sync::atomic::AtomicBool::new(false),
         };
         let mut old = fake_build();
@@ -2242,6 +2301,7 @@ mod tests {
             watcher: None,
             watched: Mutex::default(),
             sock: (PathBuf::new(), (0, 0)),
+            exe: None,
             draining: std::sync::atomic::AtomicBool::new(false),
         };
         for (code, kept) in [(GUESS_DROPPED, false), (0, true), (101, true)] {
@@ -2438,5 +2498,36 @@ mod tests {
         let (s1, _) = source_stamp(&roots, &ws, &[]);
         assert_ne!(s1, s0);
         let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn exe_replacement_and_deleted_path_are_detected() {
+        let dir = std::env::temp_dir().join(format!("jr-buildd-exe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("justrust");
+        let next = dir.join("justrust.new");
+        std::fs::write(&bin, b"v1").unwrap();
+        let id = crate::sys::file_id(&std::fs::metadata(&bin).unwrap());
+        let initial = (bin.clone(), id);
+
+        assert!(!exe_is_replaced(Some(&initial), Some(&bin)));
+
+        // Linux /proc/self/exe appends " (deleted)" after atomic rename.
+        let deleted = PathBuf::from(format!("{} (deleted)", bin.display()));
+        assert!(exe_is_replaced(Some(&initial), Some(&deleted)));
+        assert_eq!(resolve_live_exe(&deleted), bin);
+
+        // Atomic replacement changes inode on disk even if current_exe isn't suffixed.
+        std::fs::write(&next, b"v2").unwrap();
+        std::fs::rename(&next, &bin).unwrap();
+        assert!(exe_is_replaced(Some(&initial), Some(&bin)));
+
+        // Unlinked executable with no replacement is also detected.
+        std::fs::remove_file(&bin).unwrap();
+        assert!(exe_is_replaced(Some(&initial), Some(&bin)));
+        assert_eq!(resolve_live_exe(&deleted), deleted);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

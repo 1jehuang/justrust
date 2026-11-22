@@ -517,6 +517,60 @@ const CP_REMOVE_DESTINATION: &str = if cfg!(target_os = "macos") {
     "--remove-destination"
 };
 
+/// Filesystems that structurally do not support copy-on-write reflinks.
+/// On these (e.g. hosted ext4 account disks, tmpfs), probing on every build
+/// wastes a probe and produces noisy warnings.
+#[cfg(target_os = "linux")]
+fn known_non_reflink_fs(dir: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(cpath) = CString::new(dir.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+    // SAFETY: cpath is a valid NUL-terminated path and stat is a valid writable struct.
+    if unsafe { libc::statfs(cpath.as_ptr(), &mut stat) } != 0 {
+        return false;
+    }
+    const EXT4_SUPER_MAGIC: i64 = 0xEF53;
+    const TMPFS_MAGIC: i64 = 0x0102_1994;
+    const RAMFS_MAGIC: i64 = 0x8584_58F6;
+    matches!(
+        stat.f_type as i64,
+        EXT4_SUPER_MAGIC | TMPFS_MAGIC | RAMFS_MAGIC
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn known_non_reflink_fs(_dir: &Path) -> bool {
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn reflink_supported(dir: &Path) -> bool {
+    use std::os::fd::AsRawFd;
+    if known_non_reflink_fs(dir) {
+        return false;
+    }
+    let a = dir.join(format!(".reflink-probe-{}", std::process::id()));
+    let b = dir.join(format!(".reflink-probe-{}.copy", std::process::id()));
+    // Linux FICLONE ioctl (`_IOW(0x94, 9, int)`): zero subprocess overhead.
+    const FICLONE: libc::Ioctl = 0x4004_9409;
+    let ok = std::fs::write(&a, b"probe").is_ok()
+        && File::open(&a)
+            .and_then(|src| {
+                let dst = File::create(&b)?;
+                // SAFETY: src and dst are valid open file descriptors on the same fs.
+                let rc = unsafe { libc::ioctl(dst.as_raw_fd(), FICLONE, src.as_raw_fd()) };
+                Ok(rc == 0)
+            })
+            .unwrap_or(false);
+    let _ = std::fs::remove_file(&a);
+    let _ = std::fs::remove_file(&b);
+    ok
+}
+
+#[cfg(not(target_os = "linux"))]
 fn reflink_supported(dir: &Path) -> bool {
     let a = dir.join(format!(".reflink-probe-{}", std::process::id()));
     let b = dir.join(format!(".reflink-probe-{}.copy", std::process::id()));
@@ -1243,10 +1297,19 @@ fn reflink_available(
 
 /// Choose and lock a slot for this run. None means "run exactly as before".
 pub fn acquire(args: &[OsString]) -> Option<Slot> {
-    acquire_with_probe(args, reflink_supported)
+    acquire_with_probe_and_fs(args, reflink_supported, known_non_reflink_fs)
 }
 
+#[cfg(test)]
 fn acquire_with_probe(args: &[OsString], probe: impl FnOnce(&Path) -> bool) -> Option<Slot> {
+    acquire_with_probe_and_fs(args, probe, |_| false)
+}
+
+fn acquire_with_probe_and_fs(
+    args: &[OsString],
+    probe: impl FnOnce(&Path) -> bool,
+    non_reflink_fs: impl FnOnce(&Path) -> bool,
+) -> Option<Slot> {
     if !eligible(args) {
         return None;
     }
@@ -1260,7 +1323,11 @@ fn acquire_with_probe(args: &[OsString], probe: impl FnOnce(&Path) -> bool) -> O
     }
     let root = target.join("justrust-slots");
     std::fs::create_dir_all(&root).ok()?;
-    let can_seed = reflink_available(&root, probe, &mut std::io::stderr().lock());
+    let can_seed = if non_reflink_fs(&root) {
+        false
+    } else {
+        reflink_available(&root, probe, &mut std::io::stderr().lock())
+    };
     let shared_idle = !can_seed && snapshot_guard(&shared_profile).is_some();
 
     let cap = capacity();
@@ -2697,5 +2764,45 @@ mod tests {
             i.report_line(),
             "slot 1 (sticky) /w/s/1, 12 newer units from shared in 0.4s"
         );
+    }
+
+    #[test]
+    fn known_non_reflink_fs_skips_probe_without_warning() {
+        let dir = std::env::temp_dir().join(format!("jr-slot-nonreflink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let target = dir.join("target");
+        std::fs::create_dir_all(target.join("debug/deps")).unwrap();
+        std::fs::write(target.join("debug/deps/liba-1111111111111111.rlib"), b"x").unwrap();
+
+        let _prev = std::env::var_os("CARGO_TARGET_DIR");
+        let args = [
+            OsString::from("check"),
+            OsString::from("--manifest-path"),
+            dir.join("Cargo.toml").into_os_string(),
+        ];
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let mut probed = false;
+        let slot = acquire_with_probe_and_fs(
+            &args,
+            |_| {
+                probed = true;
+                false
+            },
+            |_| true,
+        );
+        // Uncontended shared profile on a known non-reflink fs keeps shared dir
+        // without calling the probe or printing a probe failure diagnostic.
+        assert!(
+            !probed,
+            "known non-reflink fs must not invoke reflink probe"
+        );
+        assert!(slot.is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
