@@ -459,6 +459,10 @@ struct Root {
     needs_full_sync: bool,
     /// Evidence that survives a reconnect (`remote_checkpoint`).
     mark: remote_checkpoint::Mark,
+    /// `(link_ptr, watcher_event_gen)` recorded when a scan + push completed
+    /// with all directories already watched and no inotify events since.
+    /// Allows `push_root` to skip rescanning large trees while the watcher is quiet.
+    clean_event_gen: Option<(usize, u64)>,
 }
 
 impl Root {
@@ -551,6 +555,7 @@ impl Sync {
         self.receipt = None;
         if let Some(r) = self.roots.get_mut(root) {
             r.needs_full_sync = true;
+            r.clean_event_gen = None;
         }
     }
 
@@ -562,6 +567,7 @@ impl Sync {
                 return false;
             }
             root.needs_full_sync = true;
+            root.clean_event_gen = None;
             true
         });
     }
@@ -929,6 +935,7 @@ fn push_loop(d: &Daemon, rx: Receiver<PathBuf>) {
             let mut retried = false;
             loop {
                 // Only discovery is speculative. No mirror operation runs unlocked.
+                let event_gen = d.watcher.event_count();
                 let total = Instant::now();
                 let scan = remote_sync::scan(&r);
                 let scanned = total.elapsed();
@@ -960,7 +967,9 @@ fn push_loop(d: &Daemon, rx: Receiver<PathBuf>) {
                         .as_ref()
                         .is_some_and(|link| Arc::ptr_eq(link, &observed_link))
                 {
-                    scan.and_then(|scan| push_scanned(d, &mut st, &r, scan, total, scanned))
+                    scan.and_then(|scan| {
+                        push_scanned(d, &mut st, &r, scan, total, scanned, event_gen)
+                    })
                 } else {
                     // Never compare an older scan to a newer foreground manifest.
                     epoch = d.sync.foreground_epoch();
@@ -1503,11 +1512,12 @@ fn update_root_info(d: &Daemon, st: &Sync) {
 }
 
 /// Watch every directory that holds a mirrored file (new ones included).
-fn refresh_watches(d: &Daemon, root: &Path, dirs: &std::collections::BTreeSet<PathBuf>) {
+fn refresh_watches(d: &Daemon, root: &Path, dirs: &std::collections::BTreeSet<PathBuf>) -> usize {
     let n = d.watcher.watch_all(dirs);
     if n > 0 {
         log(&format!("watching {n} more dirs under {}", root.display()));
     }
+    n
 }
 
 /// Roots this client ever mirrored to `dest` (`mirrored.json`), so a new
@@ -1608,6 +1618,7 @@ fn mirror_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<us
                         oversized,
                         needs_full_sync: false,
                         mark: Default::default(),
+                        clean_event_gen: None,
                     },
                 );
                 remember_root(st.backend.kind(), root);
@@ -1867,6 +1878,7 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
                 hashes,
                 ..Default::default()
             },
+            clean_event_gen: None,
         },
     );
     checkpoint(st, link, root, true)?;
@@ -1923,9 +1935,20 @@ fn snapshot_hashes(
 
 /// Push every difference between `root` and its manifest. Returns files sent.
 fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
+    if let Some(link) = st.link.as_ref()
+        && let Some(r) = st.roots.get(root)
+        && !r.pending_repair
+        && !r.needs_full_sync
+        && let Some((link_ptr, event_gen)) = r.clean_event_gen
+        && link_ptr == Arc::as_ptr(link) as usize
+        && d.watcher.is_quiet_since(event_gen)
+    {
+        return Ok(0);
+    }
+    let event_gen = d.watcher.event_count();
     let total = Instant::now();
     let scan = remote_sync::scan(root)?;
-    push_scanned(d, st, root, scan, total, total.elapsed())
+    push_scanned(d, st, root, scan, total, total.elapsed(), event_gen)
 }
 
 fn push_scanned(
@@ -1935,6 +1958,7 @@ fn push_scanned(
     scan: remote_sync::Scan,
     total: Instant,
     scanned: Duration,
+    event_gen: u64,
 ) -> Result<usize> {
     let diff_started = Instant::now();
     let mut new = scan.files;
@@ -2045,7 +2069,7 @@ fn push_scanned(
     let sent = total.elapsed();
     let tracked = st.roots.get_mut(root).context("unknown root")?;
     let dirs = tracked.watch_directories(root, &new, &diff);
-    refresh_watches(d, root, dirs);
+    let added_watches = refresh_watches(d, root, dirs);
     if total.elapsed() >= Duration::from_secs(1) {
         log(&format!(
             "source push {}: total {:.3}s, scan {:.3}s ({} files, {} oversized), diff {:.3}s, transfer {:.3}s ({} changed, {} deleted), watches {:.3}s",
@@ -2068,6 +2092,14 @@ fn push_scanned(
     }
     // `Synced` after a bulk rsync dropped the agent's checkpoint.
     checkpoint(st, &link, root, bulk)?;
+    if let Some(r) = st.roots.get_mut(root) {
+        r.clean_event_gen =
+            if !pending_repair && added_watches == 0 && d.watcher.is_quiet_since(event_gen) {
+                Some((Arc::as_ptr(&link) as usize, event_gen))
+            } else {
+                None
+            };
+    }
     update_root_info(d, st);
     d.set_info(|i| i.pushed += n as u64);
     Ok(n)
@@ -3230,6 +3262,7 @@ mod tests {
             oversized: Vec::new(),
             needs_full_sync: false,
             mark: Default::default(),
+            clean_event_gen: None,
         };
         let diff = remote_sync::Diff::default();
         for iteration in 0..5 {
@@ -3259,6 +3292,7 @@ mod tests {
             oversized: Vec::new(),
             needs_full_sync: false,
             mark: Default::default(),
+            clean_event_gen: None,
         };
         for paths in [
             vec!["src/lib.rs"],
@@ -3300,6 +3334,7 @@ mod tests {
             oversized: Vec::new(),
             needs_full_sync: false,
             mark: Default::default(),
+            clean_event_gen: None,
         };
         let (tx, _rx) = channel();
         let watcher = Watcher::new(tx).unwrap();
@@ -3357,6 +3392,7 @@ mod tests {
                                 oversized: vec![],
                                 needs_full_sync: false,
                                 mark: Default::default(),
+                                clean_event_gen: None,
                             },
                         )
                     })
@@ -3421,6 +3457,7 @@ mod tests {
             oversized: Vec::new(),
             needs_full_sync: false,
             mark: Default::default(),
+            clean_event_gen: None,
         };
         let mut child = Command::new("cat")
             .stdin(Stdio::piped())
@@ -3553,6 +3590,7 @@ mod tests {
             oversized: Vec::new(),
             needs_full_sync: false,
             mark: Default::default(),
+            clean_event_gen: None,
         };
         let d = Daemon {
             status_hint: None,
@@ -3759,6 +3797,7 @@ mod tests {
             oversized: Vec::new(),
             needs_full_sync: false,
             mark: Default::default(),
+            clean_event_gen: None,
         };
         let other = base.join("unrelated");
         let d = Daemon {
@@ -3833,6 +3872,7 @@ mod tests {
             oversized: Vec::new(),
             needs_full_sync: false,
             mark: Default::default(),
+            clean_event_gen: None,
         };
         let mut sync = Sync {
             install_retry: Default::default(),
@@ -3923,6 +3963,7 @@ mod tests {
             oversized: Vec::new(),
             needs_full_sync: false,
             mark: Default::default(),
+            clean_event_gen: None,
         };
         let mut sync = Sync {
             install_retry: Default::default(),
