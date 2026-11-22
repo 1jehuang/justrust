@@ -115,8 +115,8 @@ class ReleaseOrderTests(unittest.TestCase):
 
     def test_published_bootstrap_replaces_cold_source_install(self):
         build = self.job("build")
-        self.assertIn("HOSTED_CLIENT_TAG: v0.1.0-alpha.28", self.workflow)
-        self.assertIn("c08dcefdb2bfcfbc69676a1d077526501e07907ca43152f9193916d5c4989581", self.workflow)
+        self.assertIn("HOSTED_CLIENT_TAG: v0.1.26", self.workflow)
+        self.assertIn("d9de0d20432364f72d5839b0ffbe8ecf46c98e28e046b6316dc4b1bf128488c1", self.workflow)
         self.assertIn('ci/install-published-client.py --tag "$HOSTED_CLIENT_TAG" --sha256 "$HOSTED_CLIENT_SHA256" --github-path', build)
         self.assertNotIn("install-hosted-client.sh", build)
         self.assertIn("Cache compatibility release dependencies", build)

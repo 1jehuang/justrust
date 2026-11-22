@@ -23,10 +23,10 @@ env:
   # (src/update.rs). Source builds never do.
   JUSTRUST_RELEASE_BUILD: "1"
   # Immutable bootstrap client with fail-closed hosted routing support.
-  HOSTED_CLIENT_REV: c026ee88f391bcf74239efbc061bcca43640c17f
+  HOSTED_CLIENT_REV: 616de6552f08a9c40a5d0a79b3d0f510ce80ff46
   # Download the reviewed published bootstrap instead of compiling it per job.
-  HOSTED_CLIENT_TAG: v0.1.0-alpha.28
-  HOSTED_CLIENT_SHA256: c08dcefdb2bfcfbc69676a1d077526501e07907ca43152f9193916d5c4989581
+  HOSTED_CLIENT_TAG: v0.1.26
+  HOSTED_CLIENT_SHA256: d9de0d20432364f72d5839b0ffbe8ecf46c98e28e046b6316dc4b1bf128488c1
   # Small, fast release binaries without editing Cargo.toml.
   DIST_FLAGS: >-
     --config profile.release.lto="thin"
