@@ -1003,47 +1003,6 @@ pub(crate) fn hosted_hybrid_env(
     Ok(mapped)
 }
 
-#[cfg(target_os = "linux")]
-fn valid_canonical_repo(repo: &str) -> bool {
-    !repo.is_empty()
-        && repo.len() <= 120
-        && !repo.contains("..")
-        && repo
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-}
-
-#[cfg(target_os = "linux")]
-fn unshare_bind_available() -> bool {
-    static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *OK.get_or_init(|| {
-        if std::env::var("JUSTRUST_CANONICAL_WS").as_deref() == Ok("0") {
-            return false;
-        }
-        if !Path::new("/usr/bin/unshare").is_file() {
-            return false;
-        }
-        Command::new("/usr/bin/unshare")
-            .args(["-rm", "--", "true"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn canonical_mountpoint(cwd: &Path, env: &[(String, String)]) -> Option<PathBuf> {
-    let (_, repo) = env.iter().find(|(k, _)| k == "JUSTRUST_CANONICAL_REPO")?;
-    if !valid_canonical_repo(repo) || !cwd.is_dir() || !unshare_bind_available() {
-        return None;
-    }
-    let mp = crate::paths::home().ok()?.join("ws").join(repo);
-    std::fs::create_dir_all(&mp).ok()?;
-    Some(mp)
-}
-
 fn prebuilt_proxy_url() -> Option<&'static str> {
     static URL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     URL.get_or_init(|| {
@@ -1072,45 +1031,20 @@ fn start_run(
     if hybrid.is_empty() && env.iter().any(|(key, _)| key == "JUSTRUST_HOSTED_HYBRID") {
         send(out, &Msg::Out { id, stream: 2 }, b"justrust remote: hosted hybrid Cargo fallback (native artifact delivery unsupported for this request)\n");
     }
-    #[cfg(target_os = "linux")]
-    let canonical_mp = canonical_mountpoint(cwd, env);
-    #[cfg(not(target_os = "linux"))]
-    let canonical_mp: Option<PathBuf> = None;
-
-    let mut c = if let Some(mp) = &canonical_mp {
-        let mut cmd = Command::new("/usr/bin/unshare");
-        cmd.args([
-            "-rm",
-            "--",
-            "sh",
-            "-c",
-            "mount --bind \"$1\" \"$2\" && cd \"$2\" && shift 2 && exec \"$@\"",
-            "justrust-ws",
-        ])
-        .arg(cwd)
-        .arg(mp)
-        .arg(executable)
-        .args(args)
-        .env("JUSTRUST_BUILDD", "0");
-        cmd
-    } else {
-        let mut cmd = Command::new(executable);
-        cmd.args(args).current_dir(cwd);
-        cmd
-    };
-    c.envs(env.iter().map(|(k, v)| (k, v)).filter(|(k, _)| {
-        *k != CLIENT_CARGO_HOME
-            && *k != crate::remote_proto::CLIENT_UMASK
-            && *k != crate::remote_proto::CLIENT_LIVE_CPU
-            && *k != "JUSTRUST_CANONICAL_REPO"
-    }))
-    .env_remove(crate::remote_proto::CLIENT_UMASK)
-    .env_remove(crate::remote_proto::CLIENT_LIVE_CPU)
-    .env_remove("JUSTRUST_CANONICAL_REPO")
-    .stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .detached();
+    let mut c = Command::new(executable);
+    c.args(args)
+        .current_dir(cwd)
+        .envs(env.iter().map(|(k, v)| (k, v)).filter(|(k, _)| {
+            *k != CLIENT_CARGO_HOME
+                && *k != crate::remote_proto::CLIENT_UMASK
+                && *k != crate::remote_proto::CLIENT_LIVE_CPU
+        }))
+        .env_remove(crate::remote_proto::CLIENT_UMASK)
+        .env_remove(crate::remote_proto::CLIENT_LIVE_CPU)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .detached();
     own_run_lifetime(&mut c);
     // Never allow inherited experiment state or detached prewarm to leak into
     // ordinary guest runs. Fallback re-execs keep ON_AGENT and remove HYBRID,
