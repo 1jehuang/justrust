@@ -298,7 +298,7 @@ pub fn sweep_runs(dir: &Path, max_age: Duration, keep_newest: usize, now: System
         return 0;
     }
     // Newest first so the top `keep_newest` are always spared.
-    entries.sort_by(|a, b| b.0.cmp(&a.0));
+    entries.sort_by_key(|a| std::cmp::Reverse(a.0));
     let mut removed = 0;
     for (_, path, m) in entries.into_iter().skip(keep_newest) {
         if older(&m, now, max_age) && std::fs::remove_dir_all(&path).is_ok() {
