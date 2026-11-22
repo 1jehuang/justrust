@@ -860,6 +860,9 @@ impl Mirror {
         ]);
         let dst = match &self.target {
             Some(t) => {
+                // Compress source transfers over WAN; Rust source compresses ~4x
+                // and cuts fresh-checkout sync times substantially.
+                c.arg("-z");
                 configure_rsync(&mut c, t);
                 rsync_destination(t, &format!("{remote}/"))
             }

@@ -1751,7 +1751,18 @@ fn run_remote_inner(
     mark("roots");
     crate::e2e::mark("remote_roots");
     diagnostic.stage = "remote_admission";
-    let pre_sync_handle = if admitted.is_none()
+    let overlap_admit = admitted.is_none()
+        && remote_backend::load() == Some(remote_backend::Backend::Hosted)
+        && !matches!(crate::remote_windows::selected(), Ok(true))
+        && std::env::var("JUSTRUST_HOSTED_OVERLAP_ADMIT").as_deref() != Ok("0")
+        && crate::remote_hosted::creds()
+            .ok()
+            .is_some_and(|c| c.warm_admit_ready());
+    let mut overlap_admit_rx: Option<
+        std::sync::mpsc::Receiver<Result<std::result::Result<bool, String>>>,
+    > = None;
+    let pre_sync_handle = if !overlap_admit
+        && admitted.is_none()
         && remote_backend::load() == Some(remote_backend::Backend::Hosted)
         && !matches!(crate::remote_windows::selected(), Ok(true))
     {
@@ -1763,11 +1774,24 @@ fn run_remote_inner(
         None
     };
     if admitted.is_none() {
-        let hosted = match charge_hosted(run_id, &label.join(" "), project.as_deref())? {
-            Ok(h) => h,
-            Err(m) => return infra(m),
-        };
-        *admitted = Some(HostedRun::new(hosted, run_id, total));
+        if overlap_admit {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let rid = run_id.to_owned();
+            let cmd = label.join(" ");
+            let proj = project.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(charge_hosted(&rid, &cmd, proj.as_deref()));
+            });
+            overlap_admit_rx = Some(rx);
+            mark("charged (overlapped)");
+            crate::e2e::mark("admitted");
+        } else {
+            let hosted = match charge_hosted(run_id, &label.join(" "), project.as_deref())? {
+                Ok(h) => h,
+                Err(m) => return infra(m),
+            };
+            *admitted = Some(HostedRun::new(hosted, run_id, total));
+        }
     }
     if let Some(h) = pre_sync_handle {
         let _ = h.join();
@@ -1775,8 +1799,8 @@ fn run_remote_inner(
     if cancel_signal::received().is_some() {
         return Err(RemoteCancelled.into());
     }
-    let hosted_run = admitted.as_mut().expect("run admitted above");
     if crate::remote_windows::selected()? {
+        let hosted_run = admitted.as_mut().expect("windows run admitted above");
         if remote_backend::load() != Some(remote_backend::Backend::Hosted) {
             return infra(format!(
                 "{CLIENT_SIDE}native Windows execution requires the hosted backend"
@@ -1818,8 +1842,10 @@ fn run_remote_inner(
             cancelled: false,
         }));
     }
-    mark("charged");
-    crate::e2e::mark("admitted");
+    if !overlap_admit {
+        mark("charged");
+        crate::e2e::mark("admitted");
+    }
     // Visible to `justrust status` (and the status bar) while it runs.
     let mut live = LiveRun::start(run_id, &cwd, &label, started_at);
     diagnostic.stage = "remote_transport";
@@ -1896,8 +1922,99 @@ fn run_remote_inner(
     let mut first_out = false;
     let mut run_files: Vec<u8> = Vec::new();
     let mut compile_stdout = CompileOutput::default();
+    let mut pending_out: Vec<(u8, Vec<u8>)> = Vec::new();
     let mut so = std::io::stdout();
     let mut se = std::io::stderr();
+    let emit_out = |stream: u8,
+                    data: &[u8],
+                    remote_prefix: &str,
+                    compile_only: bool,
+                    json_output: bool,
+                    compile_stdout: &mut CompileOutput,
+                    live: &mut LiveRun,
+                    so: &mut std::io::Stdout,
+                    se: &mut std::io::Stderr|
+     -> Result<()> {
+        let data: std::borrow::Cow<'_, [u8]> = if !remote_prefix.is_empty()
+            && let Ok(s) = std::str::from_utf8(data)
+        {
+            if s.contains(remote_prefix) {
+                std::borrow::Cow::Owned(s.replace(remote_prefix, "").into_bytes())
+            } else {
+                std::borrow::Cow::Borrowed(data)
+            }
+        } else {
+            std::borrow::Cow::Borrowed(data)
+        };
+        if stream == 1 {
+            // Selected tests are emitted only after their local files exist.
+            // Remote JSON contains host paths and cannot be passed through.
+            if !compile_only {
+                so.write_all(&data)?;
+                so.flush()?;
+            } else {
+                compile_stdout.push(&data, so, se, json_output)?;
+            }
+        } else {
+            live.stderr(&data);
+            se.write_all(&data)?;
+            se.flush()?;
+        }
+        Ok(())
+    };
+    macro_rules! settle_overlap_admit {
+        ($block:expr) => {{
+            if let Some(rx) = overlap_admit_rx.as_ref() {
+                let outcome = if $block {
+                    rx.recv().ok()
+                } else {
+                    match rx.try_recv() {
+                        Ok(v) => Some(v),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Ok(Err(
+                            "hosted admission thread exited unexpectedly".into(),
+                        ))),
+                    }
+                };
+                if let Some(res) = outcome {
+                    let _ = overlap_admit_rx.take();
+                    match res {
+                        Ok(Ok(hosted)) => {
+                            let mut hr = HostedRun::new(hosted, run_id, total);
+                            if sync.is_some() || submitted {
+                                hr.running();
+                            }
+                            *admitted = Some(hr);
+                            mark("admit settled");
+                            for (stream, data) in pending_out.drain(..) {
+                                emit_out(
+                                    stream,
+                                    &data,
+                                    &remote_prefix,
+                                    compile_only,
+                                    json_output,
+                                    &mut compile_stdout,
+                                    &mut live,
+                                    &mut so,
+                                    &mut se,
+                                )?;
+                            }
+                        }
+                        Ok(Err(m)) => {
+                            let _ = write_frame(&mut w, &Msg::Cancel { id: 0 }, &[]);
+                            pending_out.clear();
+                            return infra(m);
+                        }
+                        Err(e) => {
+                            let _ = write_frame(&mut w, &Msg::Cancel { id: 0 }, &[]);
+                            pending_out.clear();
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+        }};
+    }
     loop {
         let frame = match read_frame(&mut r) {
             Ok(Some(f)) => f,
@@ -1905,6 +2022,7 @@ fn run_remote_inner(
                 if cancel_signal::received().is_some() {
                     return Err(RemoteCancelled.into());
                 }
+                settle_overlap_admit!(true);
                 diagnostic.failure_kind = match &failure {
                     Ok(None) => "connection_closed",
                     Err(error) => {
@@ -1936,9 +2054,12 @@ fn run_remote_inner(
                 if may_have_started {
                     diagnostic.transport_phase = "remote_execution";
                     lifecycle.running();
-                    hosted_run.running();
+                    if let Some(hr) = admitted.as_mut() {
+                        hr.running();
+                    }
                 }
                 diagnostic.may_have_started |= may_have_started;
+                settle_overlap_admit!(false);
             }
             (
                 Msg::Flushed {
@@ -1963,12 +2084,15 @@ fn run_remote_inner(
                 sync_timing = timing;
                 if sync.is_none() {
                     lifecycle.running();
-                    hosted_run.running();
+                    if let Some(hr) = admitted.as_mut() {
+                        hr.running();
+                    }
                     live.phase("building", &machine);
                 }
                 sync = Some((files, ms, machine));
                 diagnostic.transport_phase = "remote_execution";
                 diagnostic.may_have_started = true;
+                settle_overlap_admit!(false);
             }
             (Msg::Out { stream, .. }, data) => {
                 if stream == crate::remote_proto::LIVE_CPU_STREAM {
@@ -1985,30 +2109,21 @@ fn run_remote_inner(
                     first_out = true;
                     mark("first output");
                 }
-                let data: std::borrow::Cow<'_, [u8]> = if !remote_prefix.is_empty()
-                    && let Ok(s) = std::str::from_utf8(&data)
-                {
-                    if s.contains(&remote_prefix) {
-                        std::borrow::Cow::Owned(s.replace(&remote_prefix, "").into_bytes())
-                    } else {
-                        std::borrow::Cow::Borrowed(&data)
-                    }
+                settle_overlap_admit!(false);
+                if admitted.is_some() {
+                    emit_out(
+                        stream,
+                        &data,
+                        &remote_prefix,
+                        compile_only,
+                        json_output,
+                        &mut compile_stdout,
+                        &mut live,
+                        &mut so,
+                        &mut se,
+                    )?;
                 } else {
-                    std::borrow::Cow::Borrowed(&data)
-                };
-                if stream == 1 {
-                    // Selected tests are emitted only after their local files exist.
-                    // Remote JSON contains host paths and cannot be passed through.
-                    if !compile_only {
-                        so.write_all(&data)?;
-                        so.flush()?;
-                    } else {
-                        compile_stdout.push(&data, &mut so, &mut se, json_output)?;
-                    }
-                } else {
-                    live.stderr(&data);
-                    se.write_all(&data)?;
-                    se.flush()?;
+                    pending_out.push((stream, data));
                 }
             }
             (Msg::RunFiles { .. }, data) => {
@@ -2016,6 +2131,7 @@ fn run_remote_inner(
                 run_files = data
             }
             (Msg::Exit { code, timing, .. }, summary) => {
+                settle_overlap_admit!(true);
                 diagnostic.exit = Some(code);
                 diagnostic.may_have_started = true;
                 mark("exit");
@@ -2025,7 +2141,9 @@ fn run_remote_inner(
                     .then(|| serde_json::from_slice::<crate::summary::Summary>(&summary).ok())
                     .flatten()
                     .and_then(|s| s.failure_wire());
-                hosted_run.finish("done", Some(code), failure.as_ref());
+                if let Some(hr) = admitted.as_mut() {
+                    hr.finish("done", Some(code), failure.as_ref());
+                }
                 if compile_only {
                     compile_stdout.finish(&mut so, &mut se, json_output)?;
                     // A prebuild only warms the machine's target dir: the
@@ -2122,12 +2240,15 @@ fn run_remote_inner(
             // A refusal is the answer, not an outage: a local build would
             // hide the instruction to update behind a different compiler.
             (Msg::Error { msg, .. }, _) if msg.contains(crate::toolchain_policy::REFUSED) => {
+                settle_overlap_admit!(true);
                 bail!("{msg}")
             }
             (Msg::Error { msg, .. }, _) if fallback_safe(sync.is_some(), submitted) => {
+                settle_overlap_admit!(true);
                 return infra(msg);
             }
             (Msg::Error { msg, .. }, _) => {
+                settle_overlap_admit!(true);
                 diagnostic.failure_kind = transport_failure_kind(&msg);
                 if msg.starts_with("connection to the remote machine was lost") {
                     return Err(RemoteConnectionLost.into());

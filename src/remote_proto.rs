@@ -441,6 +441,16 @@ pub enum Msg {
         files: usize,
         ms: f64,
     },
+    /// Client -> daemon: check whether the daemon holds a live link and a
+    /// recent clean hosted admission for this key, allowing overlapped warm
+    /// admission (admission still runs and gates all output and exit).
+    HostedWarmReady {
+        key_hash: String,
+    },
+    /// Daemon -> client: reply to `HostedWarmReady`.
+    HostedWarmReadyResp {
+        ready: bool,
+    },
 }
 
 pub fn write_frame<W: Write>(w: &mut W, msg: &Msg, payload: &[u8]) -> Result<()> {
@@ -717,5 +727,25 @@ mod tests {
     fn rejects_garbage() {
         let mut r = &b"\xff\xff\xff\xffnope"[..];
         assert!(read_frame(&mut r).is_err());
+    }
+
+    #[test]
+    fn hosted_warm_ready_round_trip() {
+        let mut buf = Vec::new();
+        write_frame(
+            &mut buf,
+            &Msg::HostedWarmReady {
+                key_hash: "abc123".into(),
+            },
+            &[],
+        )
+        .unwrap();
+        write_frame(&mut buf, &Msg::HostedWarmReadyResp { ready: true }, &[]).unwrap();
+        let mut cur = buf.as_slice();
+        let (req, p1) = read_frame(&mut cur).unwrap().unwrap();
+        let (resp, p2) = read_frame(&mut cur).unwrap().unwrap();
+        assert!(p1.is_empty() && p2.is_empty());
+        assert!(matches!(req, Msg::HostedWarmReady { key_hash } if key_hash == "abc123"));
+        assert!(matches!(resp, Msg::HostedWarmReadyResp { ready: true }));
     }
 }

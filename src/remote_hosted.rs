@@ -80,6 +80,18 @@ pub struct Creds {
     key: String,
 }
 
+impl Creds {
+    /// True only when these credentials use the default hosted endpoint and the
+    /// running daemon already holds a live link + recent clean admission for them.
+    pub(crate) fn warm_admit_ready(&self) -> bool {
+        self.base == DEFAULT_API_BASE
+            && self.build_base == DEFAULT_BUILD_BASE
+            && !self.key.is_empty()
+            && !crate::telemetry::curl_customized()
+            && crate::remote_daemon::hosted_warm_ready(&self.key)
+    }
+}
+
 impl std::fmt::Debug for Creds {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Creds")

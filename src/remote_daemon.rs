@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{BufReader, BufWriter, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -208,6 +208,44 @@ pub fn pre_sync(roots: &[PathBuf]) -> Result<(usize, f64)> {
         Some((Msg::PreSyncDone { files, ms }, _)) => Ok((files, ms)),
         other => bail!("unexpected pre-sync daemon reply: {other:?}"),
     }
+}
+
+/// Fast non-spawning check: true only when a matching daemon is already running
+/// with a live link and a recent clean hosted admission for `key`.
+pub fn hosted_warm_ready(key: &str) -> bool {
+    if key.is_empty() {
+        return false;
+    }
+    let Ok(sock_file) = sock_path() else {
+        return false;
+    };
+    let Ok(s) = UnixStream::connect(&sock_file) else {
+        return false;
+    };
+    let me = policy_identity(&build_id(), crate::remote_hosted::setting);
+    if !matches!(ping(&s), Ok(p) if p.build == me && p.connected) {
+        return false;
+    }
+    let Ok(w_stream) = s.try_clone() else {
+        return false;
+    };
+    let mut w = BufWriter::new(w_stream);
+    let mut r = BufReader::new(s);
+    if write_frame(
+        &mut w,
+        &Msg::HostedWarmReady {
+            key_hash: remote_checkpoint::digest(key.as_bytes()),
+        },
+        &[],
+    )
+    .is_err()
+    {
+        return false;
+    }
+    matches!(
+        read_frame(&mut r),
+        Ok(Some((Msg::HostedWarmReadyResp { ready: true }, _)))
+    )
 }
 
 pub fn connect() -> Result<UnixStream> {
@@ -654,6 +692,14 @@ struct PreSyncStamp {
     files: usize,
 }
 
+const WARM_ADMIT_TTL: Duration = Duration::from_secs(120);
+
+struct WarmAdmit {
+    key_hash: String,
+    link_ptr: usize,
+    at: Instant,
+}
+
 struct Daemon {
     sync: SyncQueue<Sync>,
     info: Mutex<Info>,
@@ -675,6 +721,10 @@ struct Daemon {
     hosted_agent: ureq::Agent,
     /// Roots recently scanned and pushed by `Msg::PreSync` during admission.
     pre_synced: Mutex<BTreeMap<PathBuf, PreSyncStamp>>,
+    /// Current live `Link` pointer (0 when disconnected), lock-free for fast readiness checks.
+    live_link_ptr: AtomicUsize,
+    /// Last clean `200 Charged` hosted admission with >=2 builds remaining on the live link.
+    warm_admit: Mutex<Option<WarmAdmit>>,
 }
 
 fn hosted_admit_agent() -> ureq::Agent {
@@ -852,6 +902,8 @@ fn daemon() -> Result<()> {
         peer_sock: Mutex::default(),
         hosted_agent: hosted_admit_agent(),
         pre_synced: Mutex::default(),
+        live_link_ptr: AtomicUsize::new(0),
+        warm_admit: Mutex::default(),
     });
     if peercache::enabled()
         && let Some(p) = peercache::sock_path()
@@ -1079,31 +1131,54 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
                             .limit(1024 * 1024)
                             .read_to_string()
                         {
-                            Ok(text) => Msg::HostedAdmitResp {
-                                code,
-                                body: text,
-                                server_timing,
-                                error: None,
-                                ms: t.elapsed().as_secs_f64() * 1000.0,
-                            },
-                            Err(e) => Msg::HostedAdmitResp {
-                                code: 0,
-                                body: String::new(),
-                                server_timing: None,
-                                error: Some(format!("hosted admission read failed: {e}")),
-                                ms: t.elapsed().as_secs_f64() * 1000.0,
-                            },
+                            Ok(text) => {
+                                record_warm_admit(d, &key, code, &text);
+                                Msg::HostedAdmitResp {
+                                    code,
+                                    body: text,
+                                    server_timing,
+                                    error: None,
+                                    ms: t.elapsed().as_secs_f64() * 1000.0,
+                                }
+                            }
+                            Err(e) => {
+                                *d.warm_admit.lock().unwrap() = None;
+                                Msg::HostedAdmitResp {
+                                    code: 0,
+                                    body: String::new(),
+                                    server_timing: None,
+                                    error: Some(format!("hosted admission read failed: {e}")),
+                                    ms: t.elapsed().as_secs_f64() * 1000.0,
+                                }
+                            }
                         }
                     }
-                    Err(e) => Msg::HostedAdmitResp {
-                        code: 0,
-                        body: String::new(),
-                        server_timing: None,
-                        error: Some(format!("hosted admission failed: {e}")),
-                        ms: t.elapsed().as_secs_f64() * 1000.0,
-                    },
+                    Err(e) => {
+                        *d.warm_admit.lock().unwrap() = None;
+                        Msg::HostedAdmitResp {
+                            code: 0,
+                            body: String::new(),
+                            server_timing: None,
+                            error: Some(format!("hosted admission failed: {e}")),
+                            ms: t.elapsed().as_secs_f64() * 1000.0,
+                        }
+                    }
                 };
                 write_frame(&mut w, &resp, &[])?;
+                return Ok(());
+            }
+            Msg::HostedWarmReady { key_hash } => {
+                let link_ptr = d.live_link_ptr.load(Ordering::SeqCst);
+                let connected = d.info.lock().is_ok_and(|i| i.connected);
+                let ready = !d.draining.load(Ordering::SeqCst)
+                    && connected
+                    && link_ptr != 0
+                    && d.warm_admit.lock().unwrap().as_ref().is_some_and(|wa| {
+                        wa.link_ptr == link_ptr
+                            && wa.key_hash == key_hash
+                            && wa.at.elapsed() < WARM_ADMIT_TTL
+                    });
+                write_frame(&mut w, &Msg::HostedWarmReadyResp { ready }, &[])?;
                 return Ok(());
             }
             Msg::PreSync { roots } => {
@@ -1199,8 +1274,35 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
     Ok(())
 }
 
+fn record_warm_admit(d: &Daemon, key: &str, code: u16, body: &str) {
+    let link_ptr = d.live_link_ptr.load(Ordering::SeqCst);
+    let ok = code == 200
+        && link_ptr != 0
+        && serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .is_some_and(|v| {
+                v["admission"] == "maintenance-v1"
+                    && v["update"].is_null()
+                    && v["builds"]["remaining"].as_u64().unwrap_or(0) >= 2
+            });
+    let mut slot = d.warm_admit.lock().unwrap();
+    if ok {
+        *slot = Some(WarmAdmit {
+            key_hash: remote_checkpoint::digest(key.as_bytes()),
+            link_ptr,
+            at: Instant::now(),
+        });
+    } else {
+        *slot = None;
+    }
+}
+
 fn drop_link(d: &Daemon, st: &mut Sync) {
     st.receipt = None;
+    d.live_link_ptr.store(0, Ordering::SeqCst);
+    if let Ok(mut wa) = d.warm_admit.lock() {
+        *wa = None;
+    }
     if let Some(l) = st.link.take() {
         l.peer.close();
         l.kill();
@@ -1414,6 +1516,8 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     if let Ok(mut c) = d.peer.lock() {
         *c = Some(peer);
     }
+    d.live_link_ptr
+        .store(Arc::as_ptr(&link) as usize, Ordering::SeqCst);
     st.link = Some(link.clone());
     d.set_info(|i| i.connected = true);
     // Everything the machine had may be stale: start from a full mirror,
@@ -3115,6 +3219,8 @@ mod tests {
             peer_sock: Mutex::default(),
             hosted_agent: hosted_admit_agent(),
             pre_synced: Mutex::default(),
+            live_link_ptr: AtomicUsize::new(0),
+            warm_admit: Mutex::default(),
         };
         // Simulate a sync already in progress. Retirement must not wait on it
         // or replace its link, kill its process, cancel, or resubmit its run.
@@ -3515,6 +3621,8 @@ mod tests {
             peer_sock: Mutex::default(),
             hosted_agent: hosted_admit_agent(),
             pre_synced: Mutex::default(),
+            live_link_ptr: AtomicUsize::new(0),
+            warm_admit: Mutex::default(),
         };
         let mut st = d.sync.lock().unwrap();
         let failed_write = a.join("lib.rs").display().to_string();
@@ -3631,6 +3739,8 @@ mod tests {
             peer_sock: Mutex::default(),
             hosted_agent: hosted_admit_agent(),
             pre_synced: Mutex::default(),
+            live_link_ptr: AtomicUsize::new(0),
+            warm_admit: Mutex::default(),
         };
         let mut st = d.sync.lock().unwrap();
         let name = root.display().to_string();
@@ -3839,6 +3949,8 @@ mod tests {
             peer_sock: Mutex::default(),
             hosted_agent: hosted_admit_agent(),
             pre_synced: Mutex::default(),
+            live_link_ptr: AtomicUsize::new(0),
+            warm_admit: Mutex::default(),
         };
         watch_tx.send(base.clone()).unwrap();
         drop(watch_tx);
@@ -4153,5 +4265,26 @@ cmp "$base/expected-lib" "$live/src/lib.rs"
             !REMOTE_MIRROR_PREFIX_SCRIPT.contains("~/.justrust/"),
             "fallback remote mirror path must not overlap ~/.justrust"
         );
+    }
+
+    #[test]
+    fn warm_admit_requires_live_link_matching_key_and_remaining_quota() {
+        let k1 = remote_checkpoint::digest(b"sk-key-one");
+        let k2 = remote_checkpoint::digest(b"sk-key-two");
+        let slot = Some(WarmAdmit {
+            link_ptr: 42,
+            key_hash: k1.clone(),
+            at: Instant::now(),
+        });
+        let ready = |slot: &Option<WarmAdmit>, live: usize, key: &str| {
+            live != 0
+                && slot.as_ref().is_some_and(|w| {
+                    w.link_ptr == live && w.key_hash == key && w.at.elapsed() < WARM_ADMIT_TTL
+                })
+        };
+        assert!(ready(&slot, 42, &k1));
+        assert!(!ready(&slot, 0, &k1), "disconnected link must not qualify");
+        assert!(!ready(&slot, 99, &k1), "replaced link must not qualify");
+        assert!(!ready(&slot, 42, &k2), "different API key must not qualify");
     }
 }
