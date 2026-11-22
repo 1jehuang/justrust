@@ -226,6 +226,9 @@ pub fn hosted_warm_ready(key: &str) -> bool {
     if !matches!(ping(&s), Ok(p) if p.build == me && p.connected) {
         return false;
     }
+    let Ok(s) = UnixStream::connect(&sock_file) else {
+        return false;
+    };
     let Ok(w_stream) = s.try_clone() else {
         return false;
     };
