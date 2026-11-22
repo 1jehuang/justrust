@@ -136,6 +136,80 @@ fn policy_identity(binary: &str, setting: impl Fn(&str) -> Option<String>) -> St
 
 /// Connect to the daemon, starting it if needed (or replacing a daemon from
 /// another justrust build or hosted transport policy).
+/// Response from `hosted_admit`: HTTP status, body, optional `Server-Timing`,
+/// and daemon-measured round-trip latency in ms.
+pub struct HostedAdmitResponse {
+    pub code: u16,
+    pub body: String,
+    pub server_timing: Option<String>,
+    pub ms: f64,
+}
+
+/// Send a hosted admission request (`POST /v1/build/runs`) through the running
+/// daemon's persistent keep-alive HTTPS pool. Returns `Err` if the daemon
+/// could not be reached before sending (safe to fall back to curl).
+pub fn hosted_admit(
+    key: &str,
+    body: &str,
+    timing: bool,
+) -> Result<std::result::Result<HostedAdmitResponse, String>> {
+    let sock = connect()?;
+    let mut w = BufWriter::new(sock.try_clone()?);
+    let mut r = BufReader::new(sock);
+    write_frame(
+        &mut w,
+        &Msg::HostedAdmit {
+            key: key.to_owned(),
+            body: body.to_owned(),
+            timing,
+        },
+        &[],
+    )?;
+    match read_frame(&mut r)? {
+        Some((
+            Msg::HostedAdmitResp {
+                code,
+                body,
+                server_timing,
+                error,
+                ms,
+            },
+            _,
+        )) => {
+            if let Some(err) = error {
+                Ok(Err(err))
+            } else {
+                Ok(Ok(HostedAdmitResponse {
+                    code,
+                    body,
+                    server_timing,
+                    ms,
+                }))
+            }
+        }
+        other => bail!("unexpected hosted admission daemon reply: {other:?}"),
+    }
+}
+
+/// Push dirty source files over an already-connected SSH link while hosted
+/// admission is in flight. Never wakes a stopped host and never starts a build.
+pub fn pre_sync(roots: &[PathBuf]) -> Result<(usize, f64)> {
+    let sock = connect()?;
+    let mut w = BufWriter::new(sock.try_clone()?);
+    let mut r = BufReader::new(sock);
+    write_frame(
+        &mut w,
+        &Msg::PreSync {
+            roots: roots.iter().map(|p| p.display().to_string()).collect(),
+        },
+        &[],
+    )?;
+    match read_frame(&mut r)? {
+        Some((Msg::PreSyncDone { files, ms }, _)) => Ok((files, ms)),
+        other => bail!("unexpected pre-sync daemon reply: {other:?}"),
+    }
+}
+
 pub fn connect() -> Result<UnixStream> {
     let sock = sock_path()?;
     let me = policy_identity(&build_id(), crate::remote_hosted::setting);
@@ -567,6 +641,13 @@ fn write_status_hint(path: &Path) {
     let _ = path;
 }
 
+struct PreSyncStamp {
+    link_ptr: usize,
+    at: Instant,
+    event_gen: u64,
+    files: usize,
+}
+
 struct Daemon {
     sync: SyncQueue<Sync>,
     info: Mutex<Info>,
@@ -584,6 +665,28 @@ struct Daemon {
     peer: peercache::Current,
     /// Our `peer.sock` (path, device, inode), removed on exit if still ours.
     peer_sock: Mutex<Option<(PathBuf, (u64, u64))>>,
+    /// Persistent keep-alive HTTPS client for hosted admission (`POST /v1/build/runs`).
+    hosted_agent: ureq::Agent,
+    /// Roots recently scanned and pushed by `Msg::PreSync` during admission.
+    pre_synced: Mutex<BTreeMap<PathBuf, PreSyncStamp>>,
+}
+
+fn hosted_admit_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .https_only(true)
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .max_redirects_will_error(false)
+        .timeout_resolve(Some(Duration::from_secs(10)))
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_global(Some(Duration::from_secs(30)))
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .build(),
+        )
+        .build()
+        .new_agent()
 }
 
 impl Daemon {
@@ -741,6 +844,8 @@ fn daemon() -> Result<()> {
         draining: AtomicBool::new(false),
         peer: Arc::default(),
         peer_sock: Mutex::default(),
+        hosted_agent: hosted_admit_agent(),
+        pre_synced: Mutex::default(),
     });
     if peercache::enabled()
         && let Some(p) = peercache::sock_path()
@@ -931,6 +1036,113 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
                     }
                     peercache::CONNECTING.store(false, Ordering::SeqCst);
                 });
+                return Ok(());
+            }
+            Msg::HostedAdmit { key, body, timing } => {
+                let t = Instant::now();
+                let url = format!("{}/build/runs", crate::remote_hosted::DEFAULT_BUILD_BASE);
+                let mut req = d
+                    .hosted_agent
+                    .post(&url)
+                    .header("Authorization", &format!("Bearer {key}"))
+                    .header("Content-Type", "application/json")
+                    .header("X-Justrust-Admission", "maintenance-v1");
+                if timing {
+                    req = req
+                        .header("X-Justrust-Timing", "1")
+                        .header("X-Builds-Timing", "1");
+                }
+                let resp = match req.send(body.as_bytes()) {
+                    Ok(mut r) => {
+                        let code = r.status().as_u16();
+                        let server_timing = r
+                            .headers()
+                            .get("server-timing")
+                            .and_then(|v| v.to_str().ok())
+                            .map(str::to_owned);
+                        match r
+                            .body_mut()
+                            .with_config()
+                            .limit(1024 * 1024)
+                            .read_to_string()
+                        {
+                            Ok(text) => Msg::HostedAdmitResp {
+                                code,
+                                body: text,
+                                server_timing,
+                                error: None,
+                                ms: t.elapsed().as_secs_f64() * 1000.0,
+                            },
+                            Err(e) => Msg::HostedAdmitResp {
+                                code: 0,
+                                body: String::new(),
+                                server_timing: None,
+                                error: Some(format!("hosted admission read failed: {e}")),
+                                ms: t.elapsed().as_secs_f64() * 1000.0,
+                            },
+                        }
+                    }
+                    Err(e) => Msg::HostedAdmitResp {
+                        code: 0,
+                        body: String::new(),
+                        server_timing: None,
+                        error: Some(format!("hosted admission failed: {e}")),
+                        ms: t.elapsed().as_secs_f64() * 1000.0,
+                    },
+                };
+                write_frame(&mut w, &resp, &[])?;
+                return Ok(());
+            }
+            Msg::PreSync { roots } => {
+                let t = Instant::now();
+                let roots: Vec<PathBuf> = roots.into_iter().map(PathBuf::from).collect();
+                let mut files = 0usize;
+                if let Ok(mut st) = d.sync.foreground_lock()
+                    && !d.draining.load(Ordering::SeqCst)
+                    && let Some(link) = st.link.as_ref().filter(|l| l.alive()).cloned()
+                {
+                    if let Ok(n) = repair_sources(d, &mut st, &link) {
+                        files += n;
+                    }
+                    for root in &roots {
+                        let event_gen = d.watcher.event_count();
+                        let result = if st.needs_mirror(root) {
+                            mirror_root(d, &mut st, &link, root)
+                        } else {
+                            push_root(d, &mut st, root)
+                        };
+                        match result {
+                            Ok(n) => {
+                                files += n;
+                                if d.watcher.is_quiet_since(event_gen) {
+                                    d.pre_synced.lock().unwrap().insert(
+                                        root.clone(),
+                                        PreSyncStamp {
+                                            link_ptr: Arc::as_ptr(&link) as usize,
+                                            at: Instant::now(),
+                                            event_gen,
+                                            files: n,
+                                        },
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                d.pre_synced.lock().unwrap().remove(root);
+                                st.source_sync_failed(root);
+                                log(&format!("presync {}: {e:#}", root.display()));
+                                break;
+                            }
+                        }
+                    }
+                }
+                write_frame(
+                    &mut w,
+                    &Msg::PreSyncDone {
+                        files,
+                        ms: t.elapsed().as_secs_f64() * 1000.0,
+                    },
+                    &[],
+                )?;
                 return Ok(());
             }
             Msg::Run {
@@ -2139,8 +2351,15 @@ fn run(
             setup_phase(w, "syncing")?;
             let mut files = repair_sources(d, &mut st, &link)?;
             for root in &roots {
+                let pre = d.pre_synced.lock().unwrap().remove(root);
                 let result = if st.needs_mirror(root) {
                     mirror_root(d, &mut st, &link, root)
+                } else if let Some(s) = pre
+                    && s.link_ptr == Arc::as_ptr(&link) as usize
+                    && s.at.elapsed() < Duration::from_secs(5)
+                    && d.watcher.is_quiet_since(s.event_gen)
+                {
+                    Ok(s.files)
                 } else {
                     push_root(d, &mut st, root)
                 };
@@ -2842,6 +3061,8 @@ mod tests {
             draining: AtomicBool::new(false),
             peer: Arc::default(),
             peer_sock: Mutex::default(),
+            hosted_agent: hosted_admit_agent(),
+            pre_synced: Mutex::default(),
         };
         // Simulate a sync already in progress. Retirement must not wait on it
         // or replace its link, kill its process, cancel, or resubmit its run.
@@ -3235,6 +3456,8 @@ mod tests {
             draining: AtomicBool::new(false),
             peer: Arc::default(),
             peer_sock: Mutex::default(),
+            hosted_agent: hosted_admit_agent(),
+            pre_synced: Mutex::default(),
         };
         let mut st = d.sync.lock().unwrap();
         let failed_write = a.join("lib.rs").display().to_string();
@@ -3348,6 +3571,8 @@ mod tests {
             draining: AtomicBool::new(false),
             peer: Arc::default(),
             peer_sock: Mutex::default(),
+            hosted_agent: hosted_admit_agent(),
+            pre_synced: Mutex::default(),
         };
         let mut st = d.sync.lock().unwrap();
         let name = root.display().to_string();
@@ -3553,6 +3778,8 @@ mod tests {
             draining: AtomicBool::new(false),
             peer: Arc::default(),
             peer_sock: Mutex::default(),
+            hosted_agent: hosted_admit_agent(),
+            pre_synced: Mutex::default(),
         };
         watch_tx.send(base.clone()).unwrap();
         drop(watch_tx);

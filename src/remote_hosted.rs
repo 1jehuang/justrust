@@ -901,7 +901,44 @@ fn admit_run_labeled_for(
     if agent != "none" {
         body["agent"] = json!(agent);
     }
-    let r = request(c, "POST", "build/runs", Some(&body)).map_err(|e| e.to_string())?;
+    let r = if c.base == DEFAULT_API_BASE
+        && c.build_base == DEFAULT_BUILD_BASE
+        && !c.key.is_empty()
+        && !crate::telemetry::curl_customized()
+    {
+        let trace = std::env::var_os("JUSTRUST_REMOTE_TRACE").is_some();
+        let charge_timing = trace && std::env::var_os("JUSTRUST_CHARGE_TIMING").is_some();
+        match crate::remote_daemon::hosted_admit(&c.key, &body.to_string(), trace) {
+            Ok(Ok(res)) => {
+                if trace {
+                    if let Some(ref st) = res.server_timing {
+                        let mut parts = Vec::new();
+                        if let Some(m) = admission_timing(st) {
+                            parts.push(m);
+                        }
+                        if charge_timing
+                            && let Some(b) =
+                                bounded_metrics(st, &["lookup", "txn", "notify", "status"])
+                        {
+                            parts.push(format!("backend: {b}"));
+                        }
+                        if !parts.is_empty() {
+                            eprintln!("justrust trace: admission {}", parts.join(" | "));
+                        }
+                    }
+                    eprintln!("justrust trace: daemon_admit {:.1} ms (pooled tls)", res.ms);
+                }
+                Resp {
+                    code: res.code,
+                    body: serde_json::from_str(&res.body).unwrap_or(Value::Null),
+                }
+            }
+            Ok(Err(err)) => return Err(err),
+            Err(_) => request(c, "POST", "build/runs", Some(&body)).map_err(|e| e.to_string())?,
+        }
+    } else {
+        request(c, "POST", "build/runs", Some(&body)).map_err(|e| e.to_string())?
+    };
     parse_run_admission(r)
 }
 

@@ -1739,12 +1739,26 @@ fn run_remote_inner(
     mark("roots");
     crate::e2e::mark("remote_roots");
     diagnostic.stage = "remote_admission";
+    let pre_sync_handle = if admitted.is_none()
+        && remote_backend::load() == Some(remote_backend::Backend::Hosted)
+        && !matches!(crate::remote_windows::selected(), Ok(true))
+    {
+        let pre_roots = roots.clone();
+        Some(std::thread::spawn(move || {
+            let _ = crate::remote_daemon::pre_sync(&pre_roots);
+        }))
+    } else {
+        None
+    };
     if admitted.is_none() {
         let hosted = match charge_hosted(run_id, &label.join(" "), project.as_deref())? {
             Ok(h) => h,
             Err(m) => return infra(m),
         };
         *admitted = Some(HostedRun::new(hosted, run_id, total));
+    }
+    if let Some(h) = pre_sync_handle {
+        let _ = h.join();
     }
     if cancel_signal::received().is_some() {
         return Err(RemoteCancelled.into());

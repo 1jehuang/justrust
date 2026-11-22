@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
@@ -59,6 +60,8 @@ impl ChangedBatch {
 pub struct Watcher {
     fd: i32,
     w: Arc<Mutex<Watches>>,
+    events: Arc<AtomicU64>,
+    watch_failed: AtomicBool,
 }
 
 /// Directories never worth watching: build output and VCS internals churn
@@ -128,8 +131,47 @@ impl Watcher {
         };
         let w: Arc<Mutex<Watches>> = Arc::default();
         let w2 = w.clone();
-        std::thread::spawn(move || sys::read_loop(fd, w2, tx));
-        Ok(Watcher { fd, w })
+        let events = Arc::new(AtomicU64::new(0));
+        let events2 = events.clone();
+        std::thread::spawn(move || sys::read_loop(fd, w2, tx, events2));
+        Ok(Watcher {
+            fd,
+            w,
+            events,
+            watch_failed: AtomicBool::new(false),
+        })
+    }
+
+    /// Monotonic counter bumped whenever the kernel delivers a watch event.
+    pub fn event_count(&self) -> u64 {
+        self.events.load(Ordering::Acquire)
+    }
+
+    /// True on Linux when no directory watch has failed, no event was processed
+    /// since `event_gen`, and the kernel inotify fd currently has no unread events.
+    pub fn is_quiet_since(&self, event_gen: u64) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            if self.watch_failed.load(Ordering::Acquire) {
+                return false;
+            }
+            if self.events.load(Ordering::Acquire) != event_gen {
+                return false;
+            }
+            let mut pfd = libc::pollfd {
+                fd: self.fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: valid single-element pollfd with 0ms non-blocking timeout.
+            let r = unsafe { libc::poll(&mut pfd, 1, 0) };
+            r == 0 && self.events.load(Ordering::Acquire) == event_gen
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = event_gen;
+            false
+        }
     }
 
     /// Watch every directory in `dirs` not watched yet. Returns how many
@@ -141,7 +183,15 @@ impl Watcher {
         let mut dirs = dirs.into_iter();
         // A new watcher (and the Windows fallback) has nothing to skip.
         if self.w.lock().unwrap().by_path.is_empty() {
-            return dirs.filter(|d| add(self.fd, &self.w, d)).count();
+            return dirs
+                .filter(|d| {
+                    let ok = add(self.fd, &self.w, d);
+                    if !ok && !self.w.lock().unwrap().by_path.contains_key(*d) {
+                        self.watch_failed.store(true, Ordering::Release);
+                    }
+                    ok
+                })
+                .count();
         }
         let mut batch = Vec::with_capacity(BATCH);
         let mut added = 0;
@@ -156,7 +206,16 @@ impl Watcher {
             }
             // Recheck misses via add: an event may have registered the path
             // in the meantime. A failed registration stays eligible next time.
-            added += batch.drain(..).filter(|d| add(self.fd, &self.w, d)).count();
+            added += batch
+                .drain(..)
+                .filter(|d| {
+                    let ok = add(self.fd, &self.w, d);
+                    if !ok && !self.w.lock().unwrap().by_path.contains_key(*d) {
+                        self.watch_failed.store(true, Ordering::Release);
+                    }
+                    ok
+                })
+                .count();
         }
     }
 
@@ -182,7 +241,13 @@ mod unwatched {
 
     pub fn unwatch(_fd: i32, _wd: i32) {}
 
-    pub fn read_loop(_fd: i32, _w: Arc<Mutex<Watches>>, _tx: Sender<PathBuf>) {}
+    pub fn read_loop(
+        _fd: i32,
+        _w: Arc<Mutex<Watches>>,
+        _tx: Sender<PathBuf>,
+        _events: Arc<AtomicU64>,
+    ) {
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -216,7 +281,7 @@ mod inotify {
         }
     }
 
-    pub fn read_loop(fd: i32, w: Arc<Mutex<Watches>>, tx: Sender<PathBuf>) {
+    pub fn read_loop(fd: i32, w: Arc<Mutex<Watches>>, tx: Sender<PathBuf>, events: Arc<AtomicU64>) {
         let mut buf = vec![0u8; 64 << 10];
         loop {
             // SAFETY: reading into a buffer we own.
@@ -224,6 +289,7 @@ mod inotify {
             if n <= 0 {
                 return;
             }
+            events.fetch_add(1, Ordering::Release);
             if !process_batch(fd, &w, &tx, &buf[..n as usize]) {
                 return;
             }
@@ -415,7 +481,8 @@ mod kqueue {
         unsafe { libc::close(wd) };
     }
 
-    pub fn read_loop(kq: i32, w: Arc<Mutex<Watches>>, tx: Sender<PathBuf>) {
+    pub fn read_loop(kq: i32, w: Arc<Mutex<Watches>>, tx: Sender<PathBuf>, events: Arc<AtomicU64>) {
+        let _ = &events;
         let mut evs: Vec<libc::kevent> = (0..256)
             .map(|_| unsafe { std::mem::zeroed::<libc::kevent>() })
             .collect();

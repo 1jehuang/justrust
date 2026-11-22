@@ -411,6 +411,36 @@ pub enum Msg {
         out: String,
         last: bool,
     },
+    /// Client -> daemon: POST `/v1/build/runs` over the daemon's persistent
+    /// keep-alive HTTPS pool so admission avoids per-build DNS/TCP/TLS setup.
+    HostedAdmit {
+        key: String,
+        body: String,
+        #[serde(default)]
+        timing: bool,
+    },
+    /// Daemon -> client: reply to `HostedAdmit`.
+    HostedAdmitResp {
+        code: u16,
+        body: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server_timing: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        #[serde(default)]
+        ms: f64,
+    },
+    /// Client -> daemon: mirror/push dirty sources over an already-connected
+    /// link while hosted admission is in flight. Never wakes a stopped host
+    /// and never starts a build.
+    PreSync {
+        roots: Vec<String>,
+    },
+    /// Daemon -> client: reply to `PreSync`.
+    PreSyncDone {
+        files: usize,
+        ms: f64,
+    },
 }
 
 pub fn write_frame<W: Write>(w: &mut W, msg: &Msg, payload: &[u8]) -> Result<()> {
