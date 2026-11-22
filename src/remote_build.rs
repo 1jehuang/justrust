@@ -1793,13 +1793,13 @@ fn run_remote_inner(
             *admitted = Some(HostedRun::new(hosted, run_id, total));
         }
     }
-    if let Some(h) = pre_sync_handle {
-        let _ = h.join();
-    }
     if cancel_signal::received().is_some() {
         return Err(RemoteCancelled.into());
     }
     if crate::remote_windows::selected()? {
+        if let Some(h) = pre_sync_handle {
+            let _ = h.join();
+        }
         let hosted_run = admitted.as_mut().expect("windows run admitted above");
         if remote_backend::load() != Some(remote_backend::Backend::Hosted) {
             return infra(format!(
@@ -1854,6 +1854,9 @@ fn run_remote_inner(
         Err(e) => return infra(format!("{e:#}")),
     };
     crate::e2e::mark("daemon_connected");
+    if let Some(h) = pre_sync_handle {
+        let _ = h.join();
+    }
     let mut env = Vec::new();
     env.push((crate::remote_proto::CLIENT_LIVE_CPU.into(), "1".into()));
     env.extend(forwarded_env(|name| std::env::var(name).ok()));

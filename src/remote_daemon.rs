@@ -1908,25 +1908,33 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
     let t = Instant::now();
     // Keyed by backend, not address: hosted machines change addresses, and
     // a seed whose source is gone on the machine is simply skipped.
+    // Put currently active roots on this host first so ties prefer warm mirrors.
     let dest = st.backend.kind();
-    let mut known = known_roots(dest);
-    known.extend(st.roots.keys().cloned());
+    let mut known: Vec<PathBuf> = st.roots.keys().cloned().collect();
+    known.extend(known_roots(dest));
     let mut seeded = false;
     // `JUSTRUST_REMOTE_SEED=0` (in the daemon's environment) turns off both
     // seeds, for measuring and as an escape hatch: a full rsync instead.
     let seeding = std::env::var("JUSTRUST_REMOTE_SEED").as_deref() != Ok("0");
+    if seeding {
+        for from in remote_sync::pick_seeds(root, known.iter())
+            .into_iter()
+            .take(3)
+        {
+            if link.mirror.seed(root, &from) {
+                seeded = true;
+                log(&format!(
+                    "seeded {} from {} on the machine in {:.2}s",
+                    root.display(),
+                    from.display(),
+                    t.elapsed().as_secs_f64()
+                ));
+                break;
+            }
+        }
+    }
     if seeding
-        && let Some(from) = remote_sync::pick_seed(root, known.iter())
-        && link.mirror.seed(root, &from)
-    {
-        seeded = true;
-        log(&format!(
-            "seeded {} from {} on the machine in {:.2}s",
-            root.display(),
-            from.display(),
-            t.elapsed().as_secs_f64()
-        ));
-    } else if seeding
+        && !seeded
         && std::env::var("JUSTRUST_REMOTE_GIT_SEED").as_deref() != Ok("0")
         && link.mirror.seed_from_origin(root)
     {

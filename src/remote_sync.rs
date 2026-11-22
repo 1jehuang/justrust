@@ -666,32 +666,177 @@ fn anonymous_https(url: &str) -> Option<String> {
         .then_some(url)
 }
 
-/// The best already-mirrored root to seed a new mirror of `root` from:
-/// a worktree of the same repository first, then a clone sharing a root
-/// commit. None outside git or without a relative.
+/// Lightweight identity extracted from `Cargo.toml` when git ancestry is absent
+/// or disjoint (e.g. `git archive`, tarballs, fresh `git init`, shallow clones).
+/// Used only to choose a local-on-remote seed candidate; `--checksum --delete`
+/// always reconciles every byte afterwards.
+#[derive(Debug, Clone)]
+struct CargoIdentity {
+    manifest_hash: String,
+    package_name: Option<String>,
+    workspace_members: std::collections::BTreeSet<String>,
+}
+
+fn cargo_identity(root: &Path) -> Option<CargoIdentity> {
+    const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
+    let path = root.join("Cargo.toml");
+    let md = std::fs::metadata(&path).ok()?;
+    if !md.is_file() || md.len() > MAX_MANIFEST_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    let text = std::str::from_utf8(&bytes).ok()?;
+    let manifest_hash = crate::remote_checkpoint::digest(&bytes);
+    let (package_name, workspace_members) = parse_cargo_identity(text);
+    Some(CargoIdentity {
+        manifest_hash,
+        package_name,
+        workspace_members,
+    })
+}
+
+fn parse_cargo_identity(text: &str) -> (Option<String>, std::collections::BTreeSet<String>) {
+    let mut section = "";
+    let mut package_name = None;
+    let mut workspace_members = std::collections::BTreeSet::new();
+    let mut in_members_array = false;
+    for raw in text.lines() {
+        let line = raw.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') && !in_members_array {
+            section = line.trim_matches(|c| c == '[' || c == ']').trim();
+            continue;
+        }
+        if section == "package"
+            && package_name.is_none()
+            && let Some(rest) = line.strip_prefix("name")
+            && let Some(val) = rest.trim_start().strip_prefix('=')
+            && let Some(name) = extract_toml_string(val.trim())
+        {
+            package_name = Some(name);
+        } else if section == "workspace" {
+            let chunk = if in_members_array {
+                line
+            } else if let Some(rest) = line.strip_prefix("members")
+                && let Some(val) = rest.trim_start().strip_prefix('=')
+                && let Some(after_open) = val.trim_start().strip_prefix('[')
+            {
+                in_members_array = true;
+                after_open
+            } else {
+                continue;
+            };
+            let (body, closed) = match chunk.split_once(']') {
+                Some((before, _)) => (before, true),
+                None => (chunk, false),
+            };
+            for item in body.split(',') {
+                if let Some(m) = extract_toml_string(item.trim()) {
+                    workspace_members.insert(m);
+                }
+            }
+            if closed {
+                in_members_array = false;
+            }
+        }
+    }
+    (package_name, workspace_members)
+}
+
+fn extract_toml_string(s: &str) -> Option<String> {
+    let q = s.chars().next()?;
+    if q != '"' && q != '\'' {
+        return None;
+    }
+    let rest = &s[1..];
+    let end = rest.find(q)?;
+    let val = &rest[..end];
+    (!val.is_empty()).then(|| val.to_string())
+}
+
+fn cargo_seed_score(me: &CargoIdentity, other: &CargoIdentity) -> u8 {
+    if me.manifest_hash == other.manifest_hash {
+        return 2;
+    }
+    if me.package_name.is_some() && me.package_name == other.package_name {
+        return 1;
+    }
+    if !me.workspace_members.is_empty() && !other.workspace_members.is_empty() {
+        let mut shared = 0usize;
+        let mut shared_concrete = 0usize;
+        for m in me.workspace_members.intersection(&other.workspace_members) {
+            shared += 1;
+            if !m.contains('*') && !m.contains('?') && !m.contains('[') {
+                shared_concrete += 1;
+            }
+        }
+        let smaller = me
+            .workspace_members
+            .len()
+            .min(other.workspace_members.len());
+        if (shared_concrete >= 1 && shared * 2 >= smaller) || shared >= 2 {
+            return 1;
+        }
+    }
+    0
+}
+
+/// Ordered candidate mirrors to seed a new mirror of `root` from, best first:
+/// a worktree of the same git repository, a clone sharing a git root commit,
+/// an identical `Cargo.toml`, or a matching Cargo package/workspace.
+/// Preserves candidate order on ties so callers can prefer currently active
+/// mirrors on the host.
+pub fn pick_seeds<'a>(
+    root: &Path,
+    mirrored: impl IntoIterator<Item = &'a PathBuf>,
+) -> Vec<PathBuf> {
+    let me_git = repo_id(root);
+    let me_cargo = cargo_identity(root);
+    if me_git.is_none() && me_cargo.is_none() {
+        return Vec::new();
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut scored: Vec<(u8, usize, PathBuf)> = Vec::new();
+    for (idx, m) in mirrored.into_iter().enumerate() {
+        if m == root || m.starts_with(root) || root.starts_with(m) || !m.is_dir() {
+            continue;
+        }
+        if !seen.insert(m.clone()) {
+            continue;
+        }
+        let mut score = 0u8;
+        if let Some(ref me) = me_git
+            && let Some(id) = repo_id(m)
+        {
+            if id.common_dir == me.common_dir {
+                score = 4;
+            } else if !me.root_commits.is_disjoint(&id.root_commits) {
+                score = 3;
+            }
+        }
+        if score == 0
+            && let Some(ref me) = me_cargo
+            && let Some(other) = cargo_identity(m)
+        {
+            score = cargo_seed_score(me, &other);
+        }
+        if score > 0 {
+            scored.push((score, idx, m.clone()));
+        }
+    }
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    scored.into_iter().map(|(_, _, p)| p).collect()
+}
+
+/// The best already-mirrored root to seed a new mirror of `root` from.
+#[cfg(test)]
 pub fn pick_seed<'a>(
     root: &Path,
     mirrored: impl IntoIterator<Item = &'a PathBuf>,
 ) -> Option<PathBuf> {
-    let me = repo_id(root)?;
-    let mut best: Option<(u8, PathBuf)> = None;
-    for m in mirrored {
-        if m == root || m.starts_with(root) || root.starts_with(m) {
-            continue;
-        }
-        let Some(id) = repo_id(m) else { continue };
-        let score = if id.common_dir == me.common_dir {
-            2
-        } else if !me.root_commits.is_disjoint(&id.root_commits) {
-            1
-        } else {
-            continue;
-        };
-        if best.as_ref().is_none_or(|(s, _)| score > *s) {
-            best = Some((score, m.clone()));
-        }
-    }
-    best.map(|(_, p)| p)
+    pick_seeds(root, mirrored).into_iter().next()
 }
 
 /// Where roots are mirrored: an ssh target (or, in tests, this machine)
@@ -860,9 +1005,8 @@ impl Mirror {
         ]);
         let dst = match &self.target {
             Some(t) => {
-                // Compress source transfers over WAN; Rust source compresses ~4x
-                // and cuts fresh-checkout sync times substantially.
-                c.arg("-z");
+                // `configure_rsync` enables `-z` compression over WAN and wires
+                // the target's transport (native exec or ssh).
                 configure_rsync(&mut c, t);
                 rsync_destination(t, &format!("{remote}/"))
             }
@@ -2400,5 +2544,33 @@ mod tests {
             old
         );
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn pick_seeds_falls_back_to_cargo_manifest_for_archives_and_fresh_git_repos() {
+        let d = std::env::temp_dir().join(format!("jr-seed-cargo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (orig, archive, edited, unrelated) = (
+            d.join("orig"),
+            d.join("archive"),
+            d.join("edited"),
+            d.join("unrelated"),
+        );
+        for p in [&orig, &archive, &edited, &unrelated] {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        let manifest = "[workspace]\nmembers = [\"crates/foo\", \"crates/bar\"]\n\n[package]\nname = \"my-app\"\nversion = \"0.1.0\"\n";
+        let edited_manifest = "[workspace]\nmembers = [\"crates/foo\", \"crates/bar\", \"crates/baz\"]\n\n[package]\nname = \"my-app\"\nversion = \"0.2.0\"\n";
+        let other_manifest = "[workspace]\nmembers = [\"crates/*\"]\n\n[package]\nname = \"totally-different\"\nversion = \"0.1.0\"\n";
+        std::fs::write(orig.join("Cargo.toml"), manifest).unwrap();
+        std::fs::write(archive.join("Cargo.toml"), manifest).unwrap();
+        std::fs::write(edited.join("Cargo.toml"), edited_manifest).unwrap();
+        std::fs::write(unrelated.join("Cargo.toml"), other_manifest).unwrap();
+
+        let seeds = pick_seeds(&archive, &[unrelated.clone(), edited.clone(), orig.clone()]);
+        assert_eq!(seeds, vec![orig.clone(), edited.clone()]);
+        assert!(pick_seeds(&unrelated, &[orig.clone(), edited.clone()]).is_empty());
+
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
