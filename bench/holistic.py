@@ -187,21 +187,32 @@ def run_cmd(stack: str, cwd: Path, sub: str, args: list[str],
     p = sp.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
     wall = time.monotonic() - t0
     out = p.stdout + '\n' + p.stderr
+    # Extract the actual run_id recorded by justrust (`justrust show <id>`)
+    actual_run_id = run_id
+    if stack == 'remote':
+        m_id = re.search(r'justrust show ([A-Za-z0-9._:-]+)', out)
+        if m_id:
+            actual_run_id = m_id.group(1)
+    passed = sum(int(n) for n in re.findall(r'test result: ok\. (\d+) passed', out))
+    if passed == 0 and stack == 'remote':
+        m_ok = re.search(r'justrust: ok: (\d+) tests? passed', out)
+        if m_ok:
+            passed = int(m_ok.group(1))
     rec = {
         'stack': stack,
         'cmd': ' '.join(cmd),
         'wall': round(wall, 3),
         'exit': p.returncode,
-        'run_id': run_id if stack == 'remote' else None,
+        'run_id': actual_run_id if stack == 'remote' else None,
         'power': pw,
-        'passed': sum(int(n) for n in re.findall(r'test result: ok\. (\d+) passed', out)),
+        'passed': passed,
         'errors': [],
     }
     if p.returncode != 0:
         rec['errors'].append(f'exit {p.returncode}: {out[-600:]}')
     if stack == 'remote':
         # Verify execution happened on hosted and capture full log for marker checks
-        summary_path = Path.home() / '.justrust' / 'runs' / run_id / 'summary.json'
+        summary_path = Path.home() / '.justrust' / 'runs' / actual_run_id / 'summary.json'
         if summary_path.exists():
             try:
                 s = json.loads(summary_path.read_text())
@@ -527,7 +538,6 @@ def main() -> None:
         doc['samples'].extend(run_warm('warm-heavy', [
             ('warm-jcode-test', 'jcode', 'test', ['-p', 'jcode-tui', '--lib', 'jarvis_listen', '--locked'], True),
             ('warm-jcode-bin', 'jcode', 'check', ['-p', 'jcode', '--bin', 'jcode', '--locked'], False),
-            ('warm-jcode-clippy', 'jcode', 'clippy', ['-p', 'jcode-tui', '--lib', '--locked'], False),
         ], stacks, args.rounds))
         save()
     if 'swarm-4' in cats:
