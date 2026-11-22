@@ -2544,8 +2544,8 @@ rustc_queries! {
     }
 
     query collect_and_partition_mono_items(_: ()) -> MonoItemPartitions<'tcx> {
-        eval_always
         desc { "collect_and_partition_mono_items" }
+        cache_on_disk
     }
 
     query is_codegened_item(def_id: DefId) -> bool {

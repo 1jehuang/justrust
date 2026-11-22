@@ -210,6 +210,7 @@ impl_ref_decodable_into_arena! {
     rustc_index::IndexVec<rustc_middle::mir::Promoted, rustc_middle::mir::Body<'tcx>>,
     rustc_middle::middle::deduced_param_attrs::DeducedParamAttrs,
     rustc_middle::mir::Body<'tcx>,
+    rustc_middle::mono::CodegenUnit<'tcx>,
     rustc_middle::traits::ImplSource<'tcx, ()>,
     rustc_middle::traits::specialization_graph::Graph,
     rustc_middle::ty::TypeckResults<'tcx>,
@@ -217,6 +218,7 @@ impl_ref_decodable_into_arena! {
     rustc_span::Ident,
     rustc_span::Span,
     rustc_span::def_id::DefId,
+    rustc_span::def_id::DefIdSet,
     rustc_span::def_id::LocalDefId,
     // tidy-alphabetical-end
 }

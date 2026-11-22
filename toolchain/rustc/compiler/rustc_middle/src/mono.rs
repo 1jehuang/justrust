@@ -336,13 +336,13 @@ impl ToStableHashKey for MonoItem<'_> {
     }
 }
 
-#[derive(Debug, StableHash, Copy, Clone)]
+#[derive(Debug, StableHash, Copy, Clone, TyEncodable, TyDecodable)]
 pub struct MonoItemPartitions<'tcx> {
     pub codegen_units: &'tcx [CodegenUnit<'tcx>],
     pub all_mono_items: &'tcx DefIdSet,
 }
 
-#[derive(Debug, StableHash)]
+#[derive(Debug, StableHash, TyEncodable, TyDecodable)]
 pub struct CodegenUnit<'tcx> {
     /// A name for this CGU. Incremental compilation requires that
     /// name be unique amongst **all** crates. Therefore, it should
@@ -363,7 +363,7 @@ pub struct CodegenUnit<'tcx> {
 }
 
 /// Auxiliary info about a `MonoItem`.
-#[derive(Copy, Clone, PartialEq, Debug, StableHash)]
+#[derive(Copy, Clone, PartialEq, Debug, StableHash, TyEncodable, TyDecodable)]
 pub struct MonoItemData {
     /// A cached copy of the result of `MonoItem::instantiation_mode`, where
     /// `GloballyShared` maps to `false` and `LocalCopy` maps to `true`.
