@@ -56,17 +56,26 @@ ROOT = uv.scratch_root() / 'cold-three'
 STOCK_CARGO = '/usr/bin/cargo'
 
 # name: source repo, git url, pinned commit (a release tag where there is
-# one), cargo args after `build`, produced binary
+# one), cargo subcommand, cargo args, produced release binary (or None for check/test)
 ROWS = {
     'jcode': (Path.home() / 'jcode', 'https://github.com/1jehuang/jcode.git',
               'b33d94f006ce2488bbc3b4b5ec818505ac750b28',
-              ['--release', '-p', 'jcode', '--bin', 'jcode', '--locked'], 'jcode'),
+              'build', ['--release', '-p', 'jcode', '--bin', 'jcode', '--locked'], 'jcode'),
     'ripgrep': (ROOT / 'src-ripgrep', 'https://github.com/BurntSushi/ripgrep.git',
                 'e89fff89ac9af12e8d4ce9d5fd07beb408ca730f',  # 15.2.0
-                ['--release', '--locked'], 'rg'),
+                'build', ['--release', '--locked'], 'rg'),
     'uv': (ROOT / 'src-uv', 'https://github.com/astral-sh/uv.git',
            '6b2d39dcc390293d51c9c0d2bbcd650f4bcbfdce',  # 0.13.9
-           ['--release', '-p', 'uv', '--locked'], 'uv'),
+           'build', ['--release', '-p', 'uv', '--locked'], 'uv'),
+    'jcode-test': (Path.home() / 'jcode', 'https://github.com/1jehuang/jcode.git',
+                   'b33d94f006ce2488bbc3b4b5ec818505ac750b28',
+                   'test', ['-p', 'jcode-tui', '--lib', 'jarvis', '--locked'], None),
+    'ripgrep-test': (ROOT / 'src-ripgrep', 'https://github.com/BurntSushi/ripgrep.git',
+                     'e89fff89ac9af12e8d4ce9d5fd07beb408ca730f',  # 15.2.0
+                     'test', ['-p', 'ignore', '--lib', '--locked'], None),
+    'uv-check': (ROOT / 'src-uv', 'https://github.com/astral-sh/uv.git',
+                 '6b2d39dcc390293d51c9c0d2bbcd650f4bcbfdce',  # 0.13.9
+                 'check', ['-p', 'uv-resolver', '--locked'], None),
 }
 
 
@@ -130,30 +139,30 @@ def power_state() -> dict:
 
 
 def run_one(name: str, stack: str, archive: Path, out: Path, tag: str) -> dict:
-    args, binary = ROWS[name][3], ROWS[name][4]
+    subcmd, args, binary = ROWS[name][3], ROWS[name][4], ROWS[name][5]
     work = checkout(name, archive, tag, stack)
     rid = 'cold-three-' + uuid.uuid4().hex
     env = uv.sample_environment(stack, work / 'target', rid)
     namespace = None
     if stack == 'stock':
-        cmd = [STOCK_CARGO, 'build', *args]
+        cmd = [STOCK_CARGO, subcmd, *args]
     else:
         namespace = 'cold-' + uuid.uuid4().hex[:20]
         env['JUSTRUST_DEPCACHE_NAMESPACE'] = namespace
-        cmd = ['justrust', 'build', '--remote', *args]
+        cmd = ['justrust', subcmd, '--remote', *args]
     log = out / f'{name}-{tag}-{stack}.log'
     power = power_state()
     start = time.monotonic()
     with log.open('w') as stream:
         rc = sp.run(cmd, cwd=work, env=env, stdout=stream, stderr=sp.STDOUT).returncode
     wall = time.monotonic() - start
-    ok, version = binary_ok(work / 'target' / 'release' / binary)
+    ok, version = binary_ok(work / 'target' / 'release' / binary) if binary else (True, None)
     sample = {'repo': name, 'stack': stack, 'tag': tag, 'wall': wall, 'exit': rc, 'log': str(log),
               'checkout': str(work), 'run_id': rid if stack != 'stock' else None,
               'namespace': namespace, 'binary': version, 'power': power, 'errors': []}
     if rc:
         sample['errors'].append(f'exit {rc}')
-    if not ok:
+    if binary and not ok:
         sample['errors'].append(f'binary not usable here: {version}')
     if stack != 'stock':
         try:
@@ -237,8 +246,8 @@ def main(argv=None) -> int:
         result_path = args.result or HERE / 'results' / f"cold-three-{time.strftime('%Y%m%d-%H%M%S')}-{rev}.json"
         result = {'schema': 1, 'what': 'first build of a fresh checkout, stock cargo on this machine vs justrust hosted as a new account',
                   'started': time.strftime('%Y%m%d-%H%M%S'), 'identities': [identity()],
-                  'rows': {n: {'pin': ROWS[n][2], 'url': ROWS[n][1], 'command': 'build ' + ' '.join(ROWS[n][3]),
-                               'binary': ROWS[n][4]} for n in ROWS},
+                  'rows': {n: {'pin': ROWS[n][2], 'url': ROWS[n][1], 'command': ROWS[n][3] + ' ' + ' '.join(ROWS[n][4]),
+                               'binary': ROWS[n][5]} for n in ROWS},
                   'samples': []}
     print(f'logs {out}\nresult {result_path}', flush=True)
 

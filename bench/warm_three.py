@@ -59,6 +59,10 @@ ROWS = {
               'crates/jcode-tui/src/tui/jarvis.rs',
               "fn reexec_args_for(enabled: bool, always_on: bool, screen: bool) -> Vec<&'static str> {\n",
               'jcode-tui', 'test -p jcode-tui --lib jarvis'),
+    'jcode-bin': (Path.home() / 'jcode', '557173275060be087a3763e5f448f124371b54c6',
+                  'crates/jcode-tui/src/tui/jarvis.rs',
+                  "fn reexec_args_for(enabled: bool, always_on: bool, screen: bool) -> Vec<&'static str> {\n",
+                  'jcode-tui', 'check -p jcode --bin jcode'),
     'ripgrep': (ROOT / 'ripgrep', '4649aa9700619f94cf9c66876e9549d83420e16c',
                 'crates/ignore/src/gitignore.rs',
                 '    pub fn is_empty(&self) -> bool {\n',
@@ -92,19 +96,35 @@ def passed_count(text: str) -> int:
     return sum(int(n) for n in re.findall(r'test result: ok\. (\d+) passed', text))
 
 
+def power_state() -> dict:
+    """This laptop's power source and CPU policy: battery mode slows stock."""
+    def read(path):
+        try:
+            return Path(path).read_text().strip()
+        except OSError:
+            return None
+    supplies = Path('/sys/class/power_supply')
+    online = [read(p / 'online') for p in supplies.glob('*') if (p / 'online').exists()] if supplies.exists() else []
+    return {'ac': '1' in online, 'battery': read(next(iter(sorted(supplies.glob('BAT*/status'))), '/nonexistent')) if supplies.exists() else None,
+            'epp': read('/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference'),
+            'governor': read('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'),
+            'platform_profile': read('/sys/firmware/acpi/platform_profile')}
+
+
 def run_one(name: str, stack: str, checkout: Path, out: Path, tag: str, marker: str | None = None) -> dict:
     args = ROWS[name][5]
     package = ROWS[name][4]
     rid = 'warm-three-' + uuid.uuid4().hex
     env = uv.sample_environment(stack, checkout / 'target', rid)
     log = out / f'{name}-{tag}-{stack}.log'
+    power = power_state()
     start = time.monotonic()
     with log.open('w') as stream:
         rc = sp.run(command(stack, args), cwd=checkout, env=env, stdout=stream, stderr=sp.STDOUT).returncode
     wall = time.monotonic() - start
     text = log.read_text(errors='replace')
     sample = {'repo': name, 'stack': stack, 'tag': tag, 'wall': wall, 'exit': rc, 'log': str(log),
-              'run_id': rid if stack != 'stock' else None, 'errors': []}
+              'run_id': rid if stack != 'stock' else None, 'power': power, 'errors': []}
     if rc:
         sample['errors'].append(f'exit {rc}')
     if stack == 'stock':
