@@ -1055,7 +1055,11 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
                     .post(&url)
                     .header("Authorization", &format!("Bearer {key}"))
                     .header("Content-Type", "application/json")
+                    .header("X-Justrust-Client-Version", crate::update::VERSION)
                     .header("X-Justrust-Admission", "maintenance-v1");
+                if let Some(target) = crate::update::target() {
+                    req = req.header("X-Justrust-Target", target);
+                }
                 if timing {
                     req = req
                         .header("X-Justrust-Timing", "1")

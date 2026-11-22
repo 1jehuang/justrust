@@ -1073,6 +1073,7 @@ fn charge_hosted(
         Ok(_) => Ok(true),
         Err(e)
             if e.contains("justrust upgrade")
+                || e.contains("justrust update")
                 || e.contains("jcode.sh/account")
                 || e.contains("justrust login") =>
         {
@@ -1116,6 +1117,17 @@ fn await_hosted_admission(
                     update.label()
                 );
                 wait(update)?;
+            }
+            Ok(RunAdmission::UpdateRequired {
+                min_version,
+                message,
+            }) => {
+                if let Some(err) =
+                    crate::update::try_reexec_for_required_update(min_version.as_deref())
+                {
+                    return Ok(Err(format!("{message} ({err})")));
+                }
+                return Ok(Err(message));
             }
             Err(message) => return Ok(Err(message)),
         }
@@ -2346,6 +2358,22 @@ fn record_remote(
         let (profile, opt) = crate::dashboard::DashboardProfile::returned(&dir);
         s.dashboard_profile = Some(profile);
         s.units.opt_level = s.units.opt_level.or(opt);
+    }
+    if s.git.dirty_rs_lines.is_none() && !s.cwd.is_empty() {
+        let cwd = std::path::Path::new(&s.cwd);
+        if cwd.is_dir() {
+            s.git.dirty_rs_lines = crate::record::dirty_rs_lines_in(cwd);
+        }
+    }
+    if s.theoretical_floor.is_none() {
+        s.theoretical_floor = Some(crate::theoretical::compute(
+            &s.subcommand,
+            &s.args,
+            &s.git,
+            &s.units,
+            &s.phases,
+            &s.tests,
+        ));
     }
     let meta_path = dir.join("meta.json");
     if let Some(mut m) = std::fs::read(&meta_path)

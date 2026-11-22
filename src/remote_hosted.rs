@@ -378,6 +378,13 @@ fn curl_with_timing(
     if stages {
         cmd.args(["-H", "X-Justrust-Charge-Timing: 1"]);
     }
+    cmd.args([
+        "-H",
+        &format!("X-Justrust-Client-Version: {}", crate::update::VERSION),
+    ]);
+    if let Some(target) = crate::update::target() {
+        cmd.args(["-H", &format!("X-Justrust-Target: {target}")]);
+    }
     if method == "POST" && path == "build/runs" {
         cmd.args(["-H", "X-Justrust-Admission: maintenance-v1"]);
     }
@@ -652,6 +659,14 @@ fn api_error_unscoped(r: &Resp) -> anyhow::Error {
             return anyhow!(START_TRIAL);
         }
         (402, _) | (403, "build_not_entitled") => return anyhow!(SUBSCRIBE),
+        (426, "client_update_required") => {
+            if !msg.is_empty() {
+                return anyhow!("{msg}");
+            }
+            return anyhow!(
+                "this justrust client is too old for hosted builds. Run `justrust update` or `curl -fsSL https://jcode.sh/rust.sh | sh`."
+            );
+        }
         (429, _) => RATE_LIMITED.into(),
         (_, "build_capacity") => return anyhow!(AT_CAPACITY),
         (503, _) | (_, "build_unavailable") => UNAVAILABLE.into(),
@@ -846,6 +861,7 @@ pub fn charge_run_labeled(
             update.id,
             update.label()
         )),
+        RunAdmission::UpdateRequired { message, .. } => Err(message),
     }
 }
 
@@ -858,6 +874,27 @@ pub enum RunAdmission {
         maintenance_checked: bool,
     },
     Updating(HostedUpdate),
+    UpdateRequired {
+        min_version: Option<String>,
+        message: String,
+    },
+}
+
+fn required_update_info(r: &Resp) -> Option<(Option<String>, String)> {
+    if r.code != 426 || r.body["error"]["code"].as_str() != Some("client_update_required") {
+        return None;
+    }
+    if let Some(latest) = r.body["error"]["latest_version"]
+        .as_str()
+        .filter(|v| !v.is_empty())
+    {
+        crate::update::fleet_advertised(latest);
+    }
+    let min_version = r.body["error"]["min_version"]
+        .as_str()
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned);
+    Some((min_version, api_error(r).to_string()))
 }
 
 pub fn admit_run_labeled(
@@ -953,6 +990,9 @@ fn parse_run_admission(r: Resp) -> std::result::Result<RunAdmission, String> {
                 return Err("invalid hosted admission: active maintenance after charge".into());
             }
         }
+        if let Some(v) = r.body["fleet_version"].as_str().filter(|v| !v.is_empty()) {
+            crate::update::fleet_advertised(v);
+        }
         Ok(RunAdmission::Charged {
             builds: Builds::from(&r.body["builds"]),
             maintenance_checked,
@@ -964,6 +1004,11 @@ fn parse_run_admission(r: Resp) -> std::result::Result<RunAdmission, String> {
             return Err("invalid hosted maintenance response".into());
         }
         Ok(RunAdmission::Updating(update))
+    } else if let Some((min_version, message)) = required_update_info(&r) {
+        Ok(RunAdmission::UpdateRequired {
+            min_version,
+            message,
+        })
     } else {
         Err(api_error(&r).to_string())
     }
@@ -1927,6 +1972,17 @@ fn connect_with_mode(
                 retried_unavailable = true;
                 progress("Hosted admission temporarily unavailable, retrying once...");
             }
+            426 => {
+                if let Some((min_version, message)) = required_update_info(&r) {
+                    if let Some(err) =
+                        crate::update::try_reexec_for_required_update(min_version.as_deref())
+                    {
+                        bail!("{message} ({err})");
+                    }
+                    bail!("{message}");
+                }
+                return Err(api_error(&r));
+            }
             _ => return Err(api_error(&r)),
         }
         if start.elapsed() >= timeout {
@@ -2563,6 +2619,7 @@ fn ensure_ready_mode(refresh: bool, native_mode: Option<bool>) -> Result<Target>
             if let Some(v) = &r.fleet_version {
                 let _ = std::fs::write(d.join("fleet-version"), v);
                 crate::update::fleet_advertised(v);
+                crate::telemetry::maybe_spawn_background();
             }
             if let Some(b) = &r.builds {
                 eprintln!("hosted: ready at {} ({})", t.dest, b.describe());
@@ -3671,7 +3728,8 @@ mod tests {
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        let expected: Vec<String> = [
+        let version_header = format!("X-Justrust-Client-Version: {}", crate::update::VERSION);
+        let mut expected: Vec<String> = [
             "-sS",
             "--proto",
             "=https,http",
@@ -3692,14 +3750,22 @@ mod tests {
             "--config",
             "-",
             "-H",
-            "X-Justrust-Admission: maintenance-v1",
-            "-H",
-            "Content-Type: application/json",
+            &version_header,
         ]
         .into_iter()
         .map(String::from)
-        .chain([c.url("build/runs")])
         .collect();
+        if let Some(target) = crate::update::target() {
+            expected.push("-H".into());
+            expected.push(format!("X-Justrust-Target: {target}"));
+        }
+        expected.extend([
+            "-H".into(),
+            "X-Justrust-Admission: maintenance-v1".into(),
+            "-H".into(),
+            "Content-Type: application/json".into(),
+            c.url("build/runs"),
+        ]);
         assert_eq!(args, expected);
         let (trace, trace_config) = curl_with_timing(&c, "POST", "build/runs", Some(&body), true);
         let trace_args: Vec<_> = trace
@@ -4132,5 +4198,48 @@ mod tests {
             assert!(o.contains(&want), "{want} in {o}");
         }
         assert!(!o.contains("accept-new"));
+    }
+
+    #[test]
+    fn admission_and_connect_handle_426_client_update_required() {
+        let r = Resp {
+            code: 426,
+            body: json!({
+                "error": {
+                    "code": "client_update_required",
+                    "message": "justrust 0.1.0 or newer is required for hosted builds (running 0.1.0-alpha.32). Run `justrust update`.",
+                    "min_version": "0.1.0",
+                    "latest_version": "0.1.26"
+                }
+            }),
+        };
+        match parse_run_admission(r).unwrap() {
+            RunAdmission::UpdateRequired {
+                min_version,
+                message,
+            } => {
+                assert_eq!(min_version.as_deref(), Some("0.1.0"));
+                assert!(message.contains("justrust update"), "{message}");
+                assert!(message.contains("0.1.0"), "{message}");
+            }
+            other => panic!("expected UpdateRequired, got {other:?}"),
+        }
+
+        let ok = Resp {
+            code: 200,
+            body: json!({
+                "charged": "included",
+                "admission": "maintenance-v1",
+                "update": null,
+                "fleet_version": "9.9.9"
+            }),
+        };
+        assert!(matches!(
+            parse_run_admission(ok).unwrap(),
+            RunAdmission::Charged {
+                maintenance_checked: true,
+                ..
+            }
+        ));
     }
 }

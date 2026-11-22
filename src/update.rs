@@ -27,6 +27,8 @@ const CHECK_SECS: f64 = 24.0 * 3600.0;
 /// After a failed check or install, try again sooner than a day.
 const RETRY_SECS: f64 = 3.0 * 3600.0;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// One-shot guard preventing an infinite re-exec loop after a required inline update.
+pub const REEXEC_GUARD: &str = "JUSTRUST_UPDATED_REEXEC";
 
 /// Built by `.github/workflows/release.yml` (it sets the variable).
 pub fn release_build() -> bool {
@@ -330,6 +332,115 @@ fn note_applied(from: &str, to: &str) {
     }
 }
 
+fn is_internal_helper() -> bool {
+    std::env::args().nth(1).is_some_and(|a| a.starts_with("__"))
+}
+
+fn required_update_block_reason(
+    is_release_build: bool,
+    disabled: Option<&'static str>,
+    reexec_guard_set: bool,
+    internal_helper: bool,
+) -> Option<&'static str> {
+    if reexec_guard_set {
+        return Some("already updated in this invocation");
+    }
+    if internal_helper {
+        return Some("internal background process");
+    }
+    if !is_release_build {
+        return Some("built from source");
+    }
+    disabled
+}
+
+fn required_update_target_version<'a>(
+    info: &'a Value,
+    current: &str,
+    min_version: Option<&str>,
+) -> Result<&'a str> {
+    let version = info["version"]
+        .as_str()
+        .filter(|v| !v.is_empty())
+        .context("release endpoint returned no version")?;
+    if !info["update"].as_bool().unwrap_or(false) || !newer(version, current) {
+        bail!("no newer release binary is published for this platform yet (latest {version})");
+    }
+    if let Some(min) = min_version
+        && newer(min, version)
+    {
+        bail!("latest published release ({version}) is still older than required minimum ({min})");
+    }
+    Ok(version)
+}
+
+fn reexec_current_command(exe: &Path) -> Result<std::convert::Infallible> {
+    let mut cmd = Command::new(exe);
+    cmd.args(std::env::args_os().skip(1)).env(REEXEC_GUARD, "1");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = cmd.exec();
+        Err(err).with_context(|| format!("re-executing {}", exe.display()))
+    }
+    #[cfg(not(unix))]
+    {
+        let st = cmd
+            .status()
+            .with_context(|| format!("re-executing {}", exe.display()))?;
+        std::process::exit(st.code().unwrap_or(1));
+    }
+}
+
+fn install_required_and_reexec(min_version: Option<&str>) -> Result<std::convert::Infallible> {
+    let info = latest()?;
+    let version = required_update_target_version(&info, VERSION, min_version)?.to_string();
+    eprintln!(
+        "justrust: hosted service requires a newer client; updating {VERSION} -> {version} ..."
+    );
+    let exe = install(&info)?;
+    schedule(interval());
+    crate::telemetry::record(
+        "update",
+        json!({ "outcome": "applied", "trigger": "required", "from": VERSION, "to": version }),
+    );
+    reexec_current_command(&exe)
+}
+
+/// When the hosted service refuses a connect or remote compile with 426
+/// (`client_update_required`), attempt an inline verified self-update and
+/// re-exec the same command on the new binary. Returns `None` when inline
+/// auto-update is not applicable (source build, disabled, internal helper,
+/// loop guard, or another build running) and `Some(error)` if the download or
+/// install failed. On success this replaces the current process and never returns.
+pub fn try_reexec_for_required_update(min_version: Option<&str>) -> Option<String> {
+    if required_update_block_reason(
+        release_build(),
+        disabled_reason(),
+        std::env::var_os(REEXEC_GUARD).is_some(),
+        is_internal_helper(),
+    )
+    .is_some()
+    {
+        return None;
+    }
+    if builds_running() {
+        schedule(60.0);
+        return None;
+    }
+    match install_required_and_reexec(min_version) {
+        Ok(never) => match never {},
+        Err(e) => {
+            schedule(RETRY_SECS);
+            crate::telemetry::record(
+                "update",
+                json!({ "outcome": "failed", "stage": "required", "error": short(&e) }),
+            );
+            Some(format!("auto-update failed: {e}"))
+        }
+    }
+}
+
 /// The background check (`justrust __bg`).
 pub fn background() {
     schedule(interval());
@@ -554,5 +665,29 @@ mod tests {
         if cfg!(any(target_os = "linux", target_os = "macos")) {
             assert!(target().is_some());
         }
+    }
+
+    #[test]
+    fn required_update_eligibility_and_version_checks() {
+        assert_eq!(required_update_block_reason(true, None, false, false), None);
+        assert!(required_update_block_reason(true, None, true, false).is_some());
+        assert!(required_update_block_reason(true, None, false, true).is_some());
+        assert!(required_update_block_reason(false, None, false, false).is_some());
+        assert!(required_update_block_reason(true, Some("CI"), false, false).is_some());
+
+        let ready = json!({"version": "0.1.26", "update": true});
+        assert_eq!(
+            required_update_target_version(&ready, "0.1.0-alpha.32", Some("0.1.0")).unwrap(),
+            "0.1.26"
+        );
+        assert!(required_update_target_version(&ready, "0.1.0-alpha.32", Some("0.2.0")).is_err());
+        assert!(
+            required_update_target_version(
+                &json!({"version": "0.1.26", "update": false}),
+                "0.1.0-alpha.32",
+                Some("0.1.0")
+            )
+            .is_err()
+        );
     }
 }
