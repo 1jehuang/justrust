@@ -855,21 +855,36 @@ pub(crate) fn key_args_with(
     h: &mut H128,
     ext: &dyn Fn(&Path) -> Option<String>,
 ) -> Option<()> {
-    // The linker only runs for linked crate types. An rlib's bytes do not
-    // depend on it, and per-checkout linker paths (bench copies, config-relative
-    // wrappers) split otherwise identical keys: ~43 min of repeat dependency
-    // misses in 2 days named only `-C linker` (2026-11-18).
-    let rlib_only = rlib_only(args);
+    // The linker only runs for linked crate types when `--emit` includes `link`.
+    // An rlib's or metadata-only check's bytes do not depend on linker or link-arg
+    // flags, and per-checkout linker paths or `-C link-arg=-fuse-ld=mold` split
+    // otherwise identical keys (~43 min of repeat dependency misses in 2 days
+    // named only `-C linker`, 2026-11-18).
+    // `-Zthreads=N` only controls frontend thread count (rustc marks it UNTRACKED)
+    // and produces bit-for-bit identical `.rmeta`/`.rlib` outputs (~115s of misses
+    // across 400 runs, 2026-11-22).
+    // For metadata-only (`cargo check` / `clippy`, no `link` in `--emit`),
+    // `-C codegen-units=` and `-C strip=` never run and produce bit-for-bit
+    // identical `.rmeta` bytes (~70s of misses across 400 runs, 2026-11-22).
+    let meta_only = metadata_only(args);
+    let no_link = meta_only || rlib_only(args);
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
         let next = args.get(i + 1).map(String::as_str);
+        if let Some(skip) = ignored_z_threads_step(a, next) {
+            i += skip;
+            continue;
+        }
         let codegen = if a == "-C" {
             next
         } else {
             a.strip_prefix("-C")
         };
-        if rlib_only && codegen.is_some_and(|v| v.starts_with("linker=")) {
+        if codegen.is_some_and(|v| {
+            (no_link && is_ignored_link_codegen(v))
+                || (meta_only && is_ignored_metadata_only_codegen(v))
+        }) {
             i += if a == "-C" { 2 } else { 1 };
             continue;
         }
@@ -1176,6 +1191,63 @@ fn rlib_only(args: &[String]) -> bool {
         i += 1;
     }
     !types.is_empty() && types.iter().all(|t| matches!(*t, "lib" | "rlib"))
+}
+
+/// True when `--emit` requests metadata without `link` (`cargo check` / `clippy`).
+pub(crate) fn metadata_only(args: &[String]) -> bool {
+    let mut emit: Option<&str> = None;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--emit" {
+            emit = args.get(i + 1).map(String::as_str);
+            i += 1;
+        } else if let Some(v) = args[i].strip_prefix("--emit=") {
+            emit = Some(v);
+        }
+        i += 1;
+    }
+    emit.is_some_and(|e| {
+        let mut has_meta = false;
+        for part in e.split(',') {
+            let kind = part.split('=').next().unwrap_or(part);
+            if kind == "link" {
+                return false;
+            }
+            if kind == "metadata" {
+                has_meta = true;
+            }
+        }
+        has_meta
+    })
+}
+
+/// True when the invocation never invokes the linker (either `lib`/`rlib` only
+/// or metadata-only `--emit`).
+pub(crate) fn no_link_invoked(args: &[String]) -> bool {
+    rlib_only(args) || metadata_only(args)
+}
+
+/// Codegen flags that only affect linking and never change `.rlib`/`.rmeta` bytes.
+pub(crate) fn is_ignored_link_codegen(v: &str) -> bool {
+    v.starts_with("linker=") || v.starts_with("link-arg=") || v.starts_with("link-args=")
+}
+
+/// Codegen flags that never affect metadata-only (`--emit=dep-info,metadata`) `.rmeta` bytes.
+pub(crate) fn is_ignored_metadata_only_codegen(v: &str) -> bool {
+    v.starts_with("codegen-units=") || v.starts_with("strip=")
+}
+
+/// Returns how many argv tokens to skip if the current token is `-Zthreads[=...]`
+/// or `-Z threads[=...]`. Rustc marks `-Zthreads` as UNTRACKED and its outputs
+/// are bit-for-bit independent of thread count.
+pub(crate) fn ignored_z_threads_step(a: &str, next: Option<&str>) -> Option<usize> {
+    if a == "-Zthreads" || a.starts_with("-Zthreads=") {
+        Some(1)
+    } else if a == "-Z" && next.is_some_and(|v| v == "threads" || v.starts_with("threads=")) {
+        Some(2)
+    } else {
+        None
+    }
 }
 
 fn key_codegen(v: &str, norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
@@ -2194,9 +2266,92 @@ mod tests {
             key(&["--crate-type=rlib", "-Clinker=/x/ld"]),
             key(&["--crate-type=rlib", "-Clinker=/y/ld"])
         );
+        // Link args are also ignored for rlib and metadata-only check invocations.
+        assert_eq!(
+            key(&lib),
+            key(&[
+                "--crate-type",
+                "lib",
+                "-C",
+                "link-arg=-fuse-ld=mold",
+                "-C",
+                "link-args=-Wl,--as-needed",
+                "-C",
+                "opt-level=0"
+            ])
+        );
+        assert_eq!(
+            key(&[
+                "--crate-type",
+                "proc-macro",
+                "--emit=dep-info,metadata",
+                "-C",
+                "linker=/x/ld",
+                "-C",
+                "link-arg=-fuse-ld=mold"
+            ]),
+            key(&["--crate-type", "proc-macro", "--emit=dep-info,metadata"])
+        );
         assert_ne!(
             key(&["--crate-type", "proc-macro", "-C", "linker=/x/ld"]),
             key(&["--crate-type", "proc-macro", "-C", "linker=/y/ld"])
+        );
+        assert_ne!(
+            key(&["--crate-type", "proc-macro", "-C", "link-arg=-fuse-ld=lld"]),
+            key(&["--crate-type", "proc-macro", "-C", "link-arg=-fuse-ld=mold"])
+        );
+        // -Zthreads never changes output artifacts for any crate type.
+        assert_eq!(
+            key(&lib),
+            key(&["--crate-type", "lib", "-Zthreads=8", "-C", "opt-level=0"])
+        );
+        assert_eq!(
+            key(&lib),
+            key(&[
+                "--crate-type",
+                "lib",
+                "-Z",
+                "threads=4",
+                "-C",
+                "opt-level=0"
+            ])
+        );
+        assert_eq!(
+            key(&["--crate-type", "proc-macro"]),
+            key(&["--crate-type", "proc-macro", "-Zthreads=4"])
+        );
+        // Metadata-only check keys ignore -C codegen-units= and -C strip=, while linked keys keep them.
+        assert_eq!(
+            key(&["--crate-type", "lib", "--emit=dep-info,metadata"]),
+            key(&[
+                "--crate-type",
+                "lib",
+                "--emit=dep-info,metadata",
+                "-C",
+                "codegen-units=256",
+                "-C",
+                "strip=debuginfo"
+            ])
+        );
+        assert_ne!(
+            key(&["--crate-type", "lib", "--emit=dep-info,metadata,link"]),
+            key(&[
+                "--crate-type",
+                "lib",
+                "--emit=dep-info,metadata,link",
+                "-C",
+                "codegen-units=256"
+            ])
+        );
+        assert_ne!(
+            key(&["--crate-type", "lib", "--emit=dep-info,metadata,link"]),
+            key(&[
+                "--crate-type",
+                "lib",
+                "--emit=dep-info,metadata,link",
+                "-C",
+                "strip=debuginfo"
+            ])
         );
         assert_ne!(
             key(&[

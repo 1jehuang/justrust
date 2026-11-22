@@ -94,11 +94,29 @@ fn parts(plan: &Plan, real: &Path, args: &[OsString]) -> Option<Parts> {
         cwd: plan.norm.norm(plan.cwd.to_str()?),
         ..Default::default()
     };
+    let meta_only = depcache::metadata_only(&args);
+    let no_link = meta_only || depcache::no_link_invoked(&args);
     let mut native = H128::new();
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
         let next = args.get(i + 1).map(String::as_str);
+        if let Some(skip) = depcache::ignored_z_threads_step(a, next) {
+            i += skip;
+            continue;
+        }
+        let codegen = if a == "-C" {
+            next
+        } else {
+            a.strip_prefix("-C")
+        };
+        if codegen.is_some_and(|v| {
+            (no_link && depcache::is_ignored_link_codegen(v))
+                || (meta_only && depcache::is_ignored_metadata_only_codegen(v))
+        }) {
+            i += if a == "-C" { 2 } else { 1 };
+            continue;
+        }
         if a.starts_with("--diagnostic-width") {
         } else if a == "--extern" {
             let v = next?;
