@@ -124,7 +124,7 @@ run_top 6
 # 5. cargo check units
 C check; expect "down top up " "cold check"
 bump up/src/lib.rs
-C check; expect "top up " "check: touch up => down cut off"
+C check; expect "up " "check: touch up => down and top cut off"
 C check; expect "" "check no-op after cutoff"
 
 # 6. own source change in down is never cut off

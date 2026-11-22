@@ -271,11 +271,27 @@ impl CutoffPlan {
             debug!("jr-cutoff: own outputs changed since the record");
             return false;
         }
+        // Lazily loaded per-item dependency requirements from our own `.rmeta.jrdeps`.
+        let mut jrdeps: Option<Option<std::collections::HashMap<String, Option<DepItemReqs>>>> = None;
         for (p, expect) in &r.deps {
             match expect {
                 DepExpect::Iface(h) => {
                     let now = read_iface(p);
                     if now.as_deref() != Some(h.as_str()) {
+                        let reqs_map = jrdeps.get_or_insert_with(|| {
+                            self.outputs
+                                .iter()
+                                .find(|o| o.extension().is_some_and(|e| e == "rmeta"))
+                                .and_then(|o| read_jrdeps(o))
+                        });
+                        if let Some(map) = reqs_map
+                            && per_item_dep_matches(p, map)
+                        {
+                            debug!(
+                                "jr-cutoff: whole interface of {p:?} changed ({h} -> {now:?}), but per-item reqs still match"
+                            );
+                            continue;
+                        }
                         debug!("jr-cutoff: interface of {p:?} changed: {h} -> {now:?}");
                         return false;
                     }
@@ -308,11 +324,12 @@ impl CutoffPlan {
             .unwrap_or_else(FileTime::now);
         for o in &self.outputs {
             paths::set_file_time_no_err(o, now);
-            // Keep the own sidecar (contents untouched) not older than the
-            // `.rmeta`, so dependents still trust it.
-            let side = sidecar_path(o);
-            if side.exists() {
-                paths::set_file_time_no_err(&side, now);
+            // Keep the own sidecars (contents untouched) not older than the
+            // `.rmeta`, so dependents still trust them.
+            for side in [sidecar_path(o), items_sidecar_path(o), deps_sidecar_path(o)] {
+                if side.exists() {
+                    paths::set_file_time_no_err(&side, now);
+                }
             }
         }
         write_record(&self.record, &self.rmeta_deps, &self.outputs);
@@ -325,6 +342,145 @@ pub fn log_skip(unit_desc: &str) {
         use std::io::Write;
         if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
             let _ = writeln!(f, "skip {unit_desc}");
+        }
+    }
+}
+
+fn sidecar_with_suffix(rmeta: &Path, suffix: &str) -> PathBuf {
+    let mut s = rmeta.as_os_str().to_os_string();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+fn items_sidecar_path(rmeta: &Path) -> PathBuf {
+    sidecar_with_suffix(rmeta, ".jritems")
+}
+
+fn deps_sidecar_path(rmeta: &Path) -> PathBuf {
+    sidecar_with_suffix(rmeta, ".jrdeps")
+}
+
+struct DepItemReqs {
+    read_crate_level: bool,
+    crate_iface_hash: [u8; 16],
+    items: Vec<([u8; 16], [u8; 16])>,
+}
+
+struct CrateItemHashes {
+    crate_iface_hash: [u8; 16],
+    items: Vec<([u8; 16], [u8; 16])>,
+}
+
+fn read_u32_le(bytes: &[u8], off: &mut usize) -> Option<u32> {
+    let end = off.checked_add(4)?;
+    let arr: [u8; 4] = bytes.get(*off..end)?.try_into().ok()?;
+    *off = end;
+    Some(u32::from_le_bytes(arr))
+}
+
+fn read_16(bytes: &[u8], off: &mut usize) -> Option<[u8; 16]> {
+    let end = off.checked_add(16)?;
+    let arr: [u8; 16] = bytes.get(*off..end)?.try_into().ok()?;
+    *off = end;
+    Some(arr)
+}
+
+fn sidecar_is_fresh(rmeta: &Path, sidecar: &Path) -> bool {
+    let (Ok(rm), Ok(sm)) = (fs::metadata(rmeta), fs::metadata(sidecar)) else {
+        return false;
+    };
+    FileTime::from_last_modification_time(&sm) >= FileTime::from_last_modification_time(&rm)
+}
+
+fn read_jritems(rmeta: &Path) -> Option<CrateItemHashes> {
+    let sidecar = items_sidecar_path(rmeta);
+    if !sidecar_is_fresh(rmeta, &sidecar) {
+        return None;
+    }
+    let bytes = fs::read(&sidecar).ok()?;
+    if bytes.get(0..8) != Some(b"JRIT0001") {
+        return None;
+    }
+    let mut off = 8;
+    let crate_iface_hash = read_16(&bytes, &mut off)?;
+    let count = read_u32_le(&bytes, &mut off)? as usize;
+    let mut items = Vec::with_capacity(count);
+    for _ in 0..count {
+        let dph = read_16(&bytes, &mut off)?;
+        let h = read_16(&bytes, &mut off)?;
+        items.push((dph, h));
+    }
+    items.sort_unstable_by_key(|&(k, _)| k);
+    Some(CrateItemHashes { crate_iface_hash, items })
+}
+
+fn read_jrdeps(rmeta: &Path) -> Option<std::collections::HashMap<String, Option<DepItemReqs>>> {
+    let sidecar = deps_sidecar_path(rmeta);
+    if !sidecar_is_fresh(rmeta, &sidecar) {
+        return None;
+    }
+    let bytes = fs::read(&sidecar).ok()?;
+    if bytes.get(0..8) != Some(b"JRDP0001") {
+        return None;
+    }
+    let mut off = 8;
+    let dep_count = read_u32_le(&bytes, &mut off)? as usize;
+    let mut map = std::collections::HashMap::with_capacity(dep_count);
+    for _ in 0..dep_count {
+        let name_len = read_u32_le(&bytes, &mut off)? as usize;
+        let name_end = off.checked_add(name_len)?;
+        let name = std::str::from_utf8(bytes.get(off..name_end)?).ok()?.to_string();
+        off = name_end;
+        let has_reqs = *bytes.get(off)?;
+        off += 1;
+        let reqs = if has_reqs == 1 {
+            let read_crate_level = *bytes.get(off)? != 0;
+            off += 1;
+            let crate_iface_hash = read_16(&bytes, &mut off)?;
+            let item_count = read_u32_le(&bytes, &mut off)? as usize;
+            let mut items = Vec::with_capacity(item_count);
+            for _ in 0..item_count {
+                let dph = read_16(&bytes, &mut off)?;
+                let h = read_16(&bytes, &mut off)?;
+                items.push((dph, h));
+            }
+            Some(DepItemReqs { read_crate_level, crate_iface_hash, items })
+        } else {
+            None
+        };
+        if !name.is_empty() {
+            map.insert(name, reqs);
+        }
+    }
+    Some(map)
+}
+
+fn per_item_dep_matches(
+    dep_rmeta: &Path,
+    jrdeps: &std::collections::HashMap<String, Option<DepItemReqs>>,
+) -> bool {
+    let Some(fname) = dep_rmeta.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    match jrdeps.get(fname) {
+        // rustc never loaded this transitive dependency at all!
+        None => true,
+        // rustc loaded it, but it had no per-item hashes -> fail closed.
+        Some(None) => false,
+        Some(Some(reqs)) => {
+            let Some(now) = read_jritems(dep_rmeta) else {
+                return false;
+            };
+            if reqs.read_crate_level && reqs.crate_iface_hash != now.crate_iface_hash {
+                return false;
+            }
+            for &(dph, expected) in &reqs.items {
+                match now.items.binary_search_by_key(&dph, |&(k, _)| k) {
+                    Ok(idx) if now.items[idx].1 == expected => {}
+                    _ => return false,
+                }
+            }
+            true
         }
     }
 }
@@ -435,6 +591,98 @@ mod tests {
         filetime::set_file_mtime(&third_party, FileTime::from_unix_time(123, 0)).unwrap();
         assert!(!plan.probe());
         assert!(!record.exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn write_fake_jritems(rmeta: &Path, crate_hash: [u8; 16], items: &[([u8; 16], [u8; 16])]) {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"JRIT0001");
+        buf.extend_from_slice(&crate_hash);
+        buf.extend_from_slice(&(items.len() as u32).to_le_bytes());
+        for &(dph, h) in items {
+            buf.extend_from_slice(&dph);
+            buf.extend_from_slice(&h);
+        }
+        fs::write(items_sidecar_path(rmeta), buf).unwrap();
+    }
+
+    fn write_fake_jrdeps(
+        rmeta: &Path,
+        deps: &[(&str, Option<(bool, [u8; 16], &[([u8; 16], [u8; 16])])>)],
+    ) {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"JRDP0001");
+        buf.extend_from_slice(&(deps.len() as u32).to_le_bytes());
+        for (name, reqs) in deps {
+            buf.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            buf.extend_from_slice(name.as_bytes());
+            if let Some((read_crate_level, crate_hash, items)) = reqs {
+                buf.push(1);
+                buf.push(u8::from(*read_crate_level));
+                buf.extend_from_slice(crate_hash);
+                buf.extend_from_slice(&(items.len() as u32).to_le_bytes());
+                for &(dph, h) in *items {
+                    buf.extend_from_slice(&dph);
+                    buf.extend_from_slice(&h);
+                }
+            } else {
+                buf.push(0);
+            }
+        }
+        fs::write(deps_sidecar_path(rmeta), buf).unwrap();
+    }
+
+    #[test]
+    fn per_item_cutoff_and_unused_dep() {
+        let dir = std::env::temp_dir().join(format!("jr-cutoff-item-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let dep_used = fake_rmeta(&dir, "libused.rmeta", 1);
+        let dep_unused = fake_rmeta(&dir, "libunused.rmeta", 10);
+        let out = dir.join("libme.rmeta");
+        fs::write(&out, b"me").unwrap();
+        let record = dir.join(RECORD_NAME);
+
+        let crate_h = [0xAA; 16];
+        let item_used = ([0x01; 16], [0x11; 16]);
+        let item_other = ([0x02; 16], [0x22; 16]);
+        write_fake_jritems(&dep_used, crate_h, &[item_used, item_other]);
+        // `libme` only loaded `libused` (reading `item_used`, plus crate-level) and never loaded `libunused`.
+        write_fake_jrdeps(&out, &[("libused.rmeta", Some((true, crate_h, &[item_used])))]);
+
+        write_record(&record, &[dep_used.clone(), dep_unused.clone()], &[out.clone()]);
+        let plan = CutoffPlan {
+            record: record.clone(),
+            rmeta_deps: vec![dep_used.clone(), dep_unused.clone()],
+            outputs: vec![out.clone()],
+        };
+
+        // 1. Unused transitive dep changes whole-crate iface -> CUT OFF!
+        fake_rmeta(&dir, "libunused.rmeta", 99);
+        assert!(plan.probe(), "unused transitive dep must not invalidate");
+        plan.commit();
+
+        // 2. Used dep changes an UNUSED public item (whole-crate iface changes, item_used unchanged) -> CUT OFF!
+        fake_rmeta(&dir, "libused.rmeta", 2);
+        let item_other_v2 = ([0x02; 16], [0x99; 16]);
+        write_fake_jritems(&dep_used, crate_h, &[item_used, item_other_v2]);
+        assert!(plan.probe(), "unused public item change must cut off");
+        plan.commit();
+
+        // 3. Used dep changes the USED item -> MUST REBUILD!
+        fake_rmeta(&dir, "libused.rmeta", 3);
+        let item_used_v2 = ([0x01; 16], [0x77; 16]);
+        write_fake_jritems(&dep_used, crate_h, &[item_used_v2, item_other_v2]);
+        assert!(!plan.probe(), "used item change must rebuild");
+
+        // 4. Re-record, then change crate_iface_hash (e.g. new trait impl) -> MUST REBUILD!
+        write_fake_jritems(&dep_used, crate_h, &[item_used, item_other]);
+        write_record(&record, &[dep_used.clone(), dep_unused.clone()], &[out.clone()]);
+        fake_rmeta(&dir, "libused.rmeta", 4);
+        write_fake_jritems(&dep_used, [0xBB; 16], &[item_used, item_other]);
+        assert!(!plan.probe(), "crate-level hash change must rebuild when read_crate_level=true");
+
         fs::remove_dir_all(&dir).unwrap();
     }
 }

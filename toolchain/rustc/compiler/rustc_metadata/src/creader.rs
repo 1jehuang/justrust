@@ -152,6 +152,8 @@ enum CrateOrigin<'a> {
         /// (`-Zjr-iface-hash`). A crate with a different crate hash but this interface
         /// hash satisfies the dependency.
         dep_iface_hash: Option<Fingerprint>,
+        /// justrust: per-item requirements the dependent recorded for this dependency.
+        dep_item_reqs: Option<&'a crate::rmeta::DepItemReqs>,
     },
     /// Injected by `rustc`.
     Injected,
@@ -182,6 +184,14 @@ impl<'a> CrateOrigin<'a> {
     fn dep_iface_hash(&self) -> Option<Fingerprint> {
         match self {
             CrateOrigin::IndirectDependency { dep_iface_hash, .. } => *dep_iface_hash,
+            _ => None,
+        }
+    }
+
+    /// justrust: the dependency's recorded per-item requirements, if any.
+    fn dep_item_reqs(&self) -> Option<&'a crate::rmeta::DepItemReqs> {
+        match self {
+            CrateOrigin::IndirectDependency { dep_item_reqs, .. } => *dep_item_reqs,
             _ => None,
         }
     }
@@ -569,6 +579,7 @@ impl CStore {
         name: Symbol,
         hash: Option<Svh>,
         iface_hash: Option<Fingerprint>,
+        dep_item_reqs: Option<&crate::rmeta::DepItemReqs>,
     ) -> Option<CrateNum> {
         let hash = hash?;
         if let Some(&cnum) = self.hash_to_cnum.get(&hash) {
@@ -576,10 +587,17 @@ impl CStore {
             return Some(cnum);
         }
         // justrust: the dependent was built against an older build of this crate with the
-        // same interface (a body-only edit since). Use the loaded crate.
-        let iface_hash = iface_hash?;
+        // same interface (a body-only edit since) or matching per-item hashes. Use the loaded crate.
+        if let Some(iface_hash) = iface_hash
+            && let Some((cnum, _)) = self
+                .iter_crate_data()
+                .find(|(_, data)| data.name() == name && data.iface_hash() == Some(iface_hash))
+        {
+            return Some(cnum);
+        }
+        let reqs = dep_item_reqs?;
         self.iter_crate_data()
-            .find(|(_, data)| data.name() == name && data.iface_hash() == Some(iface_hash))
+            .find(|(_, data)| data.name() == name && data.dep_item_reqs_match(reqs))
             .map(|(cnum, _)| cnum)
     }
 
@@ -871,11 +889,14 @@ impl CStore {
         let hash = dep.map(|d| d.hash);
         let host_hash = dep.map(|d| d.host_hash).flatten();
         let dep_iface_hash = origin.dep_iface_hash();
+        let dep_item_reqs = origin.dep_item_reqs();
         let extra_filename = origin.dep_extra_filename();
         let path_kind = if dep.is_some() { PathKind::Dependency } else { PathKind::Crate };
         let private_dep = origin.private_dep();
 
-        let result = if let Some(cnum) = self.existing_match(name, hash, dep_iface_hash) {
+        let result = if let Some(cnum) =
+            self.existing_match(name, hash, dep_iface_hash, dep_item_reqs)
+        {
             (LoadResult::Previous(cnum), None)
         } else {
             info!("falling back to a load");
@@ -891,6 +912,7 @@ impl CStore {
                 path_kind,
             );
             locator.iface_hash = dep_iface_hash;
+            locator.dep_item_reqs = dep_item_reqs.cloned();
             let mut crate_rejections = CrateRejections::default();
 
             match self.load(&mut locator, &mut crate_rejections)? {
@@ -996,6 +1018,7 @@ impl CStore {
         // once that slot is skipped.
         let unhashed = metadata.get_root_unhashed();
         let dep_iface_hashes = unhashed.dep_iface_hashes;
+        let dep_item_reqs = unhashed.dep_item_reqs;
         let dep_extra_filenames = unhashed.dep_extra_filenames;
         assert_eq!(
             dep_extra_filenames.len(),
@@ -1004,9 +1027,10 @@ impl CStore {
         );
         let mut crate_num_map = CrateNumMap::with_capacity(1 + deps.len());
         crate_num_map.push(krate);
-        for ((dep, dep_extra_filename), dep_iface_hash) in deps
+        for (((dep, dep_extra_filename), dep_iface_hash), dep_item_req) in deps
             .zip(dep_extra_filenames.iter().skip(1).map(String::as_str))
             .zip(dep_iface_hashes.iter().skip(1).copied().chain(std::iter::repeat(None)))
+            .zip(dep_item_reqs.iter().skip(1).map(Option::as_ref).chain(std::iter::repeat(None)))
         {
             info!(
                 "resolving dep `{}`->`{}` hash: `{}` extra filename: `{}` private {}",
@@ -1030,6 +1054,7 @@ impl CStore {
                     dep: &dep,
                     dep_extra_filename,
                     dep_iface_hash,
+                    dep_item_reqs: dep_item_req,
                 },
             )?;
             crate_num_map.push(cnum);

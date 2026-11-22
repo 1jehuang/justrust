@@ -105,27 +105,48 @@ pub fn encode_and_write_metadata(tcx: TyCtxt<'_>) -> Result<EncodedMetadata, Err
     };
 
     // justrust: `-Zjr-iface-hash` writes the interface hash next to the rmeta, for cargo
-    // (`<rmeta>.jriface`, 32 lowercase hex chars and a newline). Written before rustc
-    // reports the artifact to cargo, and removed when there is none, so a stale sidecar
-    // can never describe a new rmeta.
+    // (`<rmeta>.jriface`, 32 lowercase hex chars and a newline), plus `<rmeta>.jritems`
+    // (crate-level + per-item hashes) and `<rmeta>.jrdeps` (per-dep item requirements).
+    // Written before rustc reports the artifact to cargo, and removed when there is none,
+    // so a stale sidecar can never describe a new rmeta.
     if need_metadata_file
         && tcx.sess.jr_iface_hash()
         && let OutFileName::Real(ref path) = out_filename
     {
-        let mut sidecar = path.clone().into_os_string();
-        sidecar.push(".jriface");
-        let sidecar = PathBuf::from(sidecar);
-        match crate::rmeta::MetadataBlob::iface_hash_of_file(&metadata_filename) {
-            Some(hash) => {
+        let sidecar = sidecar_with_suffix(path, ".jriface");
+        let items_sidecar = sidecar_with_suffix(path, ".jritems");
+        let deps_sidecar = sidecar_with_suffix(path, ".jrdeps");
+        match crate::rmeta::MetadataBlob::root_unhashed_of_file(&metadata_filename) {
+            Some(unhashed) if unhashed.iface_hash.is_some() => {
+                let hash = unhashed.iface_hash.unwrap();
                 let tmp = sidecar.with_extension("jriface.tmp");
-                let res = fs::write(&tmp, format!("{}\n", rustc_data_structures::svh::Svh::new(hash).to_hex()))
-                    .and_then(|()| fs::rename(&tmp, &sidecar));
+                let res = fs::write(
+                    &tmp,
+                    format!("{}\n", rustc_data_structures::svh::Svh::new(hash).to_hex()),
+                )
+                .and_then(|()| fs::rename(&tmp, &sidecar));
                 if let Err(err) = res {
                     tcx.dcx().emit_fatal(FailedWriteError { filename: sidecar, err });
                 }
+                if let Some(crate_iface_hash) = unhashed.crate_iface_hash {
+                    if let Err(err) = write_jritems_sidecar(
+                        &items_sidecar,
+                        crate_iface_hash,
+                        &unhashed.item_hashes,
+                    ) {
+                        tcx.dcx().emit_fatal(FailedWriteError { filename: items_sidecar, err });
+                    }
+                } else {
+                    let _ = fs::remove_file(&items_sidecar);
+                }
+                if let Err(err) = write_jrdeps_sidecar(tcx, &deps_sidecar) {
+                    tcx.dcx().emit_fatal(FailedWriteError { filename: deps_sidecar, err });
+                }
             }
-            None => {
+            _ => {
                 let _ = fs::remove_file(&sidecar);
+                let _ = fs::remove_file(&items_sidecar);
+                let _ = fs::remove_file(&deps_sidecar);
             }
         }
     }
@@ -166,4 +187,70 @@ pub fn copy_to_stdout(from: &Path) -> io::Result<()> {
     let mut stdout = io::stdout();
     io::copy(&mut reader, &mut stdout)?;
     Ok(())
+}
+
+fn sidecar_with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+fn write_jritems_sidecar(
+    path: &Path,
+    crate_iface_hash: rustc_data_structures::fingerprint::Fingerprint,
+    item_hashes: &[(
+        rustc_data_structures::fingerprint::Fingerprint,
+        rustc_data_structures::fingerprint::Fingerprint,
+    )],
+) -> io::Result<()> {
+    let mut buf = Vec::with_capacity(8 + 16 + 4 + item_hashes.len() * 32);
+    buf.extend_from_slice(b"JRIT0001");
+    buf.extend_from_slice(&crate_iface_hash.to_le_bytes());
+    buf.extend_from_slice(&(item_hashes.len() as u32).to_le_bytes());
+    for &(dph, h) in item_hashes {
+        buf.extend_from_slice(&dph.to_le_bytes());
+        buf.extend_from_slice(&h.to_le_bytes());
+    }
+    let tmp = path.with_extension("jritems.tmp");
+    fs::write(&tmp, &buf)?;
+    fs::rename(&tmp, path)
+}
+
+/// Write `<rmeta>.jrdeps` with the current per-item dependency requirements from `CStore`.
+pub fn write_jrdeps_sidecar(tcx: TyCtxt<'_>, path: &Path) -> io::Result<()> {
+    let cstore = crate::creader::CStore::from_tcx(tcx);
+    let crates = tcx.crates(());
+    let mut buf = Vec::with_capacity(12 + crates.len() * 64);
+    buf.extend_from_slice(b"JRDP0001");
+    buf.extend_from_slice(&(crates.len() as u32).to_le_bytes());
+    for &cnum in crates.iter() {
+        let cdata = cstore.get_crate_data(cnum);
+        let src = cdata.source();
+        let dep_fname = src
+            .rmeta
+            .as_ref()
+            .or(src.rlib.as_ref())
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        buf.extend_from_slice(&(dep_fname.len() as u32).to_le_bytes());
+        buf.extend_from_slice(dep_fname.as_bytes());
+        if let Some(reqs) = cdata.collect_dep_item_reqs()
+            && let Some(crate_iface_hash) = reqs.crate_iface_hash
+        {
+            buf.push(1);
+            buf.push(u8::from(reqs.read_crate_level));
+            buf.extend_from_slice(&crate_iface_hash.to_le_bytes());
+            buf.extend_from_slice(&(reqs.items.len() as u32).to_le_bytes());
+            for &(dph, h) in &reqs.items {
+                buf.extend_from_slice(&dph.to_le_bytes());
+                buf.extend_from_slice(&h.to_le_bytes());
+            }
+        } else {
+            buf.push(0);
+        }
+    }
+    let tmp = path.with_extension("jrdeps.tmp");
+    fs::write(&tmp, &buf)?;
+    fs::rename(&tmp, path)
 }

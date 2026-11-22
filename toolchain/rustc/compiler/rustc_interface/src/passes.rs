@@ -1449,6 +1449,19 @@ pub(crate) fn start_codegen<'tcx>(
         tcx.sess.code_stats.print_type_sizes();
     }
 
+    // justrust: refresh `<rmeta>.jrdeps` after codegen so monomorphization and
+    // cross-crate inlining reads are included in the per-item dependency record.
+    if tcx.sess.jr_iface_hash()
+        && !tcx.crate_types().contains(&CrateType::ProcMacro)
+        && tcx.output_filenames(()).outputs.contains_key(&OutputType::Metadata)
+        && let rustc_session::config::OutFileName::Real(ref path) =
+            tcx.output_filenames(()).path(OutputType::Metadata)
+    {
+        let mut deps_sidecar = path.clone().into_os_string();
+        deps_sidecar.push(".jrdeps");
+        let _ = rustc_metadata::fs::write_jrdeps_sidecar(tcx, &std::path::PathBuf::from(deps_sidecar));
+    }
+
     let crate_info = CrateInfo::new(tcx, codegen_backend.target_cpu(tcx.sess));
 
     (codegen, crate_info, metadata)

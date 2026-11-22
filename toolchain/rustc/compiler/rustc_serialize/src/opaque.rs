@@ -176,6 +176,14 @@ impl<'a> FileEncoder<'a> {
         self.iface_fed_count
     }
 
+    /// Flush any pending unskipped bytes to the interface sink immediately.
+    #[inline]
+    pub fn iface_flush_pending(&mut self) {
+        if self.iface_skip == 0 {
+            self.iface_feed_pending();
+        }
+    }
+
     /// Whether an interface hash sink is installed.
     #[inline]
     pub fn iface_active(&self) -> bool {

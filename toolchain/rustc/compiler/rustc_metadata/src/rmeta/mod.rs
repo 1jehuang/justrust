@@ -327,6 +327,48 @@ pub(crate) struct CrateRoot {
     specialization_enabled_in: bool,
 }
 
+/// Per-dependency item-level requirements recorded when a crate is compiled.
+/// Lets a rebuilt dependency whose whole-crate `iface_hash` changed still satisfy
+/// this crate if the crate-level hash (when queried) and every queried item's hash
+/// are unchanged.
+/// justrust: derive the shallow (name-resolution) lookup key from a `DefPathHash.0`.
+#[inline]
+pub(crate) fn shallow_item_key(dph: Fingerprint) -> Fingerprint {
+    let (lo, hi) = dph.split();
+    Fingerprint::new(lo.as_u64() ^ 0x5348_414c_4c4f_575f, hi.as_u64() ^ 0x4954_454d_4841_5348)
+}
+
+#[derive(Clone, Debug, MetadataEncodable, LazyDecodable)]
+pub(crate) struct DepItemReqs {
+    pub(crate) read_crate_level: bool,
+    pub(crate) crate_iface_hash: Option<Fingerprint>,
+    /// Sorted by `DefPathHash.0` (`Fingerprint`) for O(log N) lookup.
+    pub(crate) items: Vec<(Fingerprint, Fingerprint)>,
+}
+
+impl DepItemReqs {
+    /// Returns true if a dependency crate with `crate_iface_hash` and sorted `item_hashes`
+    /// satisfies all requirements recorded in `self`.
+    pub(crate) fn matches(
+        &self,
+        crate_iface_hash: Option<Fingerprint>,
+        item_hashes: &[(Fingerprint, Fingerprint)],
+    ) -> bool {
+        if self.read_crate_level {
+            if self.crate_iface_hash.is_none() || self.crate_iface_hash != crate_iface_hash {
+                return false;
+            }
+        }
+        for &(dph, expected) in &self.items {
+            match item_hashes.binary_search_by_key(&dph, |&(k, _)| k) {
+                Ok(idx) if item_hashes[idx].1 == expected => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+}
+
 /// A separate struct for extra metadata that must be encoded *after*
 /// the main crate hash is finalized.
 #[derive(MetadataEncodable, LazyDecodable)]
@@ -341,11 +383,21 @@ pub(crate) struct CrateRootUnhashed {
     /// justrust (`-Zjr-iface-hash`): hash of the metadata without span positions,
     /// expansion hashes and the source map, with dependencies' crate hashes replaced by
     /// their interface hashes. Equal interface hashes mean dependents need not rebuild.
-    iface_hash: Option<Fingerprint>,
+    pub(crate) iface_hash: Option<Fingerprint>,
     /// The interface hash each dependency had when this crate was built, indexed like
     /// `dep_extra_filenames`. Lets a dependency rebuilt with the same interface (but a new
     /// crate hash) satisfy this crate.
     pub(crate) dep_iface_hashes: IndexVec<CrateNum, Option<Fingerprint>>,
+    /// justrust (`-Zjr-iface-hash`): crate-level interface hash (excluding per-DefIndex
+    /// item metadata and dependency SVHs/iface hashes).
+    pub(crate) crate_iface_hash: Option<Fingerprint>,
+    /// justrust (`-Zjr-iface-hash`): sorted `(DefPathHash, item_hash)` for every local DefId
+    /// encoded in this crate. Each `item_hash` includes the item's `DefIndex` so any index
+    /// shift invalidates dependents referencing that item.
+    pub(crate) item_hashes: Vec<(Fingerprint, Fingerprint)>,
+    /// justrust (`-Zjr-iface-hash`): per-dependency item-level requirements recorded when
+    /// this crate was built, indexed like `dep_iface_hashes`.
+    pub(crate) dep_item_reqs: IndexVec<CrateNum, Option<DepItemReqs>>,
 }
 
 /// On-disk representation of `DefId`.

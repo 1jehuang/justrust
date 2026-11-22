@@ -193,6 +193,14 @@ pub(crate) struct CrateMetadata {
     /// Information about the `extern crate` item or path that caused this crate to be loaded.
     /// If this is `None`, then the crate was injected (e.g., by the allocator).
     extern_crate: Option<ExternCrate>,
+
+    /// justrust (`-Zjr-iface-hash`): per-DefIndex deep read tracking for per-item cross-crate cutoff.
+    read_defs: Box<[std::sync::atomic::AtomicBool]>,
+    /// justrust (`-Zjr-iface-hash`): per-DefIndex shallow (name-res) read tracking.
+    read_defs_shallow: Box<[std::sync::atomic::AtomicBool]>,
+    /// justrust (`-Zjr-iface-hash`): whether any crate-level metadata (trait impls, lang items,
+    /// etc.) was read from this crate during compilation.
+    read_crate_level: std::sync::atomic::AtomicBool,
 }
 
 /// Decode context used when we just have a blob of metadata from which we have to decode a header
@@ -278,6 +286,12 @@ impl<'a, 'tcx> LazyDecoder for MetadataDecodeContext<'a, 'tcx> {
 
 pub(super) trait MetaBlob<'a>: Copy {
     fn blob(&self) -> &'a MetadataBlob;
+    #[inline]
+    fn record_def_read(&self, _def_index: DefIndex) {}
+    #[inline]
+    fn record_def_read_shallow(&self, _def_index: DefIndex) {}
+    #[inline]
+    fn record_crate_level_read(&self) {}
 }
 
 pub(super) trait MetaDecoder: Copy {
@@ -314,6 +328,22 @@ impl<'a> MetaDecoder for &'a MetadataBlob {
 impl<'a> MetaBlob<'a> for &'a CrateMetadata {
     fn blob(&self) -> &'a MetadataBlob {
         &self.blob
+    }
+    #[inline]
+    fn record_def_read(&self, def_index: DefIndex) {
+        if let Some(slot) = self.read_defs.get(def_index.index()) {
+            slot.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    #[inline]
+    fn record_def_read_shallow(&self, def_index: DefIndex) {
+        if let Some(slot) = self.read_defs_shallow.get(def_index.index()) {
+            slot.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    #[inline]
+    fn record_crate_level_read(&self) {
+        self.read_crate_level.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -784,8 +814,8 @@ impl MetadataBlob {
         self.get_root_unhashed().dep_extra_filenames
     }
 
-    /// justrust: the interface hash recorded in the metadata file at `path`, if any.
-    pub(crate) fn iface_hash_of_file(path: &Path) -> Option<Fingerprint> {
+    /// justrust: the unhashed root recorded in the metadata file at `path`, if any.
+    pub(crate) fn root_unhashed_of_file(path: &Path) -> Option<CrateRootUnhashed> {
         let file = std::fs::File::open(path).ok()?;
         // SAFETY: the file was just written by this process and is not modified concurrently.
         let mmap = unsafe { rustc_data_structures::memmap::Mmap::map(file) }.ok()?;
@@ -794,7 +824,27 @@ impl MetadataBlob {
             std::ops::Deref::deref,
         ))
         .ok()?;
-        blob.get_iface_hash()
+        let pos_bytes = blob[UNHASHED_POS_OFFSET..][..8].try_into().unwrap();
+        if u64::from_le_bytes(pos_bytes) == 0 {
+            return None;
+        }
+        Some(blob.get_root_unhashed())
+    }
+
+    /// justrust: whether this metadata blob satisfies `reqs` (per-item cross-crate cutoff).
+    pub(crate) fn dep_item_reqs_match(&self, reqs: &crate::rmeta::DepItemReqs) -> bool {
+        let pos_bytes = self[UNHASHED_POS_OFFSET..][..8].try_into().unwrap();
+        if u64::from_le_bytes(pos_bytes) == 0 {
+            return false;
+        }
+        let unhashed = self.get_root_unhashed();
+        reqs.matches(unhashed.crate_iface_hash, &unhashed.item_hashes)
+    }
+
+    /// justrust: the interface hash recorded in the metadata file at `path`, if any.
+    #[allow(dead_code)]
+    pub(crate) fn iface_hash_of_file(path: &Path) -> Option<Fingerprint> {
+        Self::root_unhashed_of_file(path).and_then(|u| u.iface_hash)
     }
 
     /// justrust: the interface hash of this crate, if it was built with `-Zjr-iface-hash`.
@@ -1151,7 +1201,7 @@ impl CrateMetadata {
             .root
             .tables
             .def_ident_span
-            .get(self, item_index)
+            .get_shallow(self, item_index)
             .unwrap_or_else(|| self.missing("def_ident_span", item_index))
             .decode((self, tcx));
         Some(Ident::new(name, span))
@@ -1170,7 +1220,7 @@ impl CrateMetadata {
         self.root
             .tables
             .def_kind
-            .get(self, item_id)
+            .get_shallow(self, item_id)
             .unwrap_or_else(|| self.missing("def_kind", item_id))
     }
 
@@ -1178,7 +1228,7 @@ impl CrateMetadata {
         self.root
             .tables
             .def_span
-            .get(self, index)
+            .get_shallow(self, index)
             .unwrap_or_else(|| self.missing("def_span", index))
             .decode((self, tcx))
     }
@@ -1309,7 +1359,7 @@ impl CrateMetadata {
         self.root
             .tables
             .visibility
-            .get(self, id)
+            .get_shallow(self, id)
             .unwrap_or_else(|| self.missing("visibility", id))
             .decode((self, tcx))
             .map_id(|index| ModId::new_unchecked(self.local_def_id(index)))
@@ -1336,7 +1386,7 @@ impl CrateMetadata {
         self.root
             .tables
             .expn_that_defined
-            .get(self, id)
+            .get_shallow(self, id)
             .unwrap_or_else(|| self.missing("expn_that_defined", id))
             .decode((self, tcx))
     }
@@ -1558,7 +1608,7 @@ impl CrateMetadata {
         self.root
             .tables
             .attributes
-            .get(self, id)
+            .get_shallow(self, id)
             .unwrap_or_else(|| {
                 let def_key = self.def_key(id);
                 match def_key.disambiguated_data.data {
@@ -1570,7 +1620,7 @@ impl CrateMetadata {
                         self.root
                             .tables
                             .attributes
-                            .get(self, parent_id)
+                            .get_shallow(self, parent_id)
                             .expect("no encoded attributes for a structure or variant")
                     }
                     DefPathData::SyntheticCoroutineBody => {
@@ -1605,12 +1655,14 @@ impl CrateMetadata {
 
     /// Decodes all trait impls in the crate (for rustdoc).
     fn get_trait_impls(&self, tcx: TyCtxt<'_>) -> impl Iterator<Item = DefId> {
+        self.record_crate_level_read();
         self.trait_impls.values().flat_map(move |impls| {
             impls.decode((self, tcx)).map(move |(impl_index, _)| self.local_def_id(impl_index))
         })
     }
 
     fn get_incoherent_impls<'tcx>(&self, tcx: TyCtxt<'tcx>, simp: SimplifiedType) -> &'tcx [DefId] {
+        self.record_crate_level_read();
         if let Some(impls) = self.incoherent_impls.get(&simp) {
             tcx.arena.alloc_from_iter(impls.decode((self, tcx)).map(|idx| self.local_def_id(idx)))
         } else {
@@ -1623,6 +1675,7 @@ impl CrateMetadata {
         tcx: TyCtxt<'tcx>,
         trait_def_id: DefId,
     ) -> &'tcx [(DefId, Option<SimplifiedType>)] {
+        self.record_crate_level_read();
         if self.trait_impls.is_empty() {
             return &[];
         }
@@ -1646,6 +1699,7 @@ impl CrateMetadata {
     }
 
     fn get_native_libraries(&self, tcx: TyCtxt<'_>) -> impl Iterator<Item = NativeLib> {
+        self.record_crate_level_read();
         self.root.native_libraries.decode((self, tcx))
     }
 
@@ -1661,6 +1715,7 @@ impl CrateMetadata {
     }
 
     fn get_foreign_modules(&self, tcx: TyCtxt<'_>) -> impl Iterator<Item = ForeignModule> {
+        self.record_crate_level_read();
         self.root.foreign_modules.decode((self, tcx))
     }
 
@@ -1686,10 +1741,12 @@ impl CrateMetadata {
     }
 
     fn get_missing_lang_items<'tcx>(&self, tcx: TyCtxt<'tcx>) -> &'tcx [LangItem] {
+        self.record_crate_level_read();
         tcx.arena.alloc_from_iter(self.root.lang_items_missing.decode((self, tcx)))
     }
 
     fn get_exportable_items(&self, tcx: TyCtxt<'_>) -> impl Iterator<Item = DefId> {
+        self.record_crate_level_read();
         self.root.exportable_items.decode((self, tcx)).map(move |index| self.local_def_id(index))
     }
 
@@ -1697,6 +1754,7 @@ impl CrateMetadata {
         &self,
         tcx: TyCtxt<'_>,
     ) -> impl Iterator<Item = (DefId, usize)> {
+        self.record_crate_level_read();
         self.root
             .stable_order_of_exportable_impls
             .decode((self, tcx))
@@ -1707,6 +1765,7 @@ impl CrateMetadata {
         &self,
         tcx: TyCtxt<'tcx>,
     ) -> &'tcx [(ExportedSymbol<'tcx>, SymbolExportInfo)] {
+        self.record_crate_level_read();
         tcx.arena.alloc_from_iter(self.root.exported_non_generic_symbols.decode((self, tcx)))
     }
 
@@ -1714,6 +1773,7 @@ impl CrateMetadata {
         &self,
         tcx: TyCtxt<'tcx>,
     ) -> &'tcx [(ExportedSymbol<'tcx>, SymbolExportInfo)] {
+        self.record_crate_level_read();
         tcx.arena.alloc_from_iter(self.root.exported_generic_symbols.decode((self, tcx)))
     }
 
@@ -2027,7 +2087,7 @@ impl CrateMetadata {
     }
 
     fn get_attr_flags(&self, index: DefIndex) -> AttrFlags {
-        self.root.tables.attr_flags.get(self, index)
+        self.root.tables.attr_flags.get_shallow(self, index)
     }
 
     fn get_intrinsic(&self, tcx: TyCtxt<'_>, index: DefIndex) -> Option<ty::IntrinsicDef> {
@@ -2089,6 +2149,14 @@ impl CrateMetadata {
         // that does not copy any data. It just does some data verification.
         let def_path_hash_map = root.def_path_hash_map.decode(&blob);
 
+        let num_def_ids = root.tables.def_kind.size();
+        let read_defs: Box<[std::sync::atomic::AtomicBool]> = (0..num_def_ids)
+            .map(|_| std::sync::atomic::AtomicBool::new(false))
+            .collect();
+        let read_defs_shallow: Box<[std::sync::atomic::AtomicBool]> = (0..num_def_ids)
+            .map(|_| std::sync::atomic::AtomicBool::new(false))
+            .collect();
+
         let mut cdata = CrateMetadata {
             blob,
             root,
@@ -2109,6 +2177,9 @@ impl CrateMetadata {
             incr_hash: None,
             extern_crate: None,
             def_key_cache: Default::default(),
+            read_defs,
+            read_defs_shallow,
+            read_crate_level: std::sync::atomic::AtomicBool::new(false),
         };
 
         cdata.incoherent_impls = cdata
@@ -2248,6 +2319,59 @@ impl CrateMetadata {
     /// justrust: interface hash (`-Zjr-iface-hash`), if recorded.
     pub(crate) fn iface_hash(&self) -> Option<Fingerprint> {
         self.unhashed.iface_hash
+    }
+
+    /// justrust: crate-level interface hash (`-Zjr-iface-hash`), if recorded.
+    #[allow(dead_code)]
+    pub(crate) fn crate_iface_hash(&self) -> Option<Fingerprint> {
+        self.unhashed.crate_iface_hash
+    }
+
+    /// justrust: per-item interface hashes (`-Zjr-iface-hash`), sorted by `DefPathHash.0`.
+    #[allow(dead_code)]
+    pub(crate) fn item_hashes(&self) -> &[(Fingerprint, Fingerprint)] {
+        &self.unhashed.item_hashes
+    }
+
+    /// justrust: whether this loaded crate satisfies `reqs`.
+    pub(crate) fn dep_item_reqs_match(&self, reqs: &crate::rmeta::DepItemReqs) -> bool {
+        reqs.matches(self.unhashed.crate_iface_hash, &self.unhashed.item_hashes)
+    }
+
+    /// justrust: collect the per-item requirements that the current compilation actually
+    /// read from this dependency crate. Returns `None` if this dependency was not built
+    /// with `-Zjr-iface-hash` (no `crate_iface_hash`).
+    pub(crate) fn collect_dep_item_reqs(&self) -> Option<crate::rmeta::DepItemReqs> {
+        let crate_iface_hash = self.unhashed.crate_iface_hash?;
+        let read_crate_level = self.read_crate_level.load(std::sync::atomic::Ordering::Relaxed);
+        let mut items = Vec::new();
+        for idx in 0..self.read_defs.len() {
+            let deep = self.read_defs[idx].load(std::sync::atomic::Ordering::Relaxed);
+            let shallow =
+                !deep && self.read_defs_shallow[idx].load(std::sync::atomic::Ordering::Relaxed);
+            if deep || shallow {
+                let def_index = DefIndex::from_usize(idx);
+                let raw_dph = self.def_path_hash(def_index).0;
+                let key = if deep { raw_dph } else { crate::rmeta::shallow_item_key(raw_dph) };
+                if let Ok(pos) = self.unhashed.item_hashes.binary_search_by_key(&key, |&(k, _)| k) {
+                    items.push(self.unhashed.item_hashes[pos]);
+                } else {
+                    // Fail closed: a DefIndex was read that has no per-item hash; require
+                    // crate-level hash match instead of silently ignoring it.
+                    return Some(crate::rmeta::DepItemReqs {
+                        read_crate_level: true,
+                        crate_iface_hash: Some(crate_iface_hash),
+                        items: Vec::new(),
+                    });
+                }
+            }
+        }
+        items.sort_unstable_by_key(|&(k, _)| k);
+        Some(crate::rmeta::DepItemReqs {
+            read_crate_level,
+            crate_iface_hash: Some(crate_iface_hash),
+            items,
+        })
     }
 
     pub(crate) fn has_async_drops(&self) -> bool {

@@ -254,6 +254,8 @@ pub(crate) struct CrateLocator<'a> {
     /// justrust: accept a crate whose hash differs from `hash` if its interface hash
     /// (`-Zjr-iface-hash`) equals this.
     pub iface_hash: Option<Fingerprint>,
+    /// justrust: per-item requirements for this dependency (`-Zjr-iface-hash`).
+    pub dep_item_reqs: Option<crate::rmeta::DepItemReqs>,
     extra_filename: Option<&'a str>,
     target: &'a Target,
     tuple: TargetTuple,
@@ -340,6 +342,7 @@ impl<'a> CrateLocator<'a> {
             },
             hash,
             iface_hash: None,
+            dep_item_reqs: None,
             extra_filename,
             target: &sess.target,
             tuple: sess.opts.target_triple.clone(),
@@ -735,8 +738,11 @@ impl<'a> CrateLocator<'a> {
             // without embedded metadata) has no interface hash: it is accepted here and
             // its crate hash must then equal that of the full `.rmeta` found with it
             // (the multiple-candidates check in `extract_one`).
-            let iface_ok = self.iface_hash.is_some()
-                && (header.is_stub || metadata.get_iface_hash() == self.iface_hash);
+            let iface_ok = (self.iface_hash.is_some()
+                && (header.is_stub || metadata.get_iface_hash() == self.iface_hash))
+                || (self.dep_item_reqs.as_ref().is_some_and(|reqs| {
+                    header.is_stub || metadata.dep_item_reqs_match(reqs)
+                }));
             if hash != expected_hash && !iface_ok {
                 info!("Rejecting via hash: expected {} got {}", expected_hash, hash);
                 crate_rejections

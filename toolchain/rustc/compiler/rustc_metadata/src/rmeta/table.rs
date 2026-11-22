@@ -512,6 +512,12 @@ impl<Ie: Idx, Id: Idx, const N: usize, T: FixedSizeEncoding<ByteArray = [u8; N]>
         }
     }
 
+    /// justrust: return the raw encoded bytes for `i` (or empty if out of bounds).
+    #[inline]
+    pub(crate) fn raw_bytes(&self, i: Ie) -> &[u8] {
+        self.blocks.get(i).map_or(&[], |b| b.as_slice())
+    }
+
     pub(crate) fn encode(&self, buf: &mut FileEncoder<'_>) -> LazyTable<Ie, Id, T> {
         let pos = buf.position();
 
@@ -550,9 +556,50 @@ fn trailing_zeros(x: &[u8]) -> usize {
     x.iter().rev().take_while(|b| **b == 0).count()
 }
 
+/// Records a read of a `LazyTable` entry on the metadata blob (when decoding from a
+/// `CrateMetadata`), so `jr-rustc` knows which upstream `DefIndex` items a crate actually
+/// inspected during compilation.
+pub(super) trait TableIndex: Idx {
+    fn record_read<'a, M: MetaBlob<'a>>(self, metadata: M);
+    #[inline]
+    fn record_read_shallow<'a, M: MetaBlob<'a>>(self, metadata: M) {
+        self.record_read(metadata);
+    }
+}
+
+impl TableIndex for rustc_hir::def_id::DefIndex {
+    #[inline]
+    fn record_read<'a, M: MetaBlob<'a>>(self, metadata: M) {
+        metadata.record_def_read(self);
+    }
+    #[inline]
+    fn record_read_shallow<'a, M: MetaBlob<'a>>(self, metadata: M) {
+        metadata.record_def_read_shallow(self);
+    }
+}
+
+impl TableIndex for rustc_span::hygiene::ExpnIndex {
+    #[inline]
+    fn record_read<'a, M: MetaBlob<'a>>(self, metadata: M) {
+        metadata.record_crate_level_read();
+    }
+}
+
+impl TableIndex for u32 {
+    #[inline]
+    fn record_read<'a, M: MetaBlob<'a>>(self, _metadata: M) {}
+}
+
+impl TableIndex for usize {
+    #[inline]
+    fn record_read<'a, M: MetaBlob<'a>>(self, metadata: M) {
+        metadata.record_crate_level_read();
+    }
+}
+
 impl<
     Ie: Idx,
-    Id: Idx,
+    Id: TableIndex,
     const N: usize,
     T: FixedSizeEncoding<ByteArray = [u8; N]> + ParameterizedOverTcx,
 > LazyTable<Ie, Id, T>
@@ -561,6 +608,22 @@ where
 {
     /// Given the metadata, extract out the value at a particular index (if any).
     pub(super) fn get<'a, 'tcx, M: MetaBlob<'a>>(&self, metadata: M, i: Id) -> T::Value<'tcx> {
+        i.record_read(metadata);
+        self.get_untracked(metadata, i)
+    }
+
+    /// justrust: like `get`, but records a shallow (name-resolution) read instead of a deep read.
+    pub(super) fn get_shallow<'a, 'tcx, M: MetaBlob<'a>>(
+        &self,
+        metadata: M,
+        i: Id,
+    ) -> T::Value<'tcx> {
+        i.record_read_shallow(metadata);
+        self.get_untracked(metadata, i)
+    }
+
+    #[inline]
+    fn get_untracked<'a, 'tcx, M: MetaBlob<'a>>(&self, metadata: M, i: Id) -> T::Value<'tcx> {
         // Access past the end of the table returns a Default
         if i.index() >= self.len {
             return Default::default();

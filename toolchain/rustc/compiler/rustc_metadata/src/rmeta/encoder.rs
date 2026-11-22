@@ -99,6 +99,10 @@ pub(super) struct EncodeContext<'a, 'tcx> {
     predicate_shorthands: FxHashMap<ty::PredicateKind<'tcx>, usize>,
 
     interpret_allocs: FxIndexSet<interpret::AllocId>,
+    /// justrust: which item(s) (`Some(def_idx)`) or crate-level (`None`) referenced each
+    /// `interpret_allocs` entry, so const allocations hash into their owning item's hasher
+    /// rather than `crate_iface_hasher`.
+    alloc_readers: Vec<Vec<Option<DefIndex>>>,
 
     // This is used to speed up Span encoding.
     // The `usize` is an index into the `MonotonicVec`
@@ -118,6 +122,22 @@ pub(super) struct EncodeContext<'a, 'tcx> {
 
     /// justrust (`-Zjr-iface-hash`): the interface hasher, fed by `opaque`.
     iface_hasher: Option<Arc<Mutex<XxHash3_128>>>,
+    /// justrust (`-Zjr-iface-hash`): crate-level interface hasher (excluding per-DefIndex
+    /// item metadata, table offsets, and dependency hashes).
+    crate_iface_hasher: Option<Arc<Mutex<XxHash3_128>>>,
+    /// justrust (`-Zjr-iface-hash`): per-DefIndex hashers for per-item cross-crate cutoff.
+    item_hashers: Arc<Mutex<FxHashMap<DefIndex, XxHash3_128>>>,
+    /// justrust (`-Zjr-iface-hash`): per-DefIndex shallow (name-res) hashers.
+    shallow_item_hashers: Arc<Mutex<FxHashMap<DefIndex, XxHash3_128>>>,
+    /// justrust (`-Zjr-iface-hash`): currently active DefIndex being encoded in `encode_def_ids`.
+    active_item: Arc<Mutex<Option<DefIndex>>>,
+    /// justrust (`-Zjr-iface-hash`): when true, also feed `shallow_item_hashers`.
+    active_shallow: Arc<std::sync::atomic::AtomicBool>,
+    /// justrust (`-Zjr-iface-hash`): when true, `crate_iface_hasher` skips incoming bytes
+    /// (used for `CrateDep::hash` and `Tables::encode`).
+    crate_iface_skip: Arc<std::sync::atomic::AtomicBool>,
+    /// justrust (`-Zjr-iface-hash`): position-independent content hash for each shorthand offset.
+    shorthand_content_hashes: FxHashMap<usize, [u8; 16]>,
     /// Interface hash of each dependency, by crate hash, for `CrateDep` encoding.
     dep_iface_by_svh: FxHashMap<Svh, Fingerprint>,
 }
@@ -451,6 +471,8 @@ impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for SpanData {
 impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for CrateDep {
     fn encode(&self, s: &mut EncodeContext<'a, 'tcx>) {
         self.name.encode(s);
+        s.opaque.iface_flush_pending();
+        s.crate_iface_skip.store(true, std::sync::atomic::Ordering::Relaxed);
         match s.dep_iface_by_svh.get(&self.hash).copied() {
             Some(iface) if s.opaque.iface_active() => {
                 s.opaque.iface_skip_begin();
@@ -461,6 +483,8 @@ impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for CrateDep {
             }
             _ => self.hash.encode(s),
         }
+        s.opaque.iface_flush_pending();
+        s.crate_iface_skip.store(false, std::sync::atomic::Ordering::Relaxed);
         self.host_hash.encode(s);
         self.kind.encode(s);
         self.is_private.encode(s);
@@ -492,7 +516,54 @@ impl<'a, 'tcx> TyEncoder<'tcx> for EncodeContext<'a, 'tcx> {
     fn encode_shorthand(&mut self, start: usize, shorthand: usize) {
         if self.opaque.iface_active() {
             let logical = self.opaque.iface_logical(start) + (shorthand - start);
+            self.opaque.iface_flush_pending();
+            let prev_skip = self.crate_iface_skip.swap(true, std::sync::atomic::Ordering::Relaxed);
             self.iface_emit_position(shorthand, logical);
+            self.opaque.iface_flush_pending();
+            self.crate_iface_skip.store(prev_skip, std::sync::atomic::Ordering::Relaxed);
+
+            // Feed a position-independent content hash of the shorthand into the per-item
+            // (or crate-level) hasher so unrelated item edits shifting blob offsets don't
+            // perturb this item's hash.
+            if !prev_skip && let Some(crate_h) = &self.crate_iface_hasher {
+                let content_hash = *self.shorthand_content_hashes.entry(shorthand).or_insert_with(|| {
+                    self.tcx.with_stable_hashing_context(|mut hcx| {
+                        let mut hasher = StableHasher::new();
+                        #[allow(rustc::potential_query_instability)]
+                        if let Some((ty, _)) = self.type_shorthands.iter().find(|&(_, &v)| v == shorthand) {
+                            0u8.stable_hash(&mut hcx, &mut hasher);
+                            ty.stable_hash(&mut hcx, &mut hasher);
+                        } else if let Some((pred, _)) = self.predicate_shorthands.iter().find(|&(_, &v)| v == shorthand) {
+                            1u8.stable_hash(&mut hcx, &mut hasher);
+                            pred.stable_hash(&mut hcx, &mut hasher);
+                        } else {
+                            2u8.stable_hash(&mut hcx, &mut hasher);
+                            (logical as u64).stable_hash(&mut hcx, &mut hasher);
+                        }
+                        hasher.finish::<Fingerprint>().to_le_bytes()
+                    })
+                });
+                if let Some(def_idx) = *self.active_item.lock().unwrap() {
+                    let mut map = self.item_hashers.lock().unwrap();
+                    let h = map.entry(def_idx).or_insert_with(|| {
+                        let mut h = XxHash3_128::new();
+                        h.write(&def_idx.as_u32().to_le_bytes());
+                        h
+                    });
+                    h.write(&content_hash);
+                    if self.active_shallow.load(std::sync::atomic::Ordering::Relaxed) {
+                        let mut smap = self.shallow_item_hashers.lock().unwrap();
+                        let sh = smap.entry(def_idx).or_insert_with(|| {
+                            let mut h = XxHash3_128::new();
+                            h.write(&def_idx.as_u32().to_le_bytes());
+                            h
+                        });
+                        sh.write(&content_hash);
+                    }
+                } else {
+                    crate_h.lock().unwrap().write(&content_hash);
+                }
+            }
         } else {
             self.emit_usize(shorthand);
         }
@@ -511,7 +582,14 @@ impl<'a, 'tcx> TyEncoder<'tcx> for EncodeContext<'a, 'tcx> {
     }
 
     fn encode_alloc_id(&mut self, alloc_id: &rustc_middle::mir::interpret::AllocId) {
-        let (index, _) = self.interpret_allocs.insert_full(*alloc_id);
+        let (index, inserted) = self.interpret_allocs.insert_full(*alloc_id);
+        if inserted {
+            self.alloc_readers.push(Vec::new());
+        }
+        let reader = *self.active_item.lock().unwrap();
+        if !self.alloc_readers[index].contains(&reader) {
+            self.alloc_readers[index].push(reader);
+        }
 
         index.encode(self);
     }
@@ -522,43 +600,96 @@ impl<'a, 'tcx> TyEncoder<'tcx> for EncodeContext<'a, 'tcx> {
 // Also those macros greatly simplify refactorings and modifications of writing to tables.
 macro_rules! record_some_lazy {
     ($self:ident.$tables:ident.$table:ident[$def_id:expr] <- $value:expr) => {{
+        let def_id = $def_id;
         let value = $value;
         let lazy = $self.lazy(value);
-        $self.$tables.$table.set_some($def_id.index, lazy);
+        $self.feed_item_table_tag(def_id.index, stringify!($table), &[1]);
+        $self.$tables.$table.set_some(def_id.index, lazy);
     }};
 }
 
 macro_rules! record_some {
-    ($self:ident.$tables:ident.$table:ident[$def_id:expr] <- $value:expr) => {
-        $self.$tables.$table.set_some($def_id.index, $value)
-    };
+    ($self:ident.$tables:ident.$table:ident[$def_id:expr] <- $value:expr) => {{
+        let def_id = $def_id;
+        $self.$tables.$table.set_some(def_id.index, $value);
+        let bytes = $self.$tables.$table.raw_bytes(def_id.index).to_vec();
+        $self.feed_item_table_tag(def_id.index, stringify!($table), &bytes);
+    }};
 }
 
 macro_rules! record_value {
-    ($self:ident.$tables:ident.$table:ident[$def_id:expr] <- $value:expr) => {
-        $self.$tables.$table.set($def_id.index, $value)
-    };
+    ($self:ident.$tables:ident.$table:ident[$def_id:expr] <- $value:expr) => {{
+        let def_id = $def_id;
+        $self.$tables.$table.set(def_id.index, $value);
+        let bytes = $self.$tables.$table.raw_bytes(def_id.index).to_vec();
+        $self.feed_item_table_tag(def_id.index, stringify!($table), &bytes);
+    }};
 }
 
 // Shorthand for `$self.$tables.$table.set_some($def_id.index, $self.lazy_array($value))`, which would
 // normally need extra variables to avoid errors about multiple mutable borrows.
 macro_rules! record_array {
     ($self:ident.$tables:ident.$table:ident[$def_id:expr] <- $value:expr) => {{
+        let def_id = $def_id;
         let value = $value;
         let lazy = $self.lazy_array(value);
-        $self.$tables.$table.set_some($def_id.index, lazy);
+        $self.feed_item_table_tag(def_id.index, stringify!($table), &[2]);
+        $self.$tables.$table.set_some(def_id.index, lazy);
     }};
 }
 
 macro_rules! record_defaulted_array {
     ($self:ident.$tables:ident.$table:ident[$def_id:expr] <- $value:expr) => {{
+        let def_id = $def_id;
         let value = $value;
         let lazy = $self.lazy_array(value);
-        $self.$tables.$table.set($def_id.index, lazy);
+        $self.feed_item_table_tag(def_id.index, stringify!($table), &[3]);
+        $self.$tables.$table.set(def_id.index, lazy);
     }};
 }
 
 impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
+    #[inline]
+    fn set_active_shallow(&mut self, shallow: bool) {
+        if self.crate_iface_hasher.is_some() {
+            self.opaque.iface_flush_pending();
+            self.active_shallow.store(shallow, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    fn feed_item_table_tag(&mut self, def_index: DefIndex, table: &str, tag: &[u8]) {
+        if self.crate_iface_hasher.is_none() {
+            return;
+        }
+        let mut map = self.item_hashers.lock().unwrap();
+        let h = map.entry(def_index).or_insert_with(|| {
+            let mut h = XxHash3_128::new();
+            h.write(&def_index.as_u32().to_le_bytes());
+            h
+        });
+        h.write(table.as_bytes());
+        h.write(tag);
+        if self.active_shallow.load(std::sync::atomic::Ordering::Relaxed) {
+            let mut smap = self.shallow_item_hashers.lock().unwrap();
+            let sh = smap.entry(def_index).or_insert_with(|| {
+                let mut h = XxHash3_128::new();
+                h.write(&def_index.as_u32().to_le_bytes());
+                h
+            });
+            sh.write(table.as_bytes());
+            sh.write(tag);
+        }
+    }
+
+    #[inline]
+    fn set_active_item(&mut self, item: Option<DefIndex>) {
+        if self.crate_iface_hasher.is_some() {
+            self.opaque.iface_flush_pending();
+            *self.active_item.lock().unwrap() = item;
+        }
+    }
+
     fn emit_lazy_distance(&mut self, position: NonZero<usize>) {
         let pos = position.get();
         let mut distance_from = None;
@@ -589,7 +720,11 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 Some(start) => logical(start) - logical(pos),
                 None => logical(pos) - logical(prev_pos),
             };
+            self.opaque.iface_flush_pending();
+            let prev_skip = self.crate_iface_skip.swap(true, std::sync::atomic::Ordering::Relaxed);
             self.iface_emit_position(distance, logical_distance);
+            self.opaque.iface_flush_pending();
+            self.crate_iface_skip.store(prev_skip, std::sync::atomic::Ordering::Relaxed);
             return;
         }
         self.emit_usize(distance);
@@ -859,12 +994,25 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                     let id = self.interpret_allocs[idx];
                     let pos = self.position() as u64;
                     interpret_alloc_index.push(pos);
+                    // justrust: route each allocation's bytes to its owning item hasher
+                    // (when referenced by a single item), or to `crate_iface_hasher` if
+                    // shared across multiple items or referenced at crate level.
+                    let single_item = match self.alloc_readers[idx].as_slice() {
+                        [Some(def_idx)] => Some(*def_idx),
+                        _ => None,
+                    };
+                    self.set_active_item(single_item);
                     interpret::specialized_encode_alloc_id(self, tcx, id);
                 }
                 n = new_n;
             }
-            // justrust: the index holds absolute positions; hash their logical form.
+            self.set_active_item(None);
+            // justrust: the index holds absolute positions; hash their logical form
+            // into `iface_hasher` only (not `crate_iface_hasher`, since unrelated item
+            // allocations shift the index).
             if self.opaque.iface_active() {
+                self.opaque.iface_flush_pending();
+                self.crate_iface_skip.store(true, std::sync::atomic::Ordering::Relaxed);
                 for &pos in &interpret_alloc_index {
                     let logical = self.opaque.iface_logical(pos as usize) as u64;
                     self.opaque.iface_feed_extra(&logical.to_le_bytes());
@@ -872,6 +1020,8 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 self.opaque.iface_skip_begin();
                 let index = self.lazy_array(interpret_alloc_index);
                 self.opaque.iface_skip_end();
+                self.opaque.iface_flush_pending();
+                self.crate_iface_skip.store(false, std::sync::atomic::Ordering::Relaxed);
                 return index;
             }
             self.lazy_array(interpret_alloc_index)
@@ -882,7 +1032,11 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         // encode_def_path_table.
         let proc_macro_data = stat!("proc-macro-data", || self.encode_proc_macros());
 
+        self.opaque.iface_flush_pending();
+        self.crate_iface_skip.store(true, std::sync::atomic::Ordering::Relaxed);
         let tables = stat!("tables", || self.tables.encode(&mut self.opaque));
+        self.opaque.iface_flush_pending();
+        self.crate_iface_skip.store(false, std::sync::atomic::Ordering::Relaxed);
 
         let debugger_visualizers =
             stat!("debugger-visualizers", || self.encode_debugger_visualizers());
@@ -1003,18 +1157,47 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             self.opaque.iface_finish();
             Fingerprint::from_le_bytes(hasher.lock().unwrap().finish_128().to_le_bytes())
         });
+        let crate_iface_hash = self.crate_iface_hasher.take().map(|hasher| {
+            Fingerprint::from_le_bytes(hasher.lock().unwrap().finish_128().to_le_bytes())
+        });
+        let item_hashes = if crate_iface_hash.is_some() {
+            let mut map = self.item_hashers.lock().unwrap();
+            #[allow(rustc::potential_query_instability)]
+            let mut items: Vec<(Fingerprint, Fingerprint)> = map
+                .drain()
+                .map(|(def_idx, hasher)| {
+                    let dph = self.tcx.def_path_hash(DefId::local(def_idx)).0;
+                    let h = Fingerprint::from_le_bytes(hasher.finish_128().to_le_bytes());
+                    (dph, h)
+                })
+                .collect();
+            let mut smap = self.shallow_item_hashers.lock().unwrap();
+            #[allow(rustc::potential_query_instability)]
+            items.extend(smap.drain().map(|(def_idx, hasher)| {
+                let dph = self.tcx.def_path_hash(DefId::local(def_idx)).0;
+                let h = Fingerprint::from_le_bytes(hasher.finish_128().to_le_bytes());
+                (crate::rmeta::shallow_item_key(dph), h)
+            }));
+            items.sort_unstable_by_key(|&(k, _)| k);
+            items
+        } else {
+            Vec::new()
+        };
 
         let unhashed = stat!("final", || {
             // Indexed by dependency `CrateNum`, matching the numbering `encode_crate_deps` uses.
             // Slot 0 (`LOCAL_CRATE`) is filler; this crate's own value is `extra_filename`.
             let mut dep_extra_filenames = IndexVec::from_elem_n(String::new(), 1);
             let mut dep_iface_hashes = IndexVec::from_elem_n(None, 1);
+            let mut dep_item_reqs = IndexVec::from_elem_n(None, 1);
             if !self.is_proc_macro {
                 let cstore = CStore::from_tcx(self.tcx);
                 for &cnum in self.tcx.crates(()).iter() {
                     let idx = dep_extra_filenames.push(self.tcx.extra_filename(cnum).to_owned());
                     assert_eq!(idx, cnum, "dep_extra_filenames must be indexed by CrateNum");
-                    dep_iface_hashes.push(cstore.get_crate_data(cnum).iface_hash());
+                    let cdata = cstore.get_crate_data(cnum);
+                    dep_iface_hashes.push(cdata.iface_hash());
+                    dep_item_reqs.push(cdata.collect_dep_item_reqs());
                 }
             }
 
@@ -1023,6 +1206,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 dep_extra_filenames,
                 iface_hash,
                 dep_iface_hashes,
+                crate_iface_hash,
+                item_hashes,
+                dep_item_reqs,
             })
         });
 
@@ -1635,18 +1821,24 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             .iter()
             .filter(|attr| analyze_attr(*attr, &mut state));
 
+        self.set_active_shallow(true);
         record_array!(self.tables.attributes[def_id.to_def_id()] <- attr_iter);
+        self.set_active_shallow(false);
 
         let mut attr_flags = AttrFlags::empty();
         if state.is_doc_hidden {
             attr_flags |= AttrFlags::IS_DOC_HIDDEN;
         }
 
-        record_value!(self.tables.attr_flags[def_id.to_def_id()] <- attr_flags)
+        self.set_active_shallow(true);
+        record_value!(self.tables.attr_flags[def_id.to_def_id()] <- attr_flags);
+        self.set_active_shallow(false);
     }
 
     fn encode_def_ids(&mut self) {
+        self.set_active_item(Some(CRATE_DEF_ID.local_def_index));
         self.encode_info_for_mod(CRATE_DEF_ID);
+        self.set_active_item(None);
 
         // Proc-macro crates only export proc-macro items, which are looked
         // up using `proc_macro_data`
@@ -1657,6 +1849,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         let tcx = self.tcx;
 
         for local_id in tcx.iter_local_def_id() {
+            self.set_active_item(Some(local_id.local_def_index));
             let def_id = local_id.to_def_id();
             let def_kind = tcx.def_kind(local_id);
             if self.opaque.iface_active()
@@ -1669,7 +1862,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                     self.opaque.iface_fed_total()
                 );
             }
+            self.set_active_shallow(true);
             record_some!(self.tables.def_kind[def_id] <- def_kind);
+            self.set_active_shallow(false);
 
             // The `DefCollector` will sometimes create unnecessary `DefId`s
             // for trivial const arguments which are directly lowered to
@@ -1701,12 +1896,16 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 self.encode_attrs(local_id);
             }
             if should_encode_expn_that_defined(def_kind) {
+                self.set_active_shallow(true);
                 record_some_lazy!(self.tables.expn_that_defined[def_id] <- self.tcx.expn_that_defined(def_id));
+                self.set_active_shallow(false);
             }
             if should_encode_span(def_kind)
                 && let Some(ident_span) = tcx.def_ident_span(def_id)
             {
+                self.set_active_shallow(true);
                 record_some_lazy!(self.tables.def_ident_span[def_id] <- ident_span);
+                self.set_active_shallow(false);
             }
             if def_kind.has_codegen_attrs() {
                 record_some_lazy!(self.tables.codegen_fn_attrs[def_id] <- self.tcx.codegen_fn_attrs(def_id));
@@ -1716,7 +1915,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                     .tcx
                     .local_visibility(local_id)
                     .map_id(|mod_id| mod_id.to_local_def_id().local_def_index);
+                self.set_active_shallow(true);
                 record_some_lazy!(self.tables.visibility[def_id] <- vis);
+                self.set_active_shallow(false);
             }
             if should_encode_stability(def_kind) {
                 self.encode_stability(def_id);
@@ -1893,21 +2094,28 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 record_some_lazy!(self.tables.associated_types_for_impl_traits_in_trait_or_impl[def_id] <- table);
             }
         }
+        self.set_active_item(None);
 
         for (def_id, impls) in &tcx.crate_inherent_impls(()).0.inherent_impls {
+            self.set_active_item(Some(def_id.local_def_index));
             record_defaulted_array!(self.tables.inherent_impls[def_id.to_def_id()] <- impls.iter().map(|def_id| {
                 assert!(def_id.is_local());
                 def_id.index
             }));
         }
+        self.set_active_item(None);
 
         for (def_id, res_map) in &tcx.resolutions(()).doc_link_resolutions {
+            self.set_active_item(Some(def_id.to_local_def_id().local_def_index));
             record_some_lazy!(self.tables.doc_link_resolutions[def_id.to_def_id()] <- res_map);
         }
+        self.set_active_item(None);
 
         for (def_id, traits) in &tcx.resolutions(()).doc_link_traits_in_scope {
+            self.set_active_item(Some(def_id.to_local_def_id().local_def_index));
             record_array!(self.tables.doc_link_traits_in_scope[def_id.to_def_id()] <- traits);
         }
+        self.set_active_item(None);
     }
 
     fn encode_externally_implementable_items(&mut self) -> LazyArray<EiiMapEncodedKeyValue> {
@@ -1994,7 +2202,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         // items - we encode information about proc-macros later on.
         if self.is_proc_macro {
             // Encode this here because we don't do it in encode_def_ids.
+            self.set_active_shallow(true);
             record_some_lazy!(self.tables.expn_that_defined[def_id] <- tcx.expn_that_defined(local_def_id));
+            self.set_active_shallow(false);
         } else {
             let module_children = tcx.module_children_local(local_def_id);
 
@@ -2082,6 +2292,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         });
         for (def_id, encode_const, encode_opt) in keys_and_jobs {
             debug_assert!(encode_const || encode_opt);
+            self.set_active_item(Some(def_id.local_def_index));
 
             debug!("EntryBuilder::encode_mir({:?})", def_id);
             if encode_opt {
@@ -2144,11 +2355,13 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         {
             for &local_def_id in tcx.mir_keys(()) {
                 if let DefKind::AssocFn | DefKind::Fn = tcx.def_kind(local_def_id) {
+                    self.set_active_item(Some(local_def_id.local_def_index));
                     record_array!(self.tables.deduced_param_attrs[local_def_id.to_def_id()] <-
                         self.tcx.deduced_param_attrs(local_def_id.to_def_id()));
                 }
             }
         }
+        self.set_active_item(None);
     }
 
     #[instrument(level = "debug", skip(self))]
@@ -2239,11 +2452,16 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             },
         );
 
-        (
+        self.opaque.iface_flush_pending();
+        self.crate_iface_skip.store(true, std::sync::atomic::Ordering::Relaxed);
+        let res = (
             syntax_contexts.encode(&mut self.opaque),
             expn_data_table.encode(&mut self.opaque),
             expn_hash_table.encode(&mut self.opaque),
-        )
+        );
+        self.opaque.iface_flush_pending();
+        self.crate_iface_skip.store(false, std::sync::atomic::Ordering::Relaxed);
+        res
     }
 
     fn encode_proc_macros(&mut self) -> Option<ProcMacroData> {
@@ -2316,7 +2534,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
 
                 self.encode_attrs(id);
                 record_some_lazy!(self.tables.def_keys[def_id] <- def_key);
+                self.set_active_shallow(true);
                 record_some_lazy!(self.tables.def_ident_span[def_id] <- span);
+                self.set_active_shallow(false);
                 record_some_lazy!(self.tables.def_span[def_id] <- span);
                 record_some_lazy!(self.tables.visibility[def_id] <- ty::Visibility::Public);
                 if let Some(stability) = stability {
@@ -2909,6 +3129,14 @@ fn with_encode_metadata_header(
         hasher.write(&flags.to_le_bytes());
         Arc::new(Mutex::new(hasher))
     });
+    let crate_iface_hasher = iface_hasher.as_ref().map(|h| {
+        Arc::new(Mutex::new(h.lock().unwrap().clone()))
+    });
+    let item_hashers: Arc<Mutex<FxHashMap<DefIndex, XxHash3_128>>> = Default::default();
+    let shallow_item_hashers: Arc<Mutex<FxHashMap<DefIndex, XxHash3_128>>> = Default::default();
+    let active_item: Arc<Mutex<Option<DefIndex>>> = Default::default();
+    let active_shallow = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let crate_iface_skip = Arc::new(std::sync::atomic::AtomicBool::new(false));
     // `JUSTRUST_RUSTC_IFACE_DUMP=<path>`: also write the hashed byte stream, to
     // find what makes two builds' interface hashes differ (debugging aid). The
     // full metadata goes to `<path>`, the stub (`-Zembed-metadata=no`) is not dumped.
@@ -2919,9 +3147,39 @@ fn with_encode_metadata_header(
     });
     let mut iface_strategy = {
         let iface_hasher = iface_hasher.clone();
+        let crate_iface_hasher = crate_iface_hasher.clone();
+        let item_hashers = Arc::clone(&item_hashers);
+        let shallow_item_hashers = Arc::clone(&shallow_item_hashers);
+        let active_item = Arc::clone(&active_item);
+        let active_shallow = Arc::clone(&active_shallow);
+        let crate_iface_skip = Arc::clone(&crate_iface_skip);
         move |bytes: &[u8]| {
             if let Some(h) = &iface_hasher {
                 h.lock().unwrap().write(bytes)
+            }
+            if let Some(crate_h) = &crate_iface_hasher
+                && !crate_iface_skip.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                if let Some(def_idx) = *active_item.lock().unwrap() {
+                    let mut map = item_hashers.lock().unwrap();
+                    let h = map.entry(def_idx).or_insert_with(|| {
+                        let mut h = XxHash3_128::new();
+                        h.write(&def_idx.as_u32().to_le_bytes());
+                        h
+                    });
+                    h.write(bytes);
+                    if active_shallow.load(std::sync::atomic::Ordering::Relaxed) {
+                        let mut smap = shallow_item_hashers.lock().unwrap();
+                        let sh = smap.entry(def_idx).or_insert_with(|| {
+                            let mut h = XxHash3_128::new();
+                            h.write(&def_idx.as_u32().to_le_bytes());
+                            h
+                        });
+                        sh.write(bytes);
+                    }
+                } else {
+                    crate_h.lock().unwrap().write(bytes);
+                }
             }
             if let Some(d) = &mut iface_dump {
                 let _ = std::io::Write::write_all(d, bytes);
@@ -2967,11 +3225,19 @@ fn with_encode_metadata_header(
         predicate_shorthands: Default::default(),
         source_file_cache,
         interpret_allocs: Default::default(),
+        alloc_readers: Default::default(),
         required_source_files,
         is_proc_macro: tcx.crate_types().contains(&CrateType::ProcMacro),
         hygiene_ctxt: Default::default(),
         symbol_index_table: Default::default(),
         iface_hasher,
+        crate_iface_hasher,
+        item_hashers,
+        shallow_item_hashers,
+        active_item,
+        active_shallow,
+        crate_iface_skip,
+        shorthand_content_hashes: Default::default(),
         dep_iface_by_svh: Default::default(),
     };
 
