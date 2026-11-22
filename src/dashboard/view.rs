@@ -669,6 +669,7 @@ fn filter_status(state: &State) -> Vec<Span<'static>> {
 
 const RESULT_WIDTH: usize = 18;
 const WHERE_WIDTH: usize = 7;
+const MACHINE_WIDTH: usize = 10;
 
 // Same release-distance scale as the fleet history. Pins, future releases,
 // and missing references have no known age and stay neutral.
@@ -820,6 +821,7 @@ fn active_row(
         spans.extend([
             strong(pad("building", RESULT_WIDTH - 2), ACCENT),
             span(format!(" {}", pad(&run.place, WHERE_WIDTH)), LABEL),
+            span(format!(" {}", pad("-", MACHINE_WIDTH)), DIM),
             span(format!(" {elapsed:>7}"), wall_color(run.elapsed)),
             span("      -     -     -     -  ", DIM),
             span(pad("-", version_width / 2), DIM),
@@ -1111,14 +1113,16 @@ fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
     let width = inner.width as usize;
     let wide = width >= 84;
     // FLOOR takes six cells plus a separator; FRESH, CGU and OPT each take five plus a separator.
-    let remaining = width.saturating_sub(RESULT_WIDTH + WHERE_WIDTH + 7 + 9 + 4 + 7 + 6 + 6 + 6);
+    let remaining = width
+        .saturating_sub(RESULT_WIDTH + WHERE_WIDTH + MACHINE_WIDTH + 1 + 7 + 9 + 4 + 7 + 6 + 6 + 6);
     let version_width = remaining.saturating_sub(10).min(34);
     let command_width = remaining.saturating_sub(version_width);
     let header = if wide {
         format!(
-            "  {} {} {:>7} {:>6} FRESH   CGU   OPT  {} {}{}{:>9}",
+            "  {} {} {} {:>7} {:>6} FRESH   CGU   OPT  {} {}{}{:>9}",
             pad("RESULT", RESULT_WIDTH - 2),
             pad("WHERE", WHERE_WIDTH),
+            pad("MACHINE", MACHINE_WIDTH),
             "WALL",
             "FLOOR",
             pad(
@@ -1216,6 +1220,13 @@ fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
             spans.extend([
                 span(pad(&result, RESULT_WIDTH - 2), color),
                 span(format!(" {}", pad(&run.place, WHERE_WIDTH)), LABEL),
+                span(
+                    format!(
+                        " {}",
+                        pad(&clean(run.machine.as_deref().unwrap_or("-")), MACHINE_WIDTH)
+                    ),
+                    if run.machine.is_some() { LABEL } else { DIM },
+                ),
                 span(
                     format!(" {wall:>7}"),
                     if run.exit.is_some() {
