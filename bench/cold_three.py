@@ -40,6 +40,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import statistics
 import subprocess as sp
@@ -157,6 +158,7 @@ def run_one(name: str, stack: str, archive: Path, out: Path, tag: str) -> dict:
         rc = sp.run(cmd, cwd=work, env=env, stdout=stream, stderr=sp.STDOUT).returncode
     wall = time.monotonic() - start
     ok, version = binary_ok(work / 'target' / 'release' / binary) if binary else (True, None)
+    text = log.read_text(errors='replace')
     sample = {'repo': name, 'stack': stack, 'tag': tag, 'wall': wall, 'exit': rc, 'log': str(log),
               'checkout': str(work), 'run_id': rid if stack != 'stock' else None,
               'namespace': namespace, 'binary': version, 'power': power, 'errors': []}
@@ -164,6 +166,10 @@ def run_one(name: str, stack: str, archive: Path, out: Path, tag: str) -> dict:
         sample['errors'].append(f'exit {rc}')
     if binary and not ok:
         sample['errors'].append(f'binary not usable here: {version}')
+    if subcmd == 'test' and stack == 'stock':
+        sample['passed'] = sum(int(n) for n in re.findall(r'test result: ok\. (\d+) passed', text))
+        if sample['passed'] == 0:
+            sample['errors'].append('zero tests passed')
     if stack != 'stock':
         try:
             summary, meta = uv.read_evidence(Path(os.environ.get('JUSTRUST_HOME', Path.home() / '.justrust')), rid)
@@ -185,7 +191,10 @@ def run_one(name: str, stack: str, archive: Path, out: Path, tag: str) -> dict:
             'localcache_hits': units.get('localcache_hits'),
             'remote_phases': {'sync_ms': remote.get('sync_ms'), **(remote.get('run') or {})},
             'host_wall': summary.get('wall'),
+            'passed': (summary.get('tests') or {}).get('passed') if subcmd == 'test' else None,
         })
+        if subcmd == 'test' and not sample.get('passed'):
+            sample['errors'].append('zero tests passed')
     return sample
 
 
