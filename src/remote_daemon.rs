@@ -703,6 +703,50 @@ struct WarmAdmit {
     at: Instant,
 }
 
+const LEASE_BATCH_COUNT: u64 = 16;
+const LEASE_SAFETY_MARGIN: Duration = Duration::from_secs(10);
+const LEASE_REFILL_REMAINING: u64 = 4;
+const LEASE_REFILL_BEFORE_EXPIRY: Duration = Duration::from_secs(30);
+const LEASE_RETRY_BACKOFF: Duration = Duration::from_secs(30);
+
+struct BuildLease {
+    lease_id: String,
+    key: String,
+    key_hash: String,
+    /// `0` means issued during Build 1 before initial connect; bound to the first live link on checkout.
+    link_ptr: usize,
+    granted: u64,
+    used: u64,
+    expires_at: Instant,
+    builds: serde_json::Value,
+    fleet_version: Option<String>,
+    pending_runs: Vec<serde_json::Value>,
+}
+
+impl BuildLease {
+    fn usable_for(&self, key_hash: &str, live_link_ptr: usize, now: Instant) -> bool {
+        live_link_ptr != 0
+            && self.key_hash == key_hash
+            && (self.link_ptr == 0 || self.link_ptr == live_link_ptr)
+            && self.used < self.granted
+            && now + LEASE_SAFETY_MARGIN < self.expires_at
+    }
+
+    fn needs_refill(&self, now: Instant) -> bool {
+        self.granted.saturating_sub(self.used) <= LEASE_REFILL_REMAINING
+            || self.expires_at.saturating_duration_since(now) <= LEASE_REFILL_BEFORE_EXPIRY
+    }
+}
+
+#[derive(Default)]
+struct LeasePool {
+    active: Option<BuildLease>,
+    draining: Vec<BuildLease>,
+    refill_in_flight: bool,
+    redeem_in_flight: bool,
+    retry_after: Option<Instant>,
+}
+
 struct Daemon {
     sync: SyncQueue<Sync>,
     info: Mutex<Info>,
@@ -728,6 +772,8 @@ struct Daemon {
     live_link_ptr: AtomicUsize,
     /// Last clean `200 Charged` hosted admission with >=2 builds remaining on the live link.
     warm_admit: Mutex<Option<WarmAdmit>>,
+    /// Pre-authorized monthly included build-allowance leases for ~0 ms warm admission.
+    leases: Arc<Mutex<LeasePool>>,
 }
 
 fn hosted_admit_agent() -> ureq::Agent {
@@ -792,6 +838,7 @@ impl Daemon {
         if !self.draining.load(Ordering::SeqCst) {
             save_mirrors(self);
         }
+        flush_and_close_leases_on_exit(&self.hosted_agent, &self.leases);
         self.retire();
         std::process::exit(0)
     }
@@ -907,6 +954,7 @@ fn daemon() -> Result<()> {
         pre_synced: Mutex::default(),
         live_link_ptr: AtomicUsize::new(0),
         warm_admit: Mutex::default(),
+        leases: Arc::default(),
     });
     if peercache::enabled()
         && let Some(p) = peercache::sock_path()
@@ -1104,6 +1152,17 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
             }
             Msg::HostedAdmit { key, body, timing } => {
                 let t = Instant::now();
+                if let Some(leased_body) = try_checkout_build_lease(d, &key, &body) {
+                    let resp = Msg::HostedAdmitResp {
+                        code: 200,
+                        body: leased_body,
+                        server_timing: Some("jr_lease;dur=0.1".to_owned()),
+                        error: None,
+                        ms: t.elapsed().as_secs_f64() * 1000.0,
+                    };
+                    write_frame(&mut w, &resp, &[])?;
+                    return Ok(());
+                }
                 let url = format!("{}/build/runs", crate::remote_hosted::DEFAULT_BUILD_BASE);
                 let mut req = d
                     .hosted_agent
@@ -1136,6 +1195,11 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
                         {
                             Ok(text) => {
                                 record_warm_admit(d, &key, code, &text);
+                                if code == 200 {
+                                    maybe_warm_build_lease(d, &key, &text);
+                                } else {
+                                    invalidate_active_lease(d);
+                                }
                                 Msg::HostedAdmitResp {
                                     code,
                                     body: text,
@@ -1146,6 +1210,7 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
                             }
                             Err(e) => {
                                 *d.warm_admit.lock().unwrap() = None;
+                                invalidate_active_lease(d);
                                 Msg::HostedAdmitResp {
                                     code: 0,
                                     body: String::new(),
@@ -1158,6 +1223,7 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
                     }
                     Err(e) => {
                         *d.warm_admit.lock().unwrap() = None;
+                        invalidate_active_lease(d);
                         Msg::HostedAdmitResp {
                             code: 0,
                             body: String::new(),
@@ -1173,14 +1239,23 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
             Msg::HostedWarmReady { key_hash } => {
                 let link_ptr = d.live_link_ptr.load(Ordering::SeqCst);
                 let connected = d.info.lock().is_ok_and(|i| i.connected);
+                let now = Instant::now();
+                let lease_ready = d
+                    .leases
+                    .lock()
+                    .unwrap()
+                    .active
+                    .as_ref()
+                    .is_some_and(|l| l.usable_for(&key_hash, link_ptr, now));
                 let ready = !d.draining.load(Ordering::SeqCst)
                     && connected
                     && link_ptr != 0
-                    && d.warm_admit.lock().unwrap().as_ref().is_some_and(|wa| {
-                        wa.link_ptr == link_ptr
-                            && wa.key_hash == key_hash
-                            && wa.at.elapsed() < WARM_ADMIT_TTL
-                    });
+                    && (lease_ready
+                        || d.warm_admit.lock().unwrap().as_ref().is_some_and(|wa| {
+                            wa.link_ptr == link_ptr
+                                && wa.key_hash == key_hash
+                                && wa.at.elapsed() < WARM_ADMIT_TTL
+                        }));
                 write_frame(&mut w, &Msg::HostedWarmReadyResp { ready }, &[])?;
                 return Ok(());
             }
@@ -1312,11 +1387,384 @@ fn record_warm_admit(d: &Daemon, key: &str, code: u16, body: &str) {
     }
 }
 
+fn lease_eligible_body(body: &str) -> bool {
+    if !warm_admit_body_ok(body) {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| crate::remote_hosted::Builds::from(&v["builds"]))
+        .is_some_and(|b| {
+            b.can_build
+                && b.included
+                    .is_some_and(|inc| inc.saturating_sub(b.included_used.unwrap_or(0)) >= 2)
+        })
+}
+
+fn hosted_leases_enabled() -> bool {
+    std::env::var("JUSTRUST_HOSTED_LEASES").as_deref() != Ok("0")
+}
+
+fn checkout_from_pool(
+    pool: &mut LeasePool,
+    key_hash: &str,
+    live_link_ptr: usize,
+    run_meta: serde_json::Value,
+    now: Instant,
+) -> Option<(String, bool)> {
+    let lease = pool.active.as_mut()?;
+    if !lease.usable_for(key_hash, live_link_ptr, now) {
+        return None;
+    }
+    if lease.link_ptr == 0 {
+        lease.link_ptr = live_link_ptr;
+    }
+    lease.used += 1;
+    if let Some(used) = lease.builds["included_used"].as_u64() {
+        lease.builds["included_used"] = serde_json::Value::from(used + 1);
+    }
+    lease.pending_runs.push(run_meta);
+    let mut resp = serde_json::json!({
+        "admission": "maintenance-v1",
+        "update": serde_json::Value::Null,
+        "builds": lease.builds.clone(),
+        "lease_hit": true,
+    });
+    if let Some(fv) = lease.fleet_version.as_ref() {
+        resp["fleet_version"] = serde_json::Value::String(fv.clone());
+    }
+    let need_refill = lease.needs_refill(now);
+    let exhausted = lease.used >= lease.granted;
+    if exhausted && let Some(done) = pool.active.take() {
+        pool.draining.push(done);
+    }
+    Some((resp.to_string(), need_refill))
+}
+
+fn try_checkout_build_lease(d: &Arc<Daemon>, key: &str, body: &str) -> Option<String> {
+    if !hosted_leases_enabled() || d.draining.load(Ordering::SeqCst) {
+        return None;
+    }
+    let link_ptr = d.live_link_ptr.load(Ordering::SeqCst);
+    if link_ptr == 0 {
+        return None;
+    }
+    let run_meta = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    let has_run_id = run_meta
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.is_empty());
+    if !has_run_id {
+        return None;
+    }
+    let key_hash = remote_checkpoint::digest(key.as_bytes());
+    let now = Instant::now();
+    let (resp_body, need_refill, spawn_redeem, spawn_refill) = {
+        let mut pool = d.leases.lock().unwrap();
+        let (resp_body, need_refill) =
+            checkout_from_pool(&mut pool, &key_hash, link_ptr, run_meta, now)?;
+        let spawn_redeem = if !pool.redeem_in_flight {
+            pool.redeem_in_flight = true;
+            true
+        } else {
+            false
+        };
+        let spawn_refill =
+            if need_refill && !pool.refill_in_flight && pool.retry_after.is_none_or(|at| now >= at)
+            {
+                pool.refill_in_flight = true;
+                true
+            } else {
+                false
+            };
+        (resp_body, need_refill, spawn_redeem, spawn_refill)
+    };
+    if let Ok(mut wa) = d.warm_admit.lock() {
+        *wa = Some(WarmAdmit {
+            key_hash,
+            link_ptr,
+            at: now,
+        });
+    }
+    if spawn_redeem {
+        spawn_redeem_leases(d.hosted_agent.clone(), d.leases.clone());
+    }
+    if need_refill && spawn_refill {
+        spawn_refill_lease(d.clone(), key.to_owned(), link_ptr);
+    }
+    Some(resp_body)
+}
+
+fn maybe_warm_build_lease(d: &Arc<Daemon>, key: &str, body: &str) {
+    if !hosted_leases_enabled() || d.draining.load(Ordering::SeqCst) || !lease_eligible_body(body) {
+        return;
+    }
+    let link_ptr = d.live_link_ptr.load(Ordering::SeqCst);
+    let key_hash = remote_checkpoint::digest(key.as_bytes());
+    let now = Instant::now();
+    let should_refill = {
+        let mut pool = d.leases.lock().unwrap();
+        let already_healthy = pool.active.as_ref().is_some_and(|l| {
+            l.key_hash == key_hash
+                && (l.link_ptr == 0 || link_ptr == 0 || l.link_ptr == link_ptr)
+                && !l.needs_refill(now)
+        });
+        if already_healthy || pool.refill_in_flight || pool.retry_after.is_some_and(|at| now < at) {
+            false
+        } else {
+            pool.refill_in_flight = true;
+            true
+        }
+    };
+    if should_refill {
+        spawn_refill_lease(d.clone(), key.to_owned(), link_ptr);
+    }
+}
+
+fn invalidate_active_lease(d: &Daemon) {
+    let spawn_redeem = {
+        let mut pool = d.leases.lock().unwrap();
+        if let Some(old) = pool.active.take() {
+            pool.draining.push(old);
+        }
+        if !pool.draining.is_empty() && !pool.redeem_in_flight {
+            pool.redeem_in_flight = true;
+            true
+        } else {
+            false
+        }
+    };
+    if spawn_redeem {
+        spawn_redeem_leases(d.hosted_agent.clone(), d.leases.clone());
+    }
+}
+
+fn spawn_refill_lease(d: Arc<Daemon>, key: String, expected_link_ptr: usize) {
+    std::thread::spawn(move || {
+        let url = format!("{}/build/leases", crate::remote_hosted::DEFAULT_BUILD_BASE);
+        let payload = serde_json::json!({
+            "count": LEASE_BATCH_COUNT,
+            "client": concat!("justrust ", env!("CARGO_PKG_VERSION")),
+        })
+        .to_string();
+        let mut req = d
+            .hosted_agent
+            .post(&url)
+            .header("Authorization", &format!("Bearer {key}"))
+            .header("Content-Type", "application/json")
+            .header("X-Justrust-Client-Version", crate::update::VERSION)
+            .header("X-Justrust-Admission", "maintenance-v1");
+        if let Some(target) = crate::update::target() {
+            req = req.header("X-Justrust-Target", target);
+        }
+        let parsed = req.send(payload.as_bytes()).ok().and_then(|mut r| {
+            let code = r.status().as_u16();
+            let text = r
+                .body_mut()
+                .with_config()
+                .limit(256 * 1024)
+                .read_to_string()
+                .ok()?;
+            Some((code, text))
+        });
+        let mut trigger_redeem = false;
+        let mut installed_lease = false;
+        if let Some((200, text)) = parsed
+            && let Ok(v) = serde_json::from_str::<serde_json::Value>(&text)
+        {
+            let update_active = !v["update"].is_null()
+                && matches!(
+                    v["update"]["state"].as_str(),
+                    None | Some("announced" | "restarting")
+                );
+            let lease_id = v["lease"]["lease_id"].as_str().map(str::to_owned);
+            let granted = v["lease"]["granted"].as_u64().unwrap_or(0);
+            let ttl_secs = v["lease"]["ttl_secs"].as_u64().unwrap_or(0);
+            let cur_link = d.live_link_ptr.load(Ordering::SeqCst);
+            let link_ok = expected_link_ptr == 0 || cur_link == expected_link_ptr;
+            if v["admission"] == "maintenance-v1"
+                && !update_active
+                && link_ok
+                && granted > 0
+                && ttl_secs > LEASE_SAFETY_MARGIN.as_secs()
+                && let Some(lease_id) = lease_id
+            {
+                let fleet_version = v["fleet_version"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
+                let new_lease = BuildLease {
+                    lease_id,
+                    key: key.clone(),
+                    key_hash: remote_checkpoint::digest(key.as_bytes()),
+                    link_ptr: cur_link,
+                    granted,
+                    used: 0,
+                    expires_at: Instant::now() + Duration::from_secs(ttl_secs),
+                    builds: v["builds"].clone(),
+                    fleet_version,
+                    pending_runs: Vec::new(),
+                };
+                let mut pool = d.leases.lock().unwrap();
+                if let Some(old) = pool.active.replace(new_lease) {
+                    pool.draining.push(old);
+                }
+                pool.retry_after = None;
+                pool.refill_in_flight = false;
+                if !pool.draining.is_empty() && !pool.redeem_in_flight {
+                    pool.redeem_in_flight = true;
+                    trigger_redeem = true;
+                }
+                installed_lease = true;
+            }
+        }
+        if !installed_lease {
+            let mut pool = d.leases.lock().unwrap();
+            pool.retry_after = Some(Instant::now() + LEASE_RETRY_BACKOFF);
+            pool.refill_in_flight = false;
+        }
+        if trigger_redeem {
+            spawn_redeem_leases(d.hosted_agent.clone(), d.leases.clone());
+        }
+    });
+}
+
+fn send_redeem(
+    agent: &ureq::Agent,
+    key: &str,
+    lease_id: &str,
+    runs: &[serde_json::Value],
+    close: bool,
+) -> std::result::Result<u16, String> {
+    let url = format!(
+        "{}/build/leases/redeem",
+        crate::remote_hosted::DEFAULT_BUILD_BASE
+    );
+    let payload = serde_json::json!({
+        "lease_id": lease_id,
+        "runs": runs,
+        "close": close,
+    })
+    .to_string();
+    let mut req = agent
+        .post(&url)
+        .header("Authorization", &format!("Bearer {key}"))
+        .header("Content-Type", "application/json")
+        .header("X-Justrust-Client-Version", crate::update::VERSION);
+    if let Some(target) = crate::update::target() {
+        req = req.header("X-Justrust-Target", target);
+    }
+    match req.send(payload.as_bytes()) {
+        Ok(mut r) => {
+            let code = r.status().as_u16();
+            let _ = r.body_mut().with_config().limit(64 * 1024).read_to_string();
+            Ok(code)
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn replay_unredeemed_runs(agent: &ureq::Agent, key: &str, runs: &[serde_json::Value]) {
+    let url = format!("{}/build/runs", crate::remote_hosted::DEFAULT_BUILD_BASE);
+    for run in runs {
+        let mut req = agent
+            .post(&url)
+            .header("Authorization", &format!("Bearer {key}"))
+            .header("Content-Type", "application/json")
+            .header("X-Justrust-Client-Version", crate::update::VERSION)
+            .header("X-Justrust-Admission", "maintenance-v1");
+        if let Some(target) = crate::update::target() {
+            req = req.header("X-Justrust-Target", target);
+        }
+        if let Ok(mut r) = req.send(run.to_string().as_bytes()) {
+            let _ = r.body_mut().with_config().limit(64 * 1024).read_to_string();
+        }
+    }
+}
+
+fn next_redeem_work(
+    leases: &Mutex<LeasePool>,
+    close_active: bool,
+) -> Option<(String, String, Vec<serde_json::Value>, bool)> {
+    let mut pool = leases.lock().unwrap();
+    if let Some(draining) = pool.draining.pop() {
+        return Some((draining.key, draining.lease_id, draining.pending_runs, true));
+    }
+    if close_active {
+        if let Some(active) = pool.active.take() {
+            return Some((active.key, active.lease_id, active.pending_runs, true));
+        }
+        return None;
+    }
+    if let Some(active) = pool.active.as_mut()
+        && !active.pending_runs.is_empty()
+    {
+        let runs = std::mem::take(&mut active.pending_runs);
+        return Some((active.key.clone(), active.lease_id.clone(), runs, false));
+    }
+    pool.redeem_in_flight = false;
+    None
+}
+
+fn spawn_redeem_leases(agent: ureq::Agent, leases: Arc<Mutex<LeasePool>>) {
+    std::thread::spawn(move || {
+        while let Some((key, lease_id, runs, close)) = next_redeem_work(&leases, false) {
+            match send_redeem(&agent, &key, &lease_id, &runs, close) {
+                Ok(200) => {}
+                Ok(404 | 409) => {
+                    {
+                        let mut pool = leases.lock().unwrap();
+                        if pool.active.as_ref().is_some_and(|a| a.lease_id == lease_id) {
+                            pool.active = None;
+                        }
+                    }
+                    if !runs.is_empty() {
+                        replay_unredeemed_runs(&agent, &key, &runs);
+                    }
+                }
+                Ok(code) => {
+                    log(&format!("build lease redeem {lease_id}: HTTP {code}"));
+                }
+                Err(e) => {
+                    log(&format!("build lease redeem {lease_id}: {e}"));
+                }
+            }
+        }
+    });
+}
+
+fn flush_and_close_leases_on_exit(agent: &ureq::Agent, leases: &Arc<Mutex<LeasePool>>) {
+    let mut pending = Vec::new();
+    while let Some(item) = next_redeem_work(leases, true) {
+        pending.push(item);
+    }
+    if pending.is_empty() {
+        return;
+    }
+    let agent = agent.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for (key, lease_id, runs, close) in pending {
+            if let Ok(404 | 409) = send_redeem(&agent, &key, &lease_id, &runs, close)
+                && !runs.is_empty()
+            {
+                replay_unredeemed_runs(&agent, &key, &runs);
+            }
+        }
+        let _ = tx.send(());
+    });
+    let _ = rx.recv_timeout(Duration::from_secs(3));
+}
+
 fn drop_link(d: &Daemon, st: &mut Sync) {
+    let had_link = st.link.is_some() || d.live_link_ptr.load(Ordering::SeqCst) != 0;
     st.receipt = None;
     d.live_link_ptr.store(0, Ordering::SeqCst);
     if let Ok(mut wa) = d.warm_admit.lock() {
         *wa = None;
+    }
+    if had_link {
+        invalidate_active_lease(d);
     }
     if let Some(l) = st.link.take() {
         l.peer.close();
@@ -3244,6 +3692,7 @@ mod tests {
             pre_synced: Mutex::default(),
             live_link_ptr: AtomicUsize::new(0),
             warm_admit: Mutex::default(),
+            leases: Arc::default(),
         };
         // Simulate a sync already in progress. Retirement must not wait on it
         // or replace its link, kill its process, cancel, or resubmit its run.
@@ -3646,6 +4095,7 @@ mod tests {
             pre_synced: Mutex::default(),
             live_link_ptr: AtomicUsize::new(0),
             warm_admit: Mutex::default(),
+            leases: Arc::default(),
         };
         let mut st = d.sync.lock().unwrap();
         let failed_write = a.join("lib.rs").display().to_string();
@@ -3764,6 +4214,7 @@ mod tests {
             pre_synced: Mutex::default(),
             live_link_ptr: AtomicUsize::new(0),
             warm_admit: Mutex::default(),
+            leases: Arc::default(),
         };
         let mut st = d.sync.lock().unwrap();
         let name = root.display().to_string();
@@ -3974,6 +4425,7 @@ mod tests {
             pre_synced: Mutex::default(),
             live_link_ptr: AtomicUsize::new(0),
             warm_admit: Mutex::default(),
+            leases: Arc::default(),
         };
         watch_tx.send(base.clone()).unwrap();
         drop(watch_tx);
@@ -4326,6 +4778,108 @@ cmp "$base/expected-lib" "$live/src/lib.rs"
             r#"{"admission":"maintenance-v1","update":{"id":"u0","state":"completed"},"builds":{"can_build":true,"included":100,"included_used":10}}"#
         ));
         assert!(!warm_admit_body_ok(
+            r#"{"admission":"maintenance-v1","update":{"id":"u1","state":"announced"},"builds":{"can_build":true,"included":100,"included_used":0}}"#
+        ));
+    }
+
+    #[test]
+    fn build_lease_checkout_tracks_quota_refill_exhaustion_and_safety_guards() {
+        let k1 = remote_checkpoint::digest(b"sk-key-one");
+        let k2 = remote_checkpoint::digest(b"sk-key-two");
+        let now = Instant::now();
+        let mut pool = LeasePool {
+            active: Some(BuildLease {
+                lease_id: "bl_test".into(),
+                key: "sk-key-one".into(),
+                key_hash: k1.clone(),
+                link_ptr: 0,
+                granted: 2,
+                used: 0,
+                expires_at: now + Duration::from_secs(120),
+                builds: serde_json::json!({"can_build": true, "included": 100, "included_used": 10}),
+                fleet_version: Some("0.1.36".into()),
+                pending_runs: Vec::new(),
+            }),
+            ..LeasePool::default()
+        };
+
+        // Disconnected link or mismatched key must not check out.
+        assert!(
+            checkout_from_pool(&mut pool, &k1, 0, serde_json::json!({"run_id": "r0"}), now)
+                .is_none()
+        );
+        assert!(
+            checkout_from_pool(&mut pool, &k2, 42, serde_json::json!({"run_id": "r0"}), now)
+                .is_none()
+        );
+
+        // First checkout binds link_ptr = 42, increments included_used to 11, and flags refill (remaining 1 <= 4).
+        let (body1, need_refill1) = checkout_from_pool(
+            &mut pool,
+            &k1,
+            42,
+            serde_json::json!({"run_id": "r1", "cmd": "check"}),
+            now,
+        )
+        .expect("first checkout");
+        assert!(need_refill1);
+        let v1: serde_json::Value = serde_json::from_str(&body1).unwrap();
+        assert_eq!(v1["admission"], "maintenance-v1");
+        assert_eq!(v1["lease_hit"], true);
+        assert_eq!(v1["builds"]["included_used"], 11);
+        assert_eq!(v1["fleet_version"], "0.1.36");
+        assert_eq!(pool.active.as_ref().unwrap().link_ptr, 42);
+
+        // Replaced link_ptr must be rejected once bound.
+        assert!(
+            checkout_from_pool(&mut pool, &k1, 99, serde_json::json!({"run_id": "r2"}), now)
+                .is_none()
+        );
+
+        // Second checkout exhausts granted=2 and moves the lease to draining for close: true.
+        let (body2, _) = checkout_from_pool(
+            &mut pool,
+            &k1,
+            42,
+            serde_json::json!({"run_id": "r2", "cmd": "test"}),
+            now,
+        )
+        .expect("second checkout");
+        let v2: serde_json::Value = serde_json::from_str(&body2).unwrap();
+        assert_eq!(v2["builds"]["included_used"], 12);
+        assert!(pool.active.is_none());
+        assert_eq!(pool.draining.len(), 1);
+        assert_eq!(pool.draining[0].pending_runs.len(), 2);
+
+        // Near-expiry lease within safety margin must not check out.
+        pool.active = Some(BuildLease {
+            lease_id: "bl_expiring".into(),
+            key: "sk-key-one".into(),
+            key_hash: k1.clone(),
+            link_ptr: 42,
+            granted: 16,
+            used: 0,
+            expires_at: now + Duration::from_secs(5),
+            builds: serde_json::json!({"can_build": true, "included": 100, "included_used": 12}),
+            fleet_version: None,
+            pending_runs: Vec::new(),
+        });
+        assert!(
+            checkout_from_pool(&mut pool, &k1, 42, serde_json::json!({"run_id": "r3"}), now)
+                .is_none()
+        );
+
+        // Eligibility checks: monthly included >=2 qualifies; trial/overage/maintenance do not.
+        assert!(lease_eligible_body(
+            r#"{"admission":"maintenance-v1","update":null,"builds":{"can_build":true,"included":100,"included_used":10}}"#
+        ));
+        assert!(!lease_eligible_body(
+            r#"{"admission":"maintenance-v1","update":null,"builds":{"can_build":true,"included":10,"included_used":9,"overage_price_usd":0.01}}"#
+        ));
+        assert!(!lease_eligible_body(
+            r#"{"admission":"maintenance-v1","update":null,"builds":{"can_build":true,"trial_remaining":50}}"#
+        ));
+        assert!(!lease_eligible_body(
             r#"{"admission":"maintenance-v1","update":{"id":"u1","state":"announced"},"builds":{"can_build":true,"included":100,"included_used":0}}"#
         ));
     }

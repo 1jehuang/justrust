@@ -975,7 +975,16 @@ fn admit_run_labeled_for(
                             eprintln!("justrust trace: admission {}", parts.join(" | "));
                         }
                     }
-                    eprintln!("justrust trace: daemon_admit {:.1} ms (pooled tls)", res.ms);
+                    let kind = if res
+                        .server_timing
+                        .as_deref()
+                        .is_some_and(|s| s.contains("jr_lease"))
+                    {
+                        "build lease"
+                    } else {
+                        "pooled tls"
+                    };
+                    eprintln!("justrust trace: daemon_admit {:.1} ms ({kind})", res.ms);
                 }
                 Resp {
                     code: res.code,
