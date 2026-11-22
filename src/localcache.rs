@@ -280,7 +280,7 @@ fn stage_with(
         .join("s")
         .join(format!("{}.{}", entry.out, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).ok()?;
+    create_cache_dir(root, &dir).ok()?;
     let ok = files.iter().all(|name| {
         let src = plan.out_dir.join(name);
         if name.ends_with(".d") {
@@ -377,11 +377,50 @@ fn spawn_finisher(dir: &Path) -> bool {
         .is_ok()
 }
 
+fn create_cache_dir(root: &Path, dir: &Path) -> std::io::Result<()> {
+    match std::fs::create_dir_all(dir) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            repair_dir_mode(root);
+            if let Some(parent) = dir.parent()
+                && parent.starts_with(root)
+            {
+                repair_dir_mode(parent);
+            }
+            std::fs::create_dir_all(dir)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+#[cfg(unix)]
+fn repair_dir_mode(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(meta) = std::fs::symlink_metadata(dir) else {
+        return;
+    };
+    if !meta.file_type().is_dir() {
+        return;
+    }
+    let mode = meta.permissions().mode() & 0o7777;
+    if mode & 0o700 != 0o700 {
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode | 0o700));
+    }
+}
+
+#[cfg(not(unix))]
+fn repair_dir_mode(_dir: &Path) {}
+
 fn append_once(manifest: &Path, line: &str) -> Option<()> {
-    std::fs::create_dir_all(manifest.parent()?).ok()?;
+    let parent = manifest.parent()?;
+    let root = parent.parent().unwrap_or(parent);
+    create_cache_dir(root, parent).ok()?;
     let known = std::fs::read_to_string(manifest).unwrap_or_default();
     if !known.lines().any(|l| l == line) {
-        paths::append_line(manifest, line).ok()?;
+        if paths::append_line(manifest, line).is_err() {
+            repair_dir_mode(parent);
+            paths::append_line(manifest, line).ok()?;
+        }
     }
     Some(())
 }
@@ -482,7 +521,7 @@ fn finish(dir: &Path) -> Option<bool> {
     let _ = std::fs::remove_file(dir.join("stage.json"));
     std::fs::write(dir.join("meta.json"), serde_json::to_vec(&outs).ok()?).ok()?;
     let root = dir.parent()?.parent()?;
-    std::fs::create_dir_all(root.join("o")).ok()?;
+    create_cache_dir(root, &root.join("o")).ok()?;
     let final_dir = root.join("o").join(&staged.entry.out);
     if std::fs::rename(dir, &final_dir).is_err() {
         // Another process committed the same result first.
@@ -1036,6 +1075,67 @@ mod tests {
         assert!(
             plan.restore(&mut Vec::new()).is_none(),
             "new content must not restore the old build"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_recovers_from_read_only_staging_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!(
+            "justrust-localcache-ro-stage-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let ws = base.join("ws");
+        let profile = ws.join("target/debug");
+        let out_dir = profile.join("deps");
+        let src = ws.join("src/lib.rs");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&out_dir).unwrap();
+        std::fs::write(&src, "pub fn answer() -> u32 { 42 }").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&src)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1000)),
+            )
+            .unwrap();
+        std::fs::write(
+            out_dir.join("fixture-123.d"),
+            format!("fixture: {}\n", src.display()),
+        )
+        .unwrap();
+        std::fs::write(out_dir.join("libfixture-123.rmeta"), b"compiled metadata").unwrap();
+
+        let cache = base.join("cache");
+        let stage_dir = cache.join("s");
+        std::fs::create_dir_all(&stage_dir).unwrap();
+        std::fs::set_permissions(&stage_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        let plan = Plan {
+            base: "base-key".into(),
+            out_dir,
+            extra: "-123".into(),
+            crate_name: "fixture".into(),
+            cwd: ws.clone(),
+            norm: depcache::Norm::with_cargo_home(&profile, &ws.join("cargo-home")).unwrap(),
+            root: cache.clone(),
+            extra_args: vec![],
+        };
+        let staged = stage_with(&plan, 1500.0, 0.25, &[], true, false);
+        assert!(
+            staged.is_some(),
+            "stage_with should repair a read-only localcache/s directory and commit"
+        );
+        let mode = std::fs::metadata(&stage_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode & 0o700, 0o700);
+        assert!(
+            plan.restore(&mut Vec::new()).is_some(),
+            "repaired cache should restore the committed output"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
