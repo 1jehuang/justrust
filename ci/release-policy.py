@@ -167,9 +167,15 @@ def attest(snapshot, target, since, cwd, runs, binary=None):
             raise ValueError("release build did not use selected hosted compiler")
         compiler = m.get("real_rustc", "")
         # Two-slot installs (src/toolchain/slots.rs) put a newly promoted
-        # compiler under toolchains/staged/<id>, the same managed root.
+        # compiler under toolchains/staged/<id> or toolchains/managed/staged/<id>.
         normalized = compiler.replace("\\", "/") if isinstance(compiler, str) else ""
-        if not isinstance(compiler, str) or not (normalized.endswith(f"/toolchains/{want}/bin/rustc") or normalized.endswith(f"/toolchains/staged/{want}/bin/rustc")) or ".." in normalized.split("/"):
+        allowed_suffixes = (
+            f"/toolchains/{want}/bin/rustc",
+            f"/toolchains/staged/{want}/bin/rustc",
+            f"/toolchains/managed/{want}/bin/rustc",
+            f"/toolchains/managed/staged/{want}/bin/rustc",
+        )
+        if not isinstance(compiler, str) or not normalized.endswith(allowed_suffixes) or ".." in normalized.split("/"):
             raise ValueError("recorded actual compiler path does not match policy")
         matches.append({"run_id": m["id"], "compiler": compiler, "toolchain": want,
                         "target": target, "policy_sha256": digest(snapshot), "place": "hosted",

@@ -219,10 +219,15 @@ class ReleasePolicyTests(unittest.TestCase):
             result = p.attest(self.snapshot, p.TARGETS[0], 99, Path.cwd(), runs, binary)
             self.assertEqual(result["binary_sha256"], p.hashlib.sha256(binary.read_bytes()).hexdigest())
             self.assertEqual(result["compiler"], meta["real_rustc"])
-            # A two-slot promotion installs the new compiler under staged/.
-            staged = dict(meta, real_rustc="/home/ubuntu/.justrust/toolchains/staged/jr-ac20de5e7921/bin/rustc")
-            (run / "meta.json").write_text(json.dumps(staged))
-            self.assertEqual(p.attest(self.snapshot, p.TARGETS[0], 99, Path.cwd(), runs)["compiler"], staged["real_rustc"])
+            # A two-slot promotion installs the new compiler under staged/ or managed/staged/.
+            for path in (
+                "/home/ubuntu/.justrust/toolchains/staged/jr-ac20de5e7921/bin/rustc",
+                "/home/ubuntu/.justrust/toolchains/managed/jr-ac20de5e7921/bin/rustc",
+                "/home/ubuntu/.justrust/toolchains/managed/staged/jr-ac20de5e7921/bin/rustc",
+            ):
+                staged = dict(meta, real_rustc=path)
+                (run / "meta.json").write_text(json.dumps(staged))
+                self.assertEqual(p.attest(self.snapshot, p.TARGETS[0], 99, Path.cwd(), runs)["compiler"], path)
             for key, value in (("toolchain", "1.99.0"), ("place", "local"), ("real_rustc", "/usr/bin/rustc"), ("real_rustc", "/toolchains/staged/other/bin/rustc"), ("real_rustc", "/toolchains/jr-ac20de5e7921/bin/../other/bin/rustc")):
                 bad = dict(meta)
                 bad[key] = value
