@@ -402,13 +402,13 @@ fn parse_phase_ledger(text: &str) -> Vec<Pass> {
 
 /// Parallel front end for optimized workspace crates. rustc runs its front
 /// end on one thread unless told otherwise, and project wrappers such as
-/// Jcode Desktop's thread only opt-level 0 units, so a release rebuild of a
-/// big local crate type-checks single-threaded before codegen fans out.
-/// Only on a jr toolchain (nightly, so `-Z` needs no `RUSTC_BOOTSTRAP` and
-/// no cache key moves; `-Zthreads` is UNTRACKED), only local crates (registry
-/// crates come from the depcache), and never when the unit already sets a
-/// thread count. `JUSTRUST_RELEASE_FRONTEND_THREADS=0` turns it off, `=N`
-/// picks the count (default min(8, CPUs), FINDINGS: 16 is never better).
+/// Parallelize rustc's front-end for local workspace crates on a jr toolchain
+/// (nightly, so `-Z` needs no `RUSTC_BOOTSTRAP` and no cache key moves;
+/// `-Zthreads` is UNTRACKED). Only local crates (registry crates come from the
+/// depcache), and never when the unit already sets a thread count.
+/// `JUSTRUST_FRONTEND_THREADS=0` (or `JUSTRUST_RELEASE_FRONTEND_THREADS=0`)
+/// turns it off; `=N` picks the count (default min(8, CPUs), FINDINGS: 16 is
+/// never better).
 fn release_frontend_threads_args(real: &std::path::Path, args: &[OsString]) -> Option<OsString> {
     let is_jr = real
         .parent()
@@ -418,7 +418,9 @@ fn release_frontend_threads_args(real: &std::path::Path, args: &[OsString]) -> O
     if !is_jr || std::env::var_os("JUSTRUST_TOOLCHAIN_JR").is_none() {
         return None;
     }
-    let threads = match std::env::var("JUSTRUST_RELEASE_FRONTEND_THREADS") {
+    let threads = match std::env::var("JUSTRUST_FRONTEND_THREADS")
+        .or_else(|_| std::env::var("JUSTRUST_RELEASE_FRONTEND_THREADS"))
+    {
         Ok(v) => v.parse::<usize>().ok()?,
         Err(_) => std::thread::available_parallelism().map_or(1, |n| n.get().min(8)),
     };
@@ -448,7 +450,6 @@ fn frontend_threads_for(
         return None;
     }
     let s = |a: &OsString| a.to_string_lossy().into_owned();
-    let mut optimized = false;
     let mut prev = String::new();
     for a in args.iter().map(s) {
         if a.starts_with("-Zthreads")
@@ -457,17 +458,9 @@ fn frontend_threads_for(
         {
             return None;
         }
-        let opt = if prev == "-C" {
-            a.strip_prefix("opt-level=")
-        } else {
-            a.strip_prefix("-Copt-level=")
-        };
-        if let Some(level) = opt {
-            optimized = level != "0";
-        }
         prev = a;
     }
-    optimized.then(|| format!("-Zthreads={threads}").into())
+    Some(format!("-Zthreads={threads}").into())
 }
 
 /// Cross-crate early cutoff (jr-rustc `-Zjr-iface-hash` + jr-cargo, see
@@ -1131,7 +1124,7 @@ mod tests {
     }
 
     #[test]
-    fn release_frontend_threads_only_for_optimized_local_units() {
+    fn frontend_threads_for_all_local_units() {
         let os = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
         let home = Some(PathBuf::from("/h/.cargo"));
         let local = Some(PathBuf::from("/w/crates/ui"));
@@ -1147,10 +1140,14 @@ mod tests {
         );
         assert_eq!(f(&rel, &reg, 8), None, "registry crate");
         assert_eq!(f(&rel, &local, 1), None, "disabled");
-        assert_eq!(f(&os(&["-C", "opt-level=0"]), &local, 8), None, "debug");
+        assert_eq!(
+            f(&os(&["-C", "opt-level=0"]), &local, 8),
+            Some("-Zthreads=8".into()),
+            "debug"
+        );
         assert_eq!(
             f(&os(&["--crate-name", "ui"]), &local, 8),
-            None,
+            Some("-Zthreads=8".into()),
             "no opt-level"
         );
         assert_eq!(

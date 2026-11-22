@@ -2255,7 +2255,8 @@ fn check_sync_failures(st: &mut Sync, ack: &SyncAck, run_roots: Option<&[PathBuf
 /// locally). Other large files (assets) are only reported.
 fn oversized_note(st: &Sync, roots: &[PathBuf]) -> Result<String> {
     let mut src = Vec::new();
-    let mut other = Vec::new();
+    let mut other: Vec<(String, f64)> = Vec::new();
+    let single_root = roots.len() == 1;
     for root in roots {
         let Some(r) = st.roots.get(root) else {
             continue;
@@ -2263,11 +2264,15 @@ fn oversized_note(st: &Sync, roots: &[PathBuf]) -> Result<String> {
         for rel in &r.oversized {
             let p = root.join(rel);
             let mb = std::fs::metadata(&p).map_or(0.0, |m| m.len() as f64 / 1048576.0);
-            let s = format!("{} ({mb:.1} MB)", p.display());
             if remote_sync::is_build_source(rel) {
-                src.push(s);
+                src.push(format!("{} ({mb:.1} MB)", p.display()));
             } else {
-                other.push(s);
+                let shown = if single_root {
+                    rel.display().to_string()
+                } else {
+                    p.display().to_string()
+                };
+                other.push((format!("{shown} ({mb:.1} MB)"), mb));
             }
         }
     }
@@ -2285,11 +2290,22 @@ fn oversized_note(st: &Sync, roots: &[PathBuf]) -> Result<String> {
     }
     Ok(if other.is_empty() {
         String::new()
-    } else {
+    } else if other.len() <= 2 {
+        let items: Vec<&str> = other.iter().map(|(s, _)| s.as_str()).collect();
         format!(
             "not mirrored (over {} MB): {}",
             MAX_FILE >> 20,
-            other.join(", ")
+            items.join(", ")
+        )
+    } else {
+        let total_mb: f64 = other.iter().map(|(_, mb)| *mb).sum();
+        format!(
+            "not mirrored (over {} MB): {} files ({total_mb:.1} MB total; {}, {}, +{} more)",
+            MAX_FILE >> 20,
+            other.len(),
+            other[0].0,
+            other[1].0,
+            other.len() - 2,
         )
     })
 }
