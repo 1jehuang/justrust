@@ -1126,6 +1126,155 @@ pub struct Outcome {
     pub code: i32,
     #[allow(dead_code)] // used by the router (in progress)
     pub run_id: String,
+    pub cancelled: bool,
+}
+
+#[cfg(unix)]
+mod cancel_signal {
+    use std::os::fd::AsRawFd;
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    static SIGNAL: AtomicI32 = AtomicI32::new(0);
+    static SOCK_FD: AtomicI32 = AtomicI32::new(-1);
+
+    extern "C" fn handler(sig: libc::c_int) {
+        // A second termination signal while cleaning up exits immediately so a
+        // wedged cleanup step can never block cancellation.
+        if SIGNAL
+            .compare_exchange(0, sig, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            // SAFETY: _exit(2) is async-signal-safe.
+            unsafe {
+                libc::_exit(128 + sig);
+            }
+        }
+        let fd = SOCK_FD.load(Ordering::Acquire);
+        if fd >= 0 {
+            // SAFETY: shutdown(2) is async-signal-safe per POSIX signal-safety(7).
+            unsafe {
+                libc::shutdown(fd, libc::SHUT_RDWR);
+            }
+        }
+    }
+
+    pub(super) struct Guard {
+        prev: [(libc::c_int, libc::sigaction); 3],
+    }
+
+    impl Guard {
+        pub(super) fn install() -> Self {
+            SIGNAL.store(0, Ordering::SeqCst);
+            SOCK_FD.store(-1, Ordering::Release);
+            // SAFETY: sigaction is a plain C struct initialized before sigaction(2).
+            let mut prev: [(libc::c_int, libc::sigaction); 3] =
+                [(0, unsafe { std::mem::zeroed() }); 3];
+            // SAFETY: handler only touches atomics and async-signal-safe syscalls.
+            unsafe {
+                let mut sa: libc::sigaction = std::mem::zeroed();
+                sa.sa_sigaction = handler as *const () as usize;
+                // Omit SA_RESTART so blocking I/O wakes immediately on cancellation.
+                sa.sa_flags = 0;
+                libc::sigemptyset(&mut sa.sa_mask);
+                for (slot, sig) in prev
+                    .iter_mut()
+                    .zip([libc::SIGTERM, libc::SIGINT, libc::SIGHUP])
+                {
+                    slot.0 = sig;
+                    libc::sigaction(sig, &sa, &mut slot.1);
+                }
+            }
+            Self { prev }
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            SOCK_FD.store(-1, Ordering::Release);
+            // SAFETY: restoring previous sigaction structs saved during install().
+            unsafe {
+                for (sig, old) in &self.prev {
+                    libc::sigaction(*sig, old, std::ptr::null_mut());
+                }
+            }
+        }
+    }
+
+    pub(super) struct ActiveSocket;
+
+    impl ActiveSocket {
+        pub(super) fn register(fd: &impl AsRawFd) -> Self {
+            let raw = fd.as_raw_fd();
+            SOCK_FD.store(raw, Ordering::Release);
+            if SIGNAL.load(Ordering::SeqCst) != 0 {
+                // SAFETY: raw is still open because the caller holds `fd`.
+                unsafe {
+                    libc::shutdown(raw, libc::SHUT_RDWR);
+                }
+            }
+            Self
+        }
+    }
+
+    impl Drop for ActiveSocket {
+        fn drop(&mut self) {
+            // Clear before the owning stream drops so a reused fd is never shut down.
+            SOCK_FD.store(-1, Ordering::Release);
+        }
+    }
+
+    pub(super) fn received() -> Option<i32> {
+        match SIGNAL.load(Ordering::SeqCst) {
+            0 => None,
+            sig => Some(sig),
+        }
+    }
+
+    fn label(sig: i32) -> &'static str {
+        match sig {
+            libc::SIGTERM => "SIGTERM",
+            libc::SIGINT => "SIGINT",
+            libc::SIGHUP => "SIGHUP",
+            _ => "signal",
+        }
+    }
+
+    pub(super) fn reason(sig: i32, prebuild: bool) -> String {
+        if prebuild {
+            format!("prebuild cancelled ({})", label(sig))
+        } else {
+            format!("cancelled ({})", label(sig))
+        }
+    }
+}
+
+#[cfg(not(unix))]
+mod cancel_signal {
+    pub(super) struct Guard;
+    impl Guard {
+        pub(super) fn install() -> Self {
+            Self
+        }
+    }
+
+    pub(super) struct ActiveSocket;
+    impl ActiveSocket {
+        pub(super) fn register<T>(_fd: &T) -> Self {
+            Self
+        }
+    }
+
+    pub(super) fn received() -> Option<i32> {
+        None
+    }
+
+    pub(super) fn reason(_sig: i32, prebuild: bool) -> String {
+        if prebuild {
+            "prebuild cancelled".into()
+        } else {
+            "cancelled".into()
+        }
+    }
 }
 
 fn fallback_safe(flushed: bool, submitted: bool) -> bool {
@@ -1236,6 +1385,7 @@ pub fn run_remote(
     args: &[String],
     start: bool,
 ) -> Result<std::result::Result<Outcome, Infra>> {
+    let _cancel_guard = cancel_signal::Guard::install();
     let started = Instant::now();
     let mut diagnostic = RemoteDiagnostic::default();
     let run_id = crate::record::new_run_id();
@@ -1254,6 +1404,9 @@ pub fn run_remote(
             &mut lifecycle,
             &mut hosted_run,
         );
+        if cancel_signal::received().is_some() {
+            break result;
+        }
         let disconnected = matches!(&result, Err(e) if e.is::<RemoteConnectionLost>())
             || matches!(&result, Ok(Err(Infra(msg))) if msg == "sync daemon closed the connection"
                 || msg.starts_with("connection to the remote machine was lost"));
@@ -1298,6 +1451,21 @@ pub fn run_remote(
         // Keep the admission and heartbeat alive across attempts. The same run
         // is charged once and gets one final result, not an abandoned result.
     };
+    if let Some(sig) = cancel_signal::received() {
+        let code = 128 + sig;
+        if let Some(run) = hosted_run.as_mut() {
+            let why = (
+                crate::failure::Class::Interrupted,
+                cancel_signal::reason(sig, crate::buildd::is_guess()),
+            );
+            run.finish("abandoned", Some(code), Some(&why));
+        }
+        return Ok(Ok(Outcome {
+            code,
+            run_id,
+            cancelled: true,
+        }));
+    }
     let result = match result {
         Ok(Err(Infra(msg))) if !recovered.is_empty() => Err(anyhow::anyhow!(
             "hosted update recovery could not reconnect: {msg}; no local fallback"
@@ -1353,9 +1521,23 @@ impl std::fmt::Display for RemoteConnectionLost {
 
 impl std::error::Error for RemoteConnectionLost {}
 
+#[derive(Debug)]
+struct RemoteCancelled;
+
+impl std::fmt::Display for RemoteCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("remote build cancelled by signal")
+    }
+}
+
+impl std::error::Error for RemoteCancelled {}
+
 fn wait_for_hosted_update(mut update: crate::remote_hosted::HostedUpdate) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(360);
     loop {
+        if cancel_signal::received().is_some() {
+            return Err(RemoteCancelled.into());
+        }
         if update.ready_to_retry() {
             return Ok(());
         }
@@ -1371,7 +1553,12 @@ fn wait_for_hosted_update(mut update: crate::remote_hosted::HostedUpdate) -> Res
                 }
             );
         }
-        std::thread::sleep(Duration::from_secs(2));
+        for _ in 0..20 {
+            if cancel_signal::received().is_some() {
+                return Err(RemoteCancelled.into());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
         if let Ok(Some(next)) = crate::remote_hosted::current_update() {
             if next.id != update.id {
                 bail!(
@@ -1559,6 +1746,9 @@ fn run_remote_inner(
         };
         *admitted = Some(HostedRun::new(hosted, run_id, total));
     }
+    if cancel_signal::received().is_some() {
+        return Err(RemoteCancelled.into());
+    }
     let hosted_run = admitted.as_mut().expect("run admitted above");
     if crate::remote_windows::selected()? {
         if remote_backend::load() != Some(remote_backend::Backend::Hosted) {
@@ -1599,6 +1789,7 @@ fn run_remote_inner(
         return Ok(Ok(Outcome {
             code: native.code,
             run_id: run_id.to_owned(),
+            cancelled: false,
         }));
     }
     mark("charged");
@@ -1636,6 +1827,8 @@ fn run_remote_inner(
     }
     let mut w = BufWriter::new(sock.try_clone()?);
     let mut r = BufReader::new(sock);
+    // Declared after `r` so it clears the registered fd before `r` closes it.
+    let _cancel_sock = cancel_signal::ActiveSocket::register(r.get_ref());
     let mut full = vec![sub.to_string()];
     full.extend(args.iter().cloned());
     // Only an actually native-eligible request may omit Cargo telemetry.
@@ -1683,6 +1876,9 @@ fn run_remote_inner(
         let frame = match read_frame(&mut r) {
             Ok(Some(f)) => f,
             failure => {
+                if cancel_signal::received().is_some() {
+                    return Err(RemoteCancelled.into());
+                }
                 diagnostic.failure_kind = match &failure {
                     Ok(None) => "connection_closed",
                     Err(error) => {
@@ -1894,6 +2090,7 @@ fn run_remote_inner(
                 return Ok(Ok(Outcome {
                     code,
                     run_id: run_id.to_owned(),
+                    cancelled: false,
                 }));
             }
             // A refusal is the answer, not an outage: a local build would
@@ -2420,6 +2617,75 @@ mod tests {
         run.running();
         assert!(run.heartbeat.is_none());
         run.finish("done", Some(101), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancel_signal_unblocks_socket_and_abandons_hosted_run() {
+        use std::io::Read;
+        use std::os::unix::net::UnixStream;
+        let (mut reader, _writer) = UnixStream::pair().unwrap();
+        let _guard = super::cancel_signal::Guard::install();
+        let _active = super::cancel_signal::ActiveSocket::register(&reader);
+        // SAFETY: pthread_self() returns the handle for this test thread only,
+        // so pthread_kill wakes only this thread without disturbing parallel tests.
+        let target = unsafe { libc::pthread_self() } as usize;
+        let sender = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            unsafe {
+                libc::pthread_kill(target as libc::pthread_t, libc::SIGTERM);
+            }
+        });
+        let started = std::time::Instant::now();
+        let mut buf = [0u8; 8];
+        let read_result = reader.read(&mut buf);
+        sender.join().unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "SIGTERM should immediately unblock the daemon socket read"
+        );
+        assert!(
+            matches!(read_result, Ok(0) | Err(_)),
+            "shutdown socket should return EOF or error, got {read_result:?}"
+        );
+        let sig = super::cancel_signal::received();
+        assert_eq!(sig, Some(libc::SIGTERM));
+        assert_eq!(
+            super::cancel_signal::reason(libc::SIGTERM, true),
+            "prebuild cancelled (SIGTERM)"
+        );
+        assert_eq!(
+            super::cancel_signal::reason(libc::SIGINT, false),
+            "cancelled (SIGINT)"
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut run = super::HostedRun::with_reporter(Some(std::sync::Arc::new(
+            move |event: &str, code, failure: Option<&crate::failure::Wire>| {
+                tx.send((event.to_owned(), code, failure.cloned())).unwrap();
+            },
+        )));
+        run.running();
+        let sig = sig.unwrap();
+        let why = (
+            crate::failure::Class::Interrupted,
+            super::cancel_signal::reason(sig, true),
+        );
+        run.finish("abandoned", Some(128 + sig), Some(&why));
+        drop(run);
+        assert_eq!(
+            rx.into_iter().collect::<Vec<_>>(),
+            vec![
+                ("running".into(), None, None),
+                (
+                    "abandoned".into(),
+                    Some(128 + libc::SIGTERM),
+                    Some((
+                        crate::failure::Class::Interrupted,
+                        "prebuild cancelled (SIGTERM)".into()
+                    ))
+                ),
+            ]
+        );
     }
 
     #[test]

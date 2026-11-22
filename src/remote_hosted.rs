@@ -34,6 +34,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::remote_backend::Target;
+use crate::sys::Detach;
 
 pub const DEFAULT_API_BASE: &str = "https://api.jcode.sh/v1";
 /// The build fleet (justrust-cloud). Every `build/...` path goes here.
@@ -1175,10 +1176,11 @@ fn valid_event_path(path: &str) -> bool {
     path.strip_prefix("build/runs/")
         .and_then(|s| s.strip_suffix("/event"))
         .is_some_and(|id| {
-            !id.is_empty()
+            let core = id.strip_suffix("-pre").unwrap_or(id);
+            !core.is_empty()
                 && id.len() <= 64
-                && id.bytes().any(|b| b.is_ascii_digit())
-                && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+                && core.bytes().any(|b| b.is_ascii_digit())
+                && core.bytes().all(|b| b.is_ascii_digit() || b == b'-')
         })
 }
 
@@ -1398,6 +1400,10 @@ pub fn post_anonymous_detached(path: &str, body: &Value) {
 }
 
 fn spawn_detached((mut cmd, stdin_text): (Command, String)) -> bool {
+    // Isolate the fire-and-forget sender in its own process group so
+    // process-group cancellation (e.g. buildd stopping a stale prebuild)
+    // cannot kill an in-flight `abandoned` or `done` event report.
+    cmd.detached();
     let Ok(mut child) = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::null())

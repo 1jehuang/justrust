@@ -928,7 +928,9 @@ pub fn maybe_remote(full: &[OsString]) {
         Ok(Ok(o)) => {
             // The remote works again: end any backoff now, so concurrent
             // agents stop falling back to local for the rest of the window.
-            if let Some(f) = fail_file() {
+            if !o.cancelled
+                && let Some(f) = fail_file()
+            {
                 let _ = std::fs::remove_file(f);
             }
             std::process::exit(o.code)

@@ -21,13 +21,20 @@ fn envelope(key: &str, path: &str, body: serde_json::Value) -> Vec<u8> {
 
 #[test]
 fn event_paths_accept_only_bounded_run_event_routes() {
-    for id in ["0", "123-456", &"9".repeat(64)] {
+    for id in [
+        "0",
+        "123-456",
+        "20261121-182400494-83519-pre",
+        &"9".repeat(64),
+    ] {
         assert!(valid_event_path(&format!("build/runs/{id}/event")), "{id}");
     }
     for path in [
         "",
         "build/runs//event",
         "build/runs/abc/event",
+        "build/runs/-pre/event",
+        "build/runs/---pre/event",
         "build/runs/-/event",
         "build/runs/1/event/",
         "/build/runs/1/event",
