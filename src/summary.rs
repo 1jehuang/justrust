@@ -447,6 +447,9 @@ pub struct IndexEntry {
     /// First-principles theoretical optimal wall-time floor in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theoretical_floor_secs: Option<f64>,
+    /// Optimistic realistic wall-time estimate in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optimistic_est_secs: Option<f64>,
 }
 
 /// Resolve saved provenance, never today's configured backend. Older clients
@@ -1500,6 +1503,11 @@ impl Summary {
                 .into(),
             ),
             theoretical_floor_secs: self.theoretical_floor.as_ref().map(|f| f.total_secs),
+            optimistic_est_secs: self
+                .theoretical_floor
+                .as_ref()
+                .map(|f| f.optimistic_est_secs)
+                .filter(|&v| v > 0.0),
         }
     }
 

@@ -208,18 +208,23 @@ pub fn list(limit: usize, here: bool, json: bool, filter: FailFilter) -> Result<
         return Ok(());
     }
     println!(
-        "{:<26} {:>8} {:>7} {:>8} {:>8} {:>6} {:>5} {:<9}  {:<10} COMMAND",
-        "ID", "WALL", "FLOOR", "COMPILE", "TESTS", "UNITS", "EXIT", "CAUSE", "WHEN"
+        "{:<26} {:>8} {:>7} {:>7} {:>8} {:>8} {:>6} {:>5} {:<9}  {:<10} COMMAND",
+        "ID", "WALL", "EST", "FLOOR", "COMPILE", "TESTS", "UNITS", "EXIT", "CAUSE", "WHEN"
     );
     for r in &runs {
+        let est = r
+            .optimistic_est_secs
+            .map(crate::theoretical::format_short)
+            .unwrap_or_else(|| "-".into());
         let floor = r
             .theoretical_floor_secs
             .map(crate::theoretical::format_short)
             .unwrap_or_else(|| "-".into());
         println!(
-            "{:<26} {:>7.1}s {:>7} {:>7.1}s {:>7.1}s {:>6} {:>5} {:<9}  {:<10} cargo {}",
+            "{:<26} {:>7.1}s {:>7} {:>7} {:>7.1}s {:>7.1}s {:>6} {:>5} {:<9}  {:<10} cargo {}",
             r.id,
             r.wall,
+            est,
             floor,
             r.compile + 0.0,
             r.test_run + 0.0,

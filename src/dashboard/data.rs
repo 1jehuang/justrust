@@ -679,6 +679,9 @@ pub(crate) struct RunRow {
     /// First-principles theoretical optimal wall-time floor in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theoretical_floor_secs: Option<f64>,
+    /// Optimistic realistic wall-time estimate in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optimistic_est_secs: Option<f64>,
 }
 
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
@@ -825,27 +828,37 @@ fn enrich_rows_at(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path, now: s
                             row.cargo_units = cargo_units(&timing.units);
                             row.time = measured_times(timing);
                         }
-                        if row.theoretical_floor_secs.is_none()
+                        if (row.theoretical_floor_secs.is_none()
+                            || row.optimistic_est_secs.is_none())
                             && !summary.is_empty()
                             && let Ok(full) =
                                 serde_json::from_slice::<crate::summary::Summary>(&summary)
                         {
-                            row.theoretical_floor_secs = Some(
-                                full.theoretical_floor
-                                    .as_ref()
-                                    .map(|f| f.total_secs)
-                                    .unwrap_or_else(|| {
-                                        crate::theoretical::compute(
-                                            &full.subcommand,
-                                            &full.args,
-                                            &full.git,
-                                            &full.units,
-                                            &full.phases,
-                                            &full.tests,
-                                        )
-                                        .total_secs
-                                    }),
+                            let computed = crate::theoretical::compute(
+                                &full.subcommand,
+                                &full.args,
+                                &full.git,
+                                &full.units,
+                                &full.phases,
+                                &full.tests,
                             );
+                            if row.theoretical_floor_secs.is_none() {
+                                row.theoretical_floor_secs = Some(
+                                    full.theoretical_floor
+                                        .as_ref()
+                                        .map(|f| f.total_secs)
+                                        .unwrap_or(computed.total_secs),
+                                );
+                            }
+                            if row.optimistic_est_secs.is_none() {
+                                row.optimistic_est_secs = Some(
+                                    full.theoretical_floor
+                                        .as_ref()
+                                        .map(|f| f.optimistic_est_secs)
+                                        .filter(|&v| v > 0.0)
+                                        .unwrap_or(computed.optimistic_est_secs),
+                                );
+                            }
                         }
                         let (compile, reuse, timeline, opt) =
                             timeline_profiles(&summary, &units, row.place == "local", || {
@@ -1079,6 +1092,7 @@ fn index_rows(tail: &str) -> Vec<RunRow> {
             timeline: None,
             opt_level: None,
             theoretical_floor_secs: entry.theoretical_floor_secs,
+            optimistic_est_secs: entry.optimistic_est_secs,
         })
         .collect()
 }
@@ -1158,6 +1172,10 @@ fn hosted_row(value: &Value) -> Option<RunRow> {
             .as_f64()
             .or_else(|| summary["theoretical_floor_secs"].as_f64())
             .filter(|n| n.is_finite() && *n >= 0.0),
+        optimistic_est_secs: summary["theoretical_floor"]["optimistic_est_secs"]
+            .as_f64()
+            .or_else(|| summary["optimistic_est_secs"].as_f64())
+            .filter(|n| n.is_finite() && *n > 0.0),
     })
 }
 

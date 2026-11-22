@@ -27,10 +27,26 @@ const COLD_LOC_PER_LOCAL_UNIT: usize = 500;
 /// Fallback dirty LOC when an incremental local unit compiled without git diff stats.
 const DIRTY_FALLBACK_LINES: usize = 50;
 
+/// Optimistic realistic overhead (warm hosted sync + Cargo startup/fingerprints).
+const EST_OVERHEAD_SECS: f64 = 0.12;
+/// Optimistic realistic warm incremental check base (frontend + incr load/save).
+const EST_CHECK_BASE_SECS: f64 = 0.25;
+/// Optimistic realistic warm incremental debug build/test base (frontend + codegen).
+const EST_DEBUG_BASE_SECS: f64 = 0.45;
+/// Optimistic realistic warm incremental release build/test base.
+const EST_RELEASE_BASE_SECS: f64 = 0.85;
+/// Optimistic realistic incremental link with wild/mold.
+const EST_LINK_INCR_SECS: f64 = 0.18;
+/// Optimistic realistic cold/release link with wild/mold.
+const EST_LINK_COLD_SECS: f64 = 0.30;
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct TheoreticalFloor {
     /// Total theoretical optimal wall time in seconds.
     pub total_secs: f64,
+    /// Optimistic realistic wall-time estimate in seconds (well-tuned justrust today).
+    #[serde(default)]
+    pub optimistic_est_secs: f64,
     /// Irreducible stat/hash/dispatch overhead.
     pub overhead_secs: f64,
     /// Frontend floor (parse + typecheck + borrowcheck) for changed workspace lines.
@@ -126,8 +142,34 @@ pub fn compute(
 
     let total_secs = overhead_secs + frontend_secs + codegen_secs + link_secs + test_secs;
 
+    let est_compile_secs = if units.compiled == 0 || units.local == 0 {
+        0.0
+    } else if !needs_codegen(subcommand, args) {
+        if cold {
+            0.40 + (units.local.min(16) as f64) * 0.10 + (dirty_lines as f64 / 50_000.0)
+        } else {
+            EST_CHECK_BASE_SECS + (dirty_lines as f64 / 50_000.0)
+        }
+    } else if is_release(args, units.opt_level.as_deref()) {
+        if cold {
+            1.20 + (units.local.min(16) as f64) * 0.25
+                + (dirty_lines as f64 / 5_000.0)
+                + EST_LINK_COLD_SECS
+        } else {
+            EST_RELEASE_BASE_SECS + (dirty_lines as f64 / 5_000.0) + EST_LINK_COLD_SECS
+        }
+    } else if cold {
+        0.60 + (units.local.min(16) as f64) * 0.15
+            + (dirty_lines as f64 / 20_000.0)
+            + EST_LINK_COLD_SECS
+    } else {
+        EST_DEBUG_BASE_SECS + (dirty_lines as f64 / 20_000.0) + EST_LINK_INCR_SECS
+    };
+    let optimistic_est_secs = (EST_OVERHEAD_SECS + est_compile_secs + test_secs).max(total_secs);
+
     TheoreticalFloor {
         total_secs,
+        optimistic_est_secs,
         overhead_secs,
         frontend_secs,
         codegen_secs,

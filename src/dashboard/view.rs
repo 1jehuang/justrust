@@ -1112,18 +1112,20 @@ fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
     }
     let width = inner.width as usize;
     let wide = width >= 84;
-    // FLOOR takes six cells plus a separator; FRESH, CGU and OPT each take five plus a separator.
-    let remaining = width
-        .saturating_sub(RESULT_WIDTH + WHERE_WIDTH + MACHINE_WIDTH + 1 + 7 + 9 + 4 + 7 + 6 + 6 + 6);
+    // EST and FLOOR each take six cells plus a separator; FRESH, CGU and OPT each take five plus a separator.
+    let remaining = width.saturating_sub(
+        RESULT_WIDTH + WHERE_WIDTH + MACHINE_WIDTH + 1 + 7 + 9 + 4 + 7 + 7 + 6 + 6 + 6,
+    );
     let version_width = remaining.saturating_sub(10).min(34);
     let command_width = remaining.saturating_sub(version_width);
     let header = if wide {
         format!(
-            "  {} {} {} {:>7} {:>6} FRESH   CGU   OPT  {} {}{}{:>9}",
+            "  {} {} {} {:>7} {:>6} {:>6} FRESH   CGU   OPT  {} {}{}{:>9}",
             pad("RESULT", RESULT_WIDTH - 2),
             pad("WHERE", WHERE_WIDTH),
             pad("MACHINE", MACHINE_WIDTH),
             "WALL",
+            "EST",
             "FLOOR",
             pad(
                 if version_width / 2 >= 9 {
@@ -1141,12 +1143,12 @@ fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
             "WHEN"
         )
     } else {
-        "  RESULT · WHEN · FLOOR · FRESH · CGU · OPT · COMMAND · TC  CLIENT".into()
+        "  RESULT · WHEN · EST · FLOOR · FRESH · CGU · OPT · COMMAND · TC  CLIENT".into()
     };
     let mut lines = vec![
         kind_bar(state, width, rows),
         line(
-            "-: unavailable · FLOOR: theoretical optimal · FRESH: Cargo units fresh · CGU: codegen units reused",
+            "-: unavailable · EST: optimistic realistic · FLOOR: theoretical optimal · FRESH: Cargo units fresh · CGU: codegen units reused",
             DIM,
             width,
         ),
@@ -1198,6 +1200,10 @@ fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
             },
         );
         let opt = run.opt_level.as_deref().unwrap_or("-");
+        let est = run
+            .optimistic_est_secs
+            .map(crate::theoretical::format_short)
+            .unwrap_or_else(|| "-".into());
         let floor = run
             .theoretical_floor_secs
             .map(crate::theoretical::format_short)
@@ -1236,7 +1242,7 @@ fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
                     },
                 ),
                 span(
-                    format!(" {floor:>6} {fresh:>5} {reuse:>5} {opt:>5}  "),
+                    format!(" {est:>6} {floor:>6} {fresh:>5} {reuse:>5} {opt:>5}  "),
                     LABEL,
                 ),
             ]);
@@ -1253,7 +1259,7 @@ fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
                 span(result, color),
                 span(
                     format!(
-                        " · {} · {floor} · {fresh} · {reuse} · {opt} · ",
+                        " · {} · {est} · {floor} · {fresh} · {reuse} · {opt} · ",
                         when(run.start)
                     ),
                     LABEL,
