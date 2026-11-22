@@ -424,7 +424,23 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
     if let Some(a) = &s.agent_session {
         let _ = writeln!(o, "agent    {a}");
     }
-    if let Some(f) = &s.theoretical_floor {
+    let computed_floor;
+    let floor = match &s.theoretical_floor {
+        Some(f) => f,
+        None => {
+            computed_floor = crate::theoretical::compute(
+                &s.subcommand,
+                &s.args,
+                &s.git,
+                &s.units,
+                &s.phases,
+                &s.tests,
+            );
+            &computed_floor
+        }
+    };
+    {
+        let f = floor;
         let ratio = if f.total_secs > 0.0 {
             format!(" ({:.1}x above theoretical optimal)", s.wall / f.total_secs)
         } else {

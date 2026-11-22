@@ -982,21 +982,30 @@ fn selected_lines(state: &State, rows: &[&RunRow], width: usize) -> Vec<Line<'st
         )];
     };
     let (result, color) = result_label(run);
-    let mut lines = vec![
-        fit(
-            vec![
-                strong(result, color),
-                span(
-                    format!("  {} wall", crate::status::dur(run.wall)),
-                    wall_color(run.wall),
-                ),
-                span(
-                    format!("  {}  {}", clean(&run.place), when(run.start)),
-                    LABEL,
-                ),
-            ],
-            width,
+    let mut header_spans = vec![
+        strong(result, color),
+        span(
+            format!("  {} wall", crate::status::dur(run.wall)),
+            wall_color(run.wall),
         ),
+    ];
+    if let Some(floor) = run.theoretical_floor_secs {
+        let ratio = if floor > 0.0 && run.exit.is_some() {
+            format!(" ({:.0}x)", run.wall / floor)
+        } else {
+            String::new()
+        };
+        header_spans.push(span(
+            format!("  floor {}{ratio}", crate::theoretical::format_short(floor)),
+            LABEL,
+        ));
+    }
+    header_spans.push(span(
+        format!("  {}  {}", clean(&run.place), when(run.start)),
+        LABEL,
+    ));
+    let mut lines = vec![
+        fit(header_spans, width),
         detail(
             "Command",
             vec![span(

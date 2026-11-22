@@ -70,6 +70,7 @@ pub(crate) type TimeCache = std::collections::HashMap<
         Option<String>,
         Ledger,
         Option<(u64, u64)>,
+        Option<f64>,
     ),
 >;
 
@@ -708,7 +709,7 @@ pub(crate) fn local_snapshot(
     match rows {
         Ok(mut rows) => {
             for row in &mut rows {
-                if let Some((time, compile, reuse, timeline, opt, toolchain, _, units)) =
+                if let Some((time, compile, reuse, timeline, opt, toolchain, _, units, floor)) =
                     cache.get(&row.id)
                 {
                     row.cargo_units = *units;
@@ -719,6 +720,9 @@ pub(crate) fn local_snapshot(
                     row.opt_level.clone_from(opt);
                     if row.toolchain_version.is_none() {
                         row.toolchain_version.clone_from(toolchain);
+                    }
+                    if row.theoretical_floor_secs.is_none() {
+                        row.theoretical_floor_secs = *floor;
                     }
                 }
             }
@@ -821,6 +825,28 @@ fn enrich_rows_at(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path, now: s
                             row.cargo_units = cargo_units(&timing.units);
                             row.time = measured_times(timing);
                         }
+                        if row.theoretical_floor_secs.is_none()
+                            && !summary.is_empty()
+                            && let Ok(full) =
+                                serde_json::from_slice::<crate::summary::Summary>(&summary)
+                        {
+                            row.theoretical_floor_secs = Some(
+                                full.theoretical_floor
+                                    .as_ref()
+                                    .map(|f| f.total_secs)
+                                    .unwrap_or_else(|| {
+                                        crate::theoretical::compute(
+                                            &full.subcommand,
+                                            &full.args,
+                                            &full.git,
+                                            &full.units,
+                                            &full.phases,
+                                            &full.tests,
+                                        )
+                                        .total_secs
+                                    }),
+                            );
+                        }
                         let (compile, reuse, timeline, opt) =
                             timeline_profiles(&summary, &units, row.place == "local", || {
                                 read_summary(&run.join("processes.json")).unwrap_or_default()
@@ -851,6 +877,7 @@ fn enrich_rows_at(rows: &mut [RunRow], cache: &mut TimeCache, dir: &Path, now: s
                 row.toolchain_version.clone(),
                 ledger,
                 row.cargo_units,
+                row.theoretical_floor_secs,
             ),
         );
     }
@@ -1129,6 +1156,7 @@ fn hosted_row(value: &Value) -> Option<RunRow> {
             .map(str::to_owned),
         theoretical_floor_secs: summary["theoretical_floor"]["total_secs"]
             .as_f64()
+            .or_else(|| summary["theoretical_floor_secs"].as_f64())
             .filter(|n| n.is_finite() && *n >= 0.0),
     })
 }
@@ -1815,11 +1843,22 @@ mod tests {
                     None,
                     Ledger::Complete,
                     Some((4, 2)),
+                    None,
                 ),
             ),
             (
                 "expired".into(),
-                (None, None, None, None, None, None, Ledger::Unknown, None),
+                (
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Ledger::Unknown,
+                    None,
+                    None,
+                ),
             ),
         ]);
         enrich_rows(
@@ -1841,6 +1880,7 @@ mod tests {
                 None,
                 Ledger::Complete,
                 Some((4, 2)),
+                None,
             )
         );
     }
@@ -1875,6 +1915,7 @@ mod tests {
                 None,
                 Some("old".into()),
                 cached_ledger(&rows[0]),
+                None,
                 None,
             ),
         )]);

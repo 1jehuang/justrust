@@ -711,8 +711,13 @@ pub(crate) fn run() -> Result<()> {
                     row.timeline.clone(),
                     row.opt_level.clone(),
                     row.toolchain_version.clone(),
-                    data::cached_ledger(row),
+                    if row.theoretical_floor_secs.is_none() {
+                        data::Ledger::Unknown
+                    } else {
+                        data::cached_ledger(row)
+                    },
                     row.cargo_units,
+                    row.theoretical_floor_secs,
                 ),
             )
         })
@@ -1408,6 +1413,7 @@ fn full_dashboard_cached_data_latency_probe() {
                         row.toolchain_version.clone(),
                         data::cached_ledger(row),
                         row.cargo_units,
+                        row.theoretical_floor_secs,
                     ),
                 )
             })

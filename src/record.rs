@@ -1793,6 +1793,18 @@ fn git_info() -> GitInfo {
     }
 }
 
+pub(crate) fn dirty_rs_lines_in(dir: &Path) -> Option<usize> {
+    let o = Command::new("git")
+        .current_dir(dir)
+        .args(["diff", "--numstat", "HEAD", "--", "*.rs"])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    o.status
+        .success()
+        .then(|| parse_numstat_lines(String::from_utf8_lossy(&o.stdout).trim().to_owned()))
+}
+
 fn parse_numstat_lines(out: String) -> usize {
     out.lines()
         .filter_map(|line| {
