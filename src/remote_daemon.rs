@@ -1274,17 +1274,24 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
     Ok(())
 }
 
+fn warm_admit_body_ok(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .is_some_and(|v| {
+            v["admission"] == "maintenance-v1"
+                && v["update"].is_null()
+                && crate::remote_hosted::Builds::from(&v["builds"]).is_some_and(|b| {
+                    b.can_build
+                        && (b.left() >= 2
+                            || b.overage_price_usd.is_some()
+                            || (b.trial_remaining.is_none() && b.included.is_none()))
+                })
+        })
+}
+
 fn record_warm_admit(d: &Daemon, key: &str, code: u16, body: &str) {
     let link_ptr = d.live_link_ptr.load(Ordering::SeqCst);
-    let ok = code == 200
-        && link_ptr != 0
-        && serde_json::from_str::<serde_json::Value>(body)
-            .ok()
-            .is_some_and(|v| {
-                v["admission"] == "maintenance-v1"
-                    && v["update"].is_null()
-                    && v["builds"]["remaining"].as_u64().unwrap_or(0) >= 2
-            });
+    let ok = code == 200 && link_ptr != 0 && warm_admit_body_ok(body);
     let mut slot = d.warm_admit.lock().unwrap();
     if ok {
         *slot = Some(WarmAdmit {
@@ -4286,5 +4293,21 @@ cmp "$base/expected-lib" "$live/src/lib.rs"
         assert!(!ready(&slot, 0, &k1), "disconnected link must not qualify");
         assert!(!ready(&slot, 99, &k1), "replaced link must not qualify");
         assert!(!ready(&slot, 42, &k2), "different API key must not qualify");
+
+        assert!(warm_admit_body_ok(
+            r#"{"admission":"maintenance-v1","update":null,"builds":{"can_build":true,"included":100,"included_used":10}}"#
+        ));
+        assert!(warm_admit_body_ok(
+            r#"{"admission":"maintenance-v1","update":null,"builds":{"can_build":true,"included":10,"included_used":10,"overage_price_usd":0.01}}"#
+        ));
+        assert!(!warm_admit_body_ok(
+            r#"{"admission":"maintenance-v1","update":null,"builds":{"can_build":true,"included":10,"included_used":9}}"#
+        ));
+        assert!(!warm_admit_body_ok(
+            r#"{"admission":"maintenance-v1","update":null,"builds":{"can_build":false,"included":100,"included_used":0}}"#
+        ));
+        assert!(!warm_admit_body_ok(
+            r#"{"admission":"maintenance-v1","update":{"id":"u1","state":"announced"},"builds":{"can_build":true,"included":100,"included_used":0}}"#
+        ));
     }
 }
