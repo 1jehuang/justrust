@@ -114,6 +114,7 @@ def ensure_source(name: str) -> Path:
     have = sp.run(['git', '-C', str(src), 'cat-file', '-t', pin], capture_output=True, text=True)
     if have.stdout.strip() != 'commit':
         sp.run(['git', '-C', str(src), 'fetch', '-q', '--depth', '1', url, pin], check=True)
+    sp.run(['git', '-C', str(src), 'update-ref', f'refs/heads/pin-{pin[:12]}', pin], check=True)
     return src
 
 
@@ -293,7 +294,7 @@ def run_worktree(stacks: list[str], rounds: int) -> list[dict]:
     for _, repo, sub, args, _ in cases:
         if repo not in bases:
             base = ROOT / 'wt-base' / repo
-            if not base.exists():
+            if not (base / 'Cargo.toml').exists():
                 make_git_clone(repo, base)
             bases[repo] = base
             if 'remote' in stacks:
@@ -341,7 +342,7 @@ def run_swarm4(stacks: list[str], rounds: int) -> list[dict]:
     for st in stacks:
         for aname, repo, sub, args, _ in agents:
             co = ROOT / 'swarm4' / f'{st}-{aname}'
-            if not co.exists():
+            if not (co / 'Cargo.toml').exists():
                 make_git_clone(repo, co)
             checkouts[(st, aname)] = co
             print(f'  [swarm-4] warming {st:6s} {aname} ...', flush=True)
@@ -402,7 +403,7 @@ def run_warm(category: str, cases: list[tuple], stacks: list[str], rounds: int) 
         checkouts: dict[str, Path] = {}
         for st in stacks:
             co = ROOT / category / f'{st}-{name}'
-            if not co.exists():
+            if not (co / 'Cargo.toml').exists():
                 make_git_clone(repo, co)
             checkouts[st] = co
             print(f'  [{category}] warming {st:6s} {name} ...', flush=True)
