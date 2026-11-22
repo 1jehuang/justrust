@@ -1032,6 +1032,52 @@ fn push_loop(d: &Daemon, rx: Receiver<PathBuf>) {
             (roots, d.sync.foreground_epoch(), st.link.clone().unwrap())
         };
         'roots: for r in roots {
+            // Fast path: if the root already has a clean generation and the
+            // watcher has exact dirty paths, push incrementally without a full scan.
+            let can_incremental = {
+                let Ok(st) = d.sync.background_lock() else {
+                    return;
+                };
+                !d.draining.load(Ordering::SeqCst)
+                    && st.link.as_ref().is_some_and(|link| {
+                        link.alive()
+                            && st.roots.get(&r).is_some_and(|root| {
+                                !root.pending_repair
+                                    && !root.needs_full_sync
+                                    && root.clean_event_gen.is_some_and(|(lp, event_gen)| {
+                                        lp == Arc::as_ptr(link) as usize
+                                            && d.watcher.dirty_since(&r, event_gen).is_some()
+                                    })
+                            })
+                    })
+            };
+            if can_incremental {
+                let Ok(mut st) = d.sync.background_lock() else {
+                    return;
+                };
+                if d.draining.load(Ordering::SeqCst) || !st.link.as_ref().is_some_and(|l| l.alive())
+                {
+                    break 'roots;
+                }
+                if !st.roots.get(&r).is_some_and(|root| !root.needs_full_sync) {
+                    continue 'roots;
+                }
+                if !r.is_dir() {
+                    st.receipt = None;
+                    st.roots.remove(&r);
+                    log(&format!("forgot {} (deleted)", r.display()));
+                    continue 'roots;
+                }
+                if let Err(e) = push_root(d, &mut st, &r) {
+                    log(&format!("push {}: {e:#}", r.display()));
+                    st.source_sync_failed(&r);
+                    if st.link.as_ref().is_some_and(|l| !l.alive()) {
+                        drop_link(d, &mut st);
+                        break 'roots;
+                    }
+                }
+                continue 'roots;
+            }
             // One unlocked retry avoids holding up the next build on the first
             // conflict. A second conflict takes the existing locked fallback:
             // repeated foreground changes cannot restart this root forever.
@@ -1280,13 +1326,15 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
                         match result {
                             Ok(n) => {
                                 files += n;
-                                if d.watcher.is_quiet_since(event_gen) {
+                                if let Some(clean_gen) =
+                                    root_quiet_since(&d.watcher, root, event_gen)
+                                {
                                     d.pre_synced.lock().unwrap().insert(
                                         root.clone(),
                                         PreSyncStamp {
                                             link_ptr: Arc::as_ptr(&link) as usize,
                                             at: Instant::now(),
-                                            event_gen,
+                                            event_gen: clean_gen,
                                             files: n,
                                         },
                                     );
@@ -2512,17 +2560,183 @@ fn snapshot_hashes(
     })
 }
 
+fn root_quiet_since(watcher: &Watcher, root: &Path, event_gen: u64) -> Option<u64> {
+    if watcher.is_quiet_since(event_gen) {
+        return Some(event_gen);
+    }
+    let (new_gen, dirty) = watcher.dirty_since(root, event_gen)?;
+    dirty.is_empty().then_some(new_gen)
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct DirtyPlan {
+    changed: Vec<(PathBuf, remote_sync::Stamp)>,
+    deleted: Vec<PathBuf>,
+}
+
+/// Validate and classify exact watcher-reported paths against `root`'s manifest.
+/// Returns `None` whenever a full `remote_sync::scan` is required (new persistent
+/// files whose gitignore status must be evaluated, `.gitignore`/`.ignore` edits,
+/// symlinks/directories, oversized files, or more than `RSYNC_ABOVE` paths).
+fn plan_dirty_paths(root: &Path, tracked: &Root, dirty_paths: &[PathBuf]) -> Option<DirtyPlan> {
+    if dirty_paths.len() > remote_sync::RSYNC_ABOVE {
+        return None;
+    }
+    let mut plan = DirtyPlan::default();
+    for full in dirty_paths {
+        let rel = full.strip_prefix(root).ok()?;
+        if rel.as_os_str().is_empty() {
+            return None;
+        }
+        if rel.file_name().is_some_and(|n| {
+            n == ".gitignore" || n == ".ignore" || n == ".gitattributes" || n == ".gitmodules"
+        }) {
+            return None;
+        }
+        if tracked.oversized.iter().any(|p| p == rel) {
+            return None;
+        }
+        match std::fs::symlink_metadata(full) {
+            Ok(md) => {
+                if !md.file_type().is_file() || md.len() > MAX_FILE {
+                    return None;
+                }
+                let &old = tracked.manifest.get(rel)?;
+                let (s, ns) = crate::sys::mtime(&md);
+                let mode = crate::sys::mode(&md, full) & 0o777;
+                let stamp = remote_sync::Stamp {
+                    mtime_ns: s as i128 * 1_000_000_000 + ns as i128,
+                    size: md.len(),
+                    mode,
+                };
+                if stamp != old {
+                    plan.changed.push((rel.to_path_buf(), stamp));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if tracked.manifest.contains_key(rel) {
+                    plan.deleted.push(rel.to_path_buf());
+                }
+            }
+            Err(_) => return None,
+        }
+    }
+    Some(plan)
+}
+
+fn push_dirty_paths(
+    d: &Daemon,
+    st: &mut Sync,
+    link: &Arc<Link>,
+    root: &Path,
+    dirty_paths: &[PathBuf],
+    new_gen: u64,
+) -> Result<Option<usize>> {
+    let plan = {
+        let r = st.roots.get(root).context("unknown root")?;
+        let Some(plan) = plan_dirty_paths(root, r, dirty_paths) else {
+            return Ok(None);
+        };
+        plan
+    };
+    let link_ptr = Arc::as_ptr(link) as usize;
+    if plan.changed.is_empty() && plan.deleted.is_empty() {
+        if let Some(r) = st.roots.get_mut(root) {
+            r.clean_event_gen = Some((link_ptr, new_gen));
+        }
+        return Ok(Some(0));
+    }
+    st.receipt = None;
+    if link.checkpoint
+        && let Some(r) = st.roots.get_mut(root)
+    {
+        r.mark
+            .dirty
+            .extend(plan.changed.iter().map(|(rel, _)| rel.clone()));
+        r.mark.dirty.extend(plan.deleted.iter().cloned());
+    }
+    let mut pending_repair = false;
+    for (rel, stamp) in &plan.changed {
+        let p = root.join(rel);
+        match read_settled(&p, Some(*stamp)) {
+            Some(data) if data.len() as u64 <= MAX_FILE => {
+                link.send(
+                    &Msg::Write {
+                        path: p.display().to_string(),
+                        mode: stamp.mode,
+                    },
+                    &data,
+                )?;
+                let r = st.roots.get_mut(root).unwrap();
+                r.manifest.insert(rel.clone(), *stamp);
+                if link.checkpoint {
+                    r.mark
+                        .hashes
+                        .insert(rel.clone(), remote_checkpoint::digest(&data));
+                }
+            }
+            _ => {
+                pending_repair = true;
+                st.roots
+                    .get_mut(root)
+                    .unwrap()
+                    .manifest
+                    .insert(rel.clone(), UNKNOWN);
+            }
+        }
+    }
+    for rel in &plan.deleted {
+        let r = st.roots.get_mut(root).unwrap();
+        r.manifest.remove(rel);
+        r.mark.hashes.remove(rel);
+        link.send(
+            &Msg::Delete {
+                path: root.join(rel).display().to_string(),
+            },
+            &[],
+        )?;
+    }
+    if let Some(r) = st.roots.get_mut(root) {
+        r.pending_repair = pending_repair;
+    }
+    checkpoint(st, link, root, false)?;
+    if let Some(r) = st.roots.get_mut(root) {
+        r.clean_event_gen = if !pending_repair {
+            Some((link_ptr, new_gen))
+        } else {
+            None
+        };
+    }
+    let n = plan.changed.len() + plan.deleted.len();
+    update_root_info(d, st);
+    d.set_info(|i| i.pushed += n as u64);
+    Ok(Some(n))
+}
+
 /// Push every difference between `root` and its manifest. Returns files sent.
 fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
-    if let Some(link) = st.link.as_ref()
-        && let Some(r) = st.roots.get(root)
-        && !r.pending_repair
-        && !r.needs_full_sync
-        && let Some((link_ptr, event_gen)) = r.clean_event_gen
-        && link_ptr == Arc::as_ptr(link) as usize
-        && d.watcher.is_quiet_since(event_gen)
+    if let Some(link) = st.link.clone()
+        && let Some((link_ptr, event_gen)) = st
+            .roots
+            .get(root)
+            .filter(|r| !r.pending_repair && !r.needs_full_sync)
+            .and_then(|r| r.clean_event_gen)
+        && link_ptr == Arc::as_ptr(&link) as usize
     {
-        return Ok(0);
+        if d.watcher.is_quiet_since(event_gen) {
+            return Ok(0);
+        }
+        if let Some((new_gen, dirty_paths)) = d.watcher.dirty_since(root, event_gen) {
+            if dirty_paths.is_empty() {
+                if let Some(r) = st.roots.get_mut(root) {
+                    r.clean_event_gen = Some((link_ptr, new_gen));
+                }
+                return Ok(0);
+            }
+            if let Some(n) = push_dirty_paths(d, st, &link, root, &dirty_paths, new_gen)? {
+                return Ok(n);
+            }
+        }
     }
     let event_gen = d.watcher.event_count();
     let total = Instant::now();
@@ -2672,12 +2886,12 @@ fn push_scanned(
     // `Synced` after a bulk rsync dropped the agent's checkpoint.
     checkpoint(st, &link, root, bulk)?;
     if let Some(r) = st.roots.get_mut(root) {
-        r.clean_event_gen =
-            if !pending_repair && added_watches == 0 && d.watcher.is_quiet_since(event_gen) {
-                Some((Arc::as_ptr(&link) as usize, event_gen))
-            } else {
-                None
-            };
+        r.clean_event_gen = if !pending_repair && added_watches == 0 {
+            root_quiet_since(&d.watcher, root, event_gen)
+                .map(|clean_gen| (Arc::as_ptr(&link) as usize, clean_gen))
+        } else {
+            None
+        };
     }
     update_root_info(d, st);
     d.set_info(|i| i.pushed += n as u64);
@@ -2984,7 +3198,7 @@ fn run(
                 } else if let Some(s) = pre
                     && s.link_ptr == Arc::as_ptr(&link) as usize
                     && s.at.elapsed() < Duration::from_secs(5)
-                    && d.watcher.is_quiet_since(s.event_gen)
+                    && root_quiet_since(&d.watcher, root, s.event_gen).is_some()
                 {
                     Ok(s.files)
                 } else {
@@ -4882,5 +5096,58 @@ cmp "$base/expected-lib" "$live/src/lib.rs"
         assert!(!lease_eligible_body(
             r#"{"admission":"maintenance-v1","update":{"id":"u1","state":"announced"},"builds":{"can_build":true,"included":100,"included_used":0}}"#
         ));
+    }
+
+    #[test]
+    fn plan_dirty_paths_handles_edits_deletes_tempfiles_and_fallbacks() {
+        let root = std::env::temp_dir().join(format!("jr-dirty-plan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let lib = root.join("src/lib.rs");
+        let gone = root.join("src/gone.rs");
+        std::fs::write(&lib, "fn a() {}\n").unwrap();
+        std::fs::write(&gone, "fn b() {}\n").unwrap();
+
+        let scan = remote_sync::scan(&root).unwrap();
+        let tracked = Root {
+            pending_repair: false,
+            manifest: scan.files,
+            watch_dirs: None,
+            oversized: Vec::new(),
+            needs_full_sync: false,
+            mark: Default::default(),
+            clean_event_gen: None,
+        };
+
+        // Unchanged tracked file + vanished editor temp file -> empty plan (no scan).
+        let plan = plan_dirty_paths(&root, &tracked, &[lib.clone(), root.join("src/lib.rs.tmp")])
+            .expect("unchanged file and vanished temp file stay incremental");
+        assert!(plan.changed.is_empty());
+        assert!(plan.deleted.is_empty());
+
+        // Edited tracked file + deleted tracked file -> exact incremental plan.
+        std::fs::write(&lib, "fn a() { let _ = 1; }\n").unwrap();
+        std::fs::remove_file(&gone).unwrap();
+        let plan = plan_dirty_paths(
+            &root,
+            &tracked,
+            &[lib.clone(), gone.clone(), root.join("src/lib.rs.tmp")],
+        )
+        .expect("edit + delete of tracked files stay incremental");
+        assert_eq!(plan.changed.len(), 1);
+        assert_eq!(plan.changed[0].0, PathBuf::from("src/lib.rs"));
+        assert_eq!(plan.deleted, vec![PathBuf::from("src/gone.rs")]);
+
+        // Brand-new persistent file falls back to full scan so gitignore rules run.
+        let added = root.join("src/new.rs");
+        std::fs::write(&added, "pub fn c() {}\n").unwrap();
+        assert!(plan_dirty_paths(&root, &tracked, &[added]).is_none());
+
+        // Ignore-rule file edit falls back to full scan.
+        let gi = root.join(".gitignore");
+        std::fs::write(&gi, "target/\n").unwrap();
+        assert!(plan_dirty_paths(&root, &tracked, &[gi]).is_none());
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

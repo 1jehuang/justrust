@@ -275,10 +275,132 @@ fn shared_target_dir(args: &[OsString]) -> Option<PathBuf> {
     shared_target_from_metadata(&metadata)
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct CargoDirectories {
     target_directory: Option<PathBuf>,
     build_directory: Option<PathBuf>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DirMetaCacheEntry {
+    version: u32,
+    cwd: PathBuf,
+    env: Vec<(String, String)>,
+    files: Vec<(PathBuf, Option<(i128, u64)>)>,
+    directories: CargoDirectories,
+}
+
+const DIR_META_CACHE_VERSION: u32 = 1;
+
+fn dir_meta_env() -> Vec<(String, String)> {
+    let mut vars: Vec<(String, String)> = std::env::vars()
+        .filter(|(k, _)| {
+            k == "CARGO_TARGET_DIR"
+                || k == "CARGO_HOME"
+                || k == "HOME"
+                || k.starts_with("CARGO_BUILD_")
+        })
+        .collect();
+    vars.sort();
+    vars
+}
+
+fn file_stamp(path: &Path) -> Option<(i128, u64)> {
+    let md = std::fs::metadata(path).ok()?;
+    let (s, ns) = crate::sys::mtime(&md);
+    Some((s as i128 * 1_000_000_000 + ns as i128, md.len()))
+}
+
+fn dir_meta_watched_files(
+    canonical_cwd: &Path,
+    extra_manifest: Option<&Path>,
+) -> Vec<(PathBuf, Option<(i128, u64)>)> {
+    let mut paths = Vec::new();
+    for dir in canonical_cwd.ancestors() {
+        paths.push(dir.join("Cargo.toml"));
+        paths.push(dir.join(".cargo/config.toml"));
+        paths.push(dir.join(".cargo/config"));
+    }
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cargo")));
+    if let Some(ch) = cargo_home {
+        paths.push(ch.join("config.toml"));
+        paths.push(ch.join("config"));
+    }
+    if let Some(m) = extra_manifest
+        && !paths.iter().any(|p| p == m)
+    {
+        paths.push(m.to_path_buf());
+    }
+    paths
+        .into_iter()
+        .map(|p| {
+            let stamp = file_stamp(&p);
+            (p, stamp)
+        })
+        .collect()
+}
+
+fn dir_meta_cache_path(canonical_cwd: &Path) -> Option<PathBuf> {
+    let home = paths::home().ok()?;
+    let key = crate::remote_checkpoint::digest(canonical_cwd.as_os_str().as_encoded_bytes());
+    Some(home.join("dir-meta-cache").join(format!("{key}.json")))
+}
+
+fn load_cached_directories(canonical_cwd: &Path) -> Option<CargoDirectories> {
+    let path = dir_meta_cache_path(canonical_cwd)?;
+    let bytes = std::fs::read(&path).ok()?;
+    let entry: DirMetaCacheEntry = serde_json::from_slice(&bytes).ok()?;
+    if entry.version != DIR_META_CACHE_VERSION || entry.cwd != canonical_cwd {
+        return None;
+    }
+    if entry.env != dir_meta_env() {
+        return None;
+    }
+    for (file, expected) in &entry.files {
+        if file_stamp(file) != *expected {
+            return None;
+        }
+    }
+    Some(entry.directories)
+}
+
+fn save_cached_directories(canonical_cwd: &Path, directories: &CargoDirectories) {
+    let Some(path) = dir_meta_cache_path(canonical_cwd) else {
+        return;
+    };
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let extra_manifest = directories
+        .target_directory
+        .as_deref()
+        .and_then(|t| t.parent())
+        .map(|p| p.join("Cargo.toml"));
+    let entry = DirMetaCacheEntry {
+        version: DIR_META_CACHE_VERSION,
+        cwd: canonical_cwd.to_path_buf(),
+        env: dir_meta_env(),
+        files: dir_meta_watched_files(canonical_cwd, extra_manifest.as_deref()),
+        directories: directories.clone(),
+    };
+    let Ok(bytes) = serde_json::to_vec(&entry) else {
+        return;
+    };
+    let tmp = parent.join(format!(
+        ".tmp-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    if std::fs::write(&tmp, &bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+    let _ = std::fs::remove_file(&tmp);
 }
 
 fn shared_target_from_metadata(metadata: &CargoDirectories) -> Option<PathBuf> {
@@ -306,6 +428,40 @@ pub fn target_dir_in_result(cwd: &Path, args: &[OsString]) -> anyhow::Result<Pat
 }
 
 fn directory_metadata(cwd: &Path, args: &[OsString]) -> anyhow::Result<CargoDirectories> {
+    let (metadata_args, explicit_target) = target_metadata_options(args)?;
+    let cacheable_cwd = if metadata_args.is_empty() {
+        std::fs::canonicalize(cwd).ok()
+    } else {
+        None
+    };
+    let mut v = if let Some(ref canonical) = cacheable_cwd
+        && let Some(cached) = load_cached_directories(canonical)
+    {
+        cached
+    } else {
+        let fetched = run_cargo_directory_metadata(cwd, &metadata_args)?;
+        if let Some(ref canonical) = cacheable_cwd {
+            save_cached_directories(canonical, &fetched);
+        }
+        fetched
+    };
+    // `metadata` has no --target-dir option. The build's explicit selector
+    // takes precedence over environment and config, relative to its cwd.
+    if let Some(target) = explicit_target {
+        let target = if target.is_absolute() {
+            target
+        } else {
+            cwd.join(target)
+        };
+        v.target_directory = Some(target);
+    }
+    Ok(v)
+}
+
+fn run_cargo_directory_metadata(
+    cwd: &Path,
+    metadata_args: &[OsString],
+) -> anyhow::Result<CargoDirectories> {
     use anyhow::{Context, bail};
     // Artifact commands run outside the recorded-build environment. Managed-only
     // hosted machines intentionally have no system Cargo on PATH, so honor the
@@ -329,7 +485,6 @@ fn directory_metadata(cwd: &Path, args: &[OsString]) -> anyhow::Result<CargoDire
         "1",
         "--offline",
     ]);
-    let (metadata_args, explicit_target) = target_metadata_options(args)?;
     cmd.args(metadata_args);
     let out = cmd
         .stderr(Stdio::piped())
@@ -343,19 +498,7 @@ fn directory_metadata(cwd: &Path, args: &[OsString]) -> anyhow::Result<CargoDire
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    let mut v: CargoDirectories =
-        serde_json::from_slice(&out.stdout).context("decoding Cargo metadata target directory")?;
-    // `metadata` has no --target-dir option. The build's explicit selector
-    // takes precedence over environment and config, relative to its cwd.
-    if let Some(target) = explicit_target {
-        let target = if target.is_absolute() {
-            target
-        } else {
-            cwd.join(target)
-        };
-        v.target_directory = Some(target);
-    }
-    Ok(v)
+    serde_json::from_slice(&out.stdout).context("decoding Cargo metadata target directory")
 }
 
 fn target_metadata_options(args: &[OsString]) -> anyhow::Result<(Vec<OsString>, Option<PathBuf>)> {
@@ -2802,6 +2945,52 @@ mod tests {
             "known non-reflink fs must not invoke reflink probe"
         );
         assert!(slot.is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn directory_metadata_cache_hits_and_invalidates_on_config_or_manifest_change() {
+        let dir = std::env::temp_dir().join(format!("jr-slot-dircache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"dircache\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "").unwrap();
+
+        let canonical = std::fs::canonicalize(&dir).unwrap();
+        let expected = CargoDirectories {
+            target_directory: Some(canonical.join("target")),
+            build_directory: None,
+        };
+        save_cached_directories(&canonical, &expected);
+        assert_eq!(load_cached_directories(&canonical), Some(expected.clone()));
+
+        // Creating a new .cargo/config.toml invalidates the cached entry immediately.
+        std::fs::create_dir_all(dir.join(".cargo")).unwrap();
+        std::fs::write(
+            dir.join(".cargo/config.toml"),
+            "[build]\ntarget-dir = \"custom-target\"\n",
+        )
+        .unwrap();
+        assert_eq!(load_cached_directories(&canonical), None);
+
+        // Re-saving with the config present hits again, then editing Cargo.toml invalidates.
+        let updated = CargoDirectories {
+            target_directory: Some(canonical.join("custom-target")),
+            build_directory: None,
+        };
+        save_cached_directories(&canonical, &updated);
+        assert_eq!(load_cached_directories(&canonical), Some(updated));
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"dircache\"\nversion = \"0.1.1\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        assert_eq!(load_cached_directories(&canonical), None);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
