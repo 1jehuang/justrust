@@ -1003,6 +1003,19 @@ pub(crate) fn hosted_hybrid_env(
     Ok(mapped)
 }
 
+fn prebuilt_proxy_url() -> Option<&'static str> {
+    static URL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    URL.get_or_init(|| {
+        let upstream = crate::depcache_prebuilt::base()?;
+        if !upstream.starts_with("https://") && !upstream.starts_with("http://") {
+            return None;
+        }
+        let cache_dir = crate::paths::cache_root()?.join("prebuilt-mirror");
+        crate::prebuilt_proxy::start(upstream, cache_dir)
+    })
+    .as_deref()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn start_run(
     executable: &Path,
@@ -1096,6 +1109,20 @@ fn start_run(
     // all (FINDINGS 65). A client-sent value wins.
     if !env.iter().any(|(k, _)| k == "JUSTRUST_PREBUILT_ALWAYS") {
         c.env("JUSTRUST_PREBUILT_ALWAYS", "1");
+    }
+    // Serve the public prebuilt store through the agent's local read-only
+    // loopback proxy (pooled upstream TLS + local NVMe cache) when the caller
+    // has not overridden JUSTRUST_PREBUILT.
+    if !env.iter().any(|(k, _)| k == "JUSTRUST_PREBUILT")
+        && let Some(proxy_url) = prebuilt_proxy_url()
+    {
+        c.env("JUSTRUST_PREBUILT", proxy_url);
+    }
+    // Enable workspace-portable localcache on hosted builds so unchanged
+    // workspace crates reuse across git worktrees and fresh checkouts of the
+    // same account without recompiling from scratch.
+    if !env.iter().any(|(k, _)| k == "JUSTRUST_LOCALCACHE_PORTABLE") {
+        c.env("JUSTRUST_LOCALCACHE_PORTABLE", "1");
     }
     // cargo and rustup live in ~/.cargo/bin, and Homebrew tools (zstd, git)
     // live in /opt/homebrew/bin or /usr/local/bin on macOS, which a non-login

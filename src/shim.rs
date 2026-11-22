@@ -618,6 +618,8 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     cmd.args(args).stderr(Stdio::piped());
     if let Some(plan) = &plan {
         cmd.args(&plan.extra_args);
+    } else if let Some(lp) = &local_plan {
+        cmd.args(&lp.extra_args);
     }
     if passes_on {
         cmd.arg("-Ztime-passes").arg("-Ztime-passes-format=json");

@@ -152,6 +152,11 @@ fn get_once(base: &str, rel: &str, dst: &Path, max_time: u32, max_bytes: u64) ->
             Err(_) => Got::Missing,
         };
     }
+    if let Some(addr) = base.strip_prefix("http://127.0.0.1:")
+        && !addr.contains('/')
+    {
+        return get_loopback(&format!("127.0.0.1:{addr}"), rel, dst, max_time, max_bytes);
+    }
     let out = Command::new("curl")
         .args([
             "-sS",
@@ -187,6 +192,75 @@ fn get_once(base: &str, rel: &str, dst: &Path, max_time: u32, max_bytes: u64) ->
             let _ = std::fs::remove_file(dst);
             Got::Failed(format!("HTTP {c}"))
         }
+    }
+}
+
+/// Direct HTTP/1.1 GET against the local loopback prebuilt proxy, avoiding
+/// per-request `curl` fork+exec overhead (~0.2ms vs ~15ms).
+fn get_loopback(addr: &str, rel: &str, dst: &Path, max_time: u32, max_bytes: u64) -> Got {
+    use std::io::{BufRead, BufReader, Read};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+
+    let Ok(sock_addr) = addr.parse::<SocketAddr>() else {
+        return Got::Failed("invalid loopback addr".into());
+    };
+    let timeout = Duration::from_secs(u64::from(max_time.max(1)));
+    let Ok(mut stream) = TcpStream::connect_timeout(&sock_addr, Duration::from_secs(5)) else {
+        return Got::Failed("connect failed".into());
+    };
+    let _ = stream.set_nodelay(true);
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+    let req = format!("GET /v1/{rel} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(req.as_bytes()).is_err() || stream.flush().is_err() {
+        return Got::Failed("write failed".into());
+    }
+    let mut reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    if reader.read_line(&mut status_line).unwrap_or(0) == 0 {
+        return Got::Failed("empty response".into());
+    }
+    let code: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let mut content_len: Option<u64> = None;
+    loop {
+        let mut hdr = String::new();
+        if reader.read_line(&mut hdr).unwrap_or(0) == 0 || hdr == "\r\n" || hdr == "\n" {
+            break;
+        }
+        if let Some((k, v)) = hdr.split_once(':')
+            && k.trim().eq_ignore_ascii_case("content-length")
+        {
+            content_len = v.trim().parse().ok();
+        }
+    }
+    match code {
+        200 => {
+            if content_len.is_some_and(|n| n > max_bytes) {
+                return Got::Failed("too large".into());
+            }
+            let Ok(mut f) = std::fs::File::create(dst) else {
+                return Got::Failed("create dst failed".into());
+            };
+            let mut limited = reader.take(max_bytes + 1);
+            match std::io::copy(&mut limited, &mut f) {
+                Ok(n) if n <= max_bytes && content_len.is_none_or(|want| n == want) => Got::Ok,
+                Ok(_) => {
+                    let _ = std::fs::remove_file(dst);
+                    Got::Failed("truncated or too large".into())
+                }
+                Err(_) => {
+                    let _ = std::fs::remove_file(dst);
+                    Got::Failed("read body failed".into())
+                }
+            }
+        }
+        404 | 403 => Got::Missing,
+        c => Got::Failed(format!("HTTP {c}")),
     }
 }
 

@@ -77,6 +77,8 @@ const TARGET_TOKEN: &str = "@@JUSTRUST_TARGET_DIR@@";
 /// The cargo home (registry sources, git checkouts), so keys and manifest
 /// lines are the same on every machine and can be shared remotely.
 const CARGO_HOME_TOKEN: &str = "@@JUSTRUST_CARGO_HOME@@";
+const WORKSPACE_TOKEN: &str = "@@JUSTRUST_WORKSPACE_DIR@@";
+const REMAPPED_WORKSPACE: &str = "/jr-ws";
 const XATTR: &str = "user.justrust.h";
 /// Memoized `extern_hash`, same `<stamp>|<hash>` format. Version 3 also
 /// invalidates metadata-only archive keys: bundled native objects participate
@@ -144,6 +146,7 @@ pub struct Norm {
     pub(crate) profile: String,
     pub(crate) target: String,
     pub(crate) cargo: Option<String>,
+    pub(crate) workspace: Option<String>,
     /// Resolved paths of a symlinked `registry` or `git` dir in the cargo
     /// home, with their placeholder. rustc runs in the resolved source
     /// dir, so paths reach the key through both spellings.
@@ -180,10 +183,11 @@ impl Norm {
             profile,
             target,
             cargo,
+            workspace: None,
             aliases,
         })
     }
-    pub fn norm(&self, s: &str) -> String {
+    pub fn norm_without_workspace(&self, s: &str) -> String {
         let mut s = if s.contains(&self.target) {
             s.replace(&self.profile, PROFILE_TOKEN)
                 .replace(&self.target, TARGET_TOKEN)
@@ -203,14 +207,26 @@ impl Norm {
         }
         s
     }
+    pub fn norm(&self, s: &str) -> String {
+        let mut s = self.norm_without_workspace(s);
+        if let Some(ws) = &self.workspace
+            && s.contains(ws.as_str())
+        {
+            s = s.replace(ws.as_str(), WORKSPACE_TOKEN);
+        }
+        s
+    }
     pub fn denorm(&self, s: &str) -> String {
-        let s = s
+        let mut s = s
             .replace(PROFILE_TOKEN, &self.profile)
             .replace(TARGET_TOKEN, &self.target);
-        match &self.cargo {
-            Some(c) => s.replace(CARGO_HOME_TOKEN, c),
-            None => s,
+        if let Some(c) = &self.cargo {
+            s = s.replace(CARGO_HOME_TOKEN, c);
         }
+        if let Some(ws) = &self.workspace {
+            s = s.replace(WORKSPACE_TOKEN, ws);
+        }
+        s
     }
 }
 
@@ -683,6 +699,9 @@ pub(crate) struct LocalKey {
     pub(crate) salt: Vec<String>,
     /// rustc's working dir, when not this process's (tests).
     pub(crate) cwd: Option<PathBuf>,
+    /// Normalize workspace root out of keys and remap paths so unchanged
+    /// workspace crates reuse across git worktrees and fresh checkouts.
+    pub(crate) portable: bool,
 }
 
 pub(crate) fn plan_with(
@@ -701,7 +720,13 @@ pub(crate) fn plan_with(
         None => std::env::current_dir().ok()?,
     };
     let out_dir = cwd.join(&s.out_dir);
-    let norm = Norm::new(&profile_dir(&out_dir)?)?;
+    let mut norm = Norm::new(&profile_dir(&out_dir)?)?;
+    if local.as_ref().is_some_and(|l| l.portable) {
+        norm.workspace = cwd
+            .to_str()
+            .map(|c| c.trim_end_matches('/').to_owned())
+            .filter(|c| c.len() >= 2);
+    }
     let root = match &local {
         Some(l) => l.root.clone(),
         None => cache_dir()?,
@@ -716,11 +741,15 @@ pub(crate) fn plan_with(
         // Older local entries could pair generated inputs changed during
         // rustc with stale outputs. Do not restore their admission namespace.
         h.field(b"local-generated-input-admission-v2");
+        if l.portable {
+            h.field(b"local-portable-v1");
+        }
         for v in &l.salt {
             h.field(norm.norm(v).as_bytes());
         }
     }
-    let mut extra_args = match local {
+    let mut extra_args = match &local {
+        Some(l) if l.portable => remap_local_args(&args, &norm),
         Some(_) => Vec::new(),
         None => remap_args(&args, &norm),
     };
@@ -822,6 +851,24 @@ fn remap_args(args: &[String], norm: &Norm) -> Vec<String> {
         }
     }
     // Last: rustc lets the last matching remapping win.
+    v.push(format!(
+        "--remap-path-prefix={}={REMAPPED_TARGET}",
+        norm.target
+    ));
+    v
+}
+
+/// Extra rustc arguments for a workspace-portable local unit: remap the
+/// workspace root and target dir to fixed paths so unchanged workspace crates
+/// hit `localcache` across git worktrees and checkouts.
+fn remap_local_args(args: &[String], norm: &Norm) -> Vec<String> {
+    if args.iter().any(|a| a.starts_with("--remap-path-prefix")) {
+        return Vec::new();
+    }
+    let mut v = Vec::new();
+    if let Some(ws) = &norm.workspace {
+        v.push(format!("--remap-path-prefix={ws}={REMAPPED_WORKSPACE}"));
+    }
     v.push(format!(
         "--remap-path-prefix={}={REMAPPED_TARGET}",
         norm.target
@@ -1551,10 +1598,13 @@ impl Plan {
     }
 
     pub(crate) fn matches(&self, e: &Entry, memo: &mut HashMap<String, Option<String>>) -> bool {
-        let env_ok = e
-            .env
-            .iter()
-            .all(|(k, v)| std::env::var(k).ok().map(|x| self.norm.norm(&x)).as_ref() == v.as_ref());
+        let env_ok = e.env.iter().all(|(k, v)| {
+            std::env::var(k)
+                .ok()
+                .map(|x| self.norm.norm_without_workspace(&x))
+                .as_ref()
+                == v.as_ref()
+        });
         env_ok
             && e.inputs.iter().all(|(p, hash)| {
                 let path = self.norm.denorm(p);
@@ -2542,6 +2592,7 @@ mod tests {
             root: dir.join("localcache"),
             salt: Vec::new(),
             cwd: None,
+            portable: false,
         });
         let plan = plan_with(Path::new("rustc"), &args, &[], key);
         assert_eq!(
@@ -2703,6 +2754,7 @@ mod tests {
                         root: dir.join("localcache"),
                         salt: Vec::new(),
                         cwd: None,
+                        portable: false,
                     })
                 };
                 assert!(

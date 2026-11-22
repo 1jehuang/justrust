@@ -940,10 +940,18 @@ impl Mirror {
             shell_quote(&self.remote(from)),
             shell_quote(&self.remote(root)),
         );
-        // Only into a mirror holding nothing but build output.
+        // Only into a mirror holding nothing but build output. After seeding
+        // sources, best-effort copy rustc's content-hashed incremental dirs
+        // (`target/*/incremental`) so the first edit in a new worktree reuses
+        // incremental query state instead of compiling the edited crate cold.
         let script = format!(
             "test -d {src} && test -d {dst} && test -z \"$(ls -A {dst} | grep -vx -e target -e .justrust)\" \
-             && rsync -a --exclude=target/ --exclude=.justrust/ {src}/ {dst}/"
+             && rsync -a --exclude=target/ --exclude=.justrust/ {src}/ {dst}/ \
+             && {{ for inc in {src}/target/*/incremental; do \
+                    [ -d \"$inc\" ] || continue; \
+                    prof=$(basename \"$(dirname \"$inc\")\"); \
+                    mkdir -p {dst}/target/\"$prof\" && cp -a --reflink=auto \"$inc\" {dst}/target/\"$prof\"/ 2>/dev/null || true; \
+                  done; true; }}"
         );
         let mut c = match &self.target {
             Some(t) => {

@@ -79,6 +79,13 @@ pub fn cache_dir() -> Option<PathBuf> {
     paths::cache_root().map(|c| c.join("localcache"))
 }
 
+pub fn portable_enabled() -> bool {
+    matches!(
+        std::env::var("JUSTRUST_LOCALCACHE_PORTABLE").as_deref(),
+        Ok("1" | "on" | "true" | "yes")
+    )
+}
+
 /// Key a local unit. `salt`: arguments the shim adds to the compile
 /// (linker selection), which change the output but are not in `args`.
 pub fn plan(
@@ -96,6 +103,7 @@ pub fn plan(
             root,
             salt,
             cwd: None,
+            portable: portable_enabled(),
         }),
     )
 }
@@ -154,6 +162,10 @@ struct Staged {
     /// must still refuse nonportable output instead of publishing it globally.
     #[serde(default)]
     target_bound: Option<(PathBuf, String)>,
+    /// Workspace root for portable local entries; outputs embedding it literally
+    /// are rejected from cross-worktree publication.
+    #[serde(default)]
+    workspace: Option<String>,
 }
 
 /// After a successful compile: key the inputs, reflink the outputs into a
@@ -207,7 +219,12 @@ fn stage_with(
         entry.inputs.push((np, hash));
     }
     for k in env_names {
-        let v = std::env::var(&k).ok().map(|v| plan.norm.norm(&v));
+        // Keep tracked env vars (e.g. CARGO_MANIFEST_DIR) literal with respect
+        // to the workspace root so crates reading it at compile time never
+        // reuse artifacts across different worktrees.
+        let v = std::env::var(&k)
+            .ok()
+            .map(|v| plan.norm.norm_without_workspace(&v));
         h.field(k.as_bytes());
         h.field(v.as_deref().unwrap_or("\0unset").as_bytes());
         entry.env.push((k, v));
@@ -315,6 +332,7 @@ fn stage_with(
         target_inputs,
         manifest,
         target_bound: scoped,
+        workspace: plan.norm.workspace.clone(),
     };
     let out = staged.entry.out.clone();
     if !ok
@@ -492,9 +510,15 @@ fn finish(dir: &Path) -> Option<bool> {
         }
         if !text {
             let bytes = std::fs::read(&p).ok()?;
-            if !depcache::target_refs_are_inputs(&bytes, &staged.target, &staged.target_inputs) {
+            if !depcache::target_refs_are_inputs(&bytes, &staged.target, &staged.target_inputs)
+                || staged
+                    .workspace
+                    .as_deref()
+                    .is_some_and(|ws| memchr::memmem::find(&bytes, ws.as_bytes()).is_some())
+            {
                 // Do not weaken the portable guard. Runtime paths such as
-                // CARGO_BIN_EXE remain valid only in their original target.
+                // CARGO_BIN_EXE or unremapped workspace paths remain valid only
+                // in their original checkout/target.
                 staged.target_bound.as_ref()?;
                 target_bound = true;
             }
@@ -785,6 +809,7 @@ mod tests {
                 target_inputs: vec![],
                 manifest: manifest.clone(),
                 target_bound: scoped.then(|| (scoped_manifest.clone(), "scoped".into())),
+                workspace: None,
             };
             let mut value = serde_json::to_value(&staged).unwrap();
             if !scoped {
@@ -866,6 +891,7 @@ mod tests {
                     root: base.join("cache"),
                     salt: vec![],
                     cwd: Some(ws.clone()),
+                    portable: false,
                 }),
             )
             .unwrap();
@@ -970,6 +996,7 @@ mod tests {
                 root: cache.clone(),
                 salt: vec![],
                 cwd: Some(ws.clone()),
+                portable: false,
             };
             let p = depcache::plan_with(&rustc, &args, &[], Some(key)).unwrap();
             (p, args)
@@ -1019,6 +1046,79 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    #[test]
+    fn portable_local_unit_round_trip_across_worktrees() {
+        let base = std::env::temp_dir().join(format!(
+            "justrust-localcache-portable-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let ws1 = base.join("wt1");
+        let ws2 = base.join("wt2");
+        let cache = base.join("cache");
+        for ws in [&ws1, &ws2] {
+            std::fs::create_dir_all(ws.join("src")).unwrap();
+            std::fs::write(ws.join("src/lib.rs"), "pub fn f() -> u32 { 42 }").unwrap();
+        }
+        let rustc = paths::find_on_path("rustc", Path::new("/nonexistent")).unwrap();
+        let make_plan = |ws: &Path| {
+            let out = ws.join("target/debug/deps");
+            std::fs::create_dir_all(&out).unwrap();
+            let args: Vec<OsString> = [
+                "--crate-name",
+                "w",
+                "--edition=2021",
+                "src/lib.rs",
+                "--crate-type",
+                "lib",
+                "--emit=dep-info,metadata,link",
+                "-C",
+                "extra-filename=-0123456789abcdef",
+                "--out-dir",
+                out.to_str().unwrap(),
+            ]
+            .iter()
+            .map(OsString::from)
+            .collect();
+            let key = LocalKey {
+                root: cache.clone(),
+                salt: vec![],
+                cwd: Some(ws.to_path_buf()),
+                portable: true,
+            };
+            let p = depcache::plan_with(&rustc, &args, &[], Some(key)).unwrap();
+            (p, args)
+        };
+        let (p1, args1) = make_plan(&ws1);
+        let (p2, _) = make_plan(&ws2);
+        assert_eq!(
+            p1.base, p2.base,
+            "portable base key must match across different worktree paths"
+        );
+        let start = paths::now();
+        let st = std::process::Command::new(&rustc)
+            .args(&args1)
+            .args(&p1.extra_args)
+            .current_dir(&ws1)
+            .status()
+            .unwrap();
+        assert!(st.success());
+        assert!(stage_with(&p1, start, 2.5, &[], true, false).is_some());
+
+        let mut err = Vec::new();
+        let hit = restore(&p2, &mut err).expect("portable localcache hit in second worktree");
+        assert_eq!(hit.saved_secs, 2.5);
+        assert!(
+            ws2.join("target/debug/deps/libw-0123456789abcdef.rlib")
+                .is_file()
+        );
+        let d =
+            std::fs::read_to_string(ws2.join("target/debug/deps/w-0123456789abcdef.d")).unwrap();
+        assert!(!d.contains("wt1"), "denormed .d must not leak wt1: {d}");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// A source edited while rustc runs (an editor save, or a hosted sync
     /// push landing mid-build) must not be stored: its post-compile hash
     /// would pair the new content with outputs built from the old content,
@@ -1054,6 +1154,7 @@ mod tests {
             root: base.join("cache"),
             salt: vec![],
             cwd: Some(ws.clone()),
+            portable: false,
         };
         let plan = depcache::plan_with(&rustc, &args, &[], Some(key)).unwrap();
         let start = paths::now();

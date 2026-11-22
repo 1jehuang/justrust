@@ -44,6 +44,7 @@ mod nolocal;
 mod paths;
 mod peercache;
 mod platform_config;
+mod prebuilt_proxy;
 mod procfs;
 mod profile;
 mod record;
