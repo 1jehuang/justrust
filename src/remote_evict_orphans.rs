@@ -27,6 +27,13 @@ use super::Probe;
 pub const ORPHAN_IDLE: Duration = Duration::from_secs(6 * 3600);
 /// Delta bases unused this long are dropped on every pass.
 pub const SENT_MAX_AGE: Duration = Duration::from_secs(3 * 24 * 3600);
+/// Local run logs older than this are pruned on hosted machines (newest `RUNS_KEEP_NEWEST` always kept).
+pub const RUNS_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
+pub const RUNS_KEEP_NEWEST: usize = 200;
+/// Stale user-owned build temp entries in `/tmp` older than this are pruned.
+pub const TMP_MAX_AGE: Duration = Duration::from_secs(24 * 3600);
+/// Unreferenced `jr-*` toolchains older than this are pruned on hosted machines.
+pub const TOOLCHAIN_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
 /// Half-written snapshots older than this are leftovers of a dead stream.
 const SENT_TEMP_AGE: Duration = Duration::from_secs(3600);
 const MAX_DEPTH: usize = 7;
@@ -269,6 +276,187 @@ fn older(m: &std::fs::Metadata, now: SystemTime, limit: Duration) -> bool {
         .is_some_and(|age| age > limit)
 }
 
+/// Prune old `~/.justrust/runs/<id>` directories beyond `keep_newest` that are
+/// older than `max_age`. Never follows symlinks. Returns count removed.
+pub fn sweep_runs(dir: &Path, max_age: Duration, keep_newest: usize, now: SystemTime) -> usize {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut entries: Vec<(u64, PathBuf, std::fs::Metadata)> = Vec::new();
+    for e in rd.flatten() {
+        let path = e.path();
+        let Ok(m) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !m.is_dir() || m.file_type().is_symlink() {
+            continue;
+        }
+        let t = m.modified().map_or(0, secs);
+        entries.push((t, path, m));
+    }
+    if entries.len() <= keep_newest {
+        return 0;
+    }
+    // Newest first so the top `keep_newest` are always spared.
+    entries.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut removed = 0;
+    for (_, path, m) in entries.into_iter().skip(keep_newest) {
+        if older(&m, now, max_age) && std::fs::remove_dir_all(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+fn is_build_tmp_name(name: &str) -> bool {
+    name.starts_with("justrust-")
+        || name.starts_with("jr-")
+        || name.starts_with("rustc")
+        || name.starts_with("cargo-")
+        || name.starts_with("rustdoc")
+}
+
+/// Prune stale user-owned build temp files/dirs in `tmp_dir` (e.g. `/tmp`)
+/// older than `max_age` and not currently used by any process.
+pub fn sweep_tmp(dir: &Path, max_age: Duration, now: SystemTime, probe: &dyn Probe) -> usize {
+    use std::os::unix::fs::MetadataExt;
+    let uid = unsafe { libc::geteuid() };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for e in rd.flatten() {
+        let name = e.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !is_build_tmp_name(name) {
+            continue;
+        }
+        let path = e.path();
+        let Ok(m) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if m.file_type().is_symlink() || m.uid() != uid {
+            continue;
+        }
+        if !older(&m, now, max_age) || probe.in_use_by_other(&path) {
+            continue;
+        }
+        let ok = if m.is_dir() {
+            std::fs::remove_dir_all(&path).is_ok()
+        } else {
+            std::fs::remove_file(&path).is_ok()
+        };
+        if ok {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// Extract referenced toolchain IDs from `.slots.json` and `toolchain-policy.json`.
+/// Returns `None` if `.slots.json` exists but cannot be parsed (fail closed).
+fn protected_toolchains(justrust_home: &Path) -> Option<std::collections::HashSet<String>> {
+    let mut keep = std::collections::HashSet::new();
+    let slots_path = justrust_home.join("toolchains/.slots.json");
+    match std::fs::read(&slots_path) {
+        Ok(bytes) => {
+            let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+            for ptr in ["/active/id", "/last_good", "/previous/id"] {
+                if let Some(id) = v.pointer(ptr).and_then(|s| s.as_str()) {
+                    keep.insert(id.to_owned());
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return None,
+    }
+    let policy_path = justrust_home.join("toolchain-policy.json");
+    if let Ok(bytes) = std::fs::read(&policy_path)
+        && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
+        && let Some(id) = v.get("toolchain").and_then(|s| s.as_str())
+    {
+        keep.insert(id.to_owned());
+    }
+    Some(keep)
+}
+
+fn try_lock_usage(path: &Path) -> Result<Option<std::fs::File>, ()> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+    {
+        Ok(f) => {
+            // SAFETY: owned open descriptor; unlocked on drop.
+            if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                Ok(Some(f))
+            } else {
+                Err(())
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(()),
+    }
+}
+
+/// Prune unreferenced, inactive `jr-*` toolchains under `<home>/toolchains/`
+/// and `<home>/toolchains/staged/` older than `max_age`. Never touches
+/// `managed/`, non-`jr-*` channels, or anything referenced by `.slots.json` or
+/// `toolchain-policy.json`.
+pub fn sweep_toolchains(
+    justrust_home: &Path,
+    max_age: Duration,
+    now: SystemTime,
+    probe: &dyn Probe,
+) -> usize {
+    let Some(protected) = protected_toolchains(justrust_home) else {
+        return 0;
+    };
+    let root = justrust_home.join("toolchains");
+    let mut removed = 0;
+    for parent in [root.clone(), root.join("staged")] {
+        let Ok(rd) = std::fs::read_dir(&parent) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if !name.starts_with("jr-")
+                || !crate::toolchain::Spec::parse(name).is_ok_and(|s| s.is_jr() && s.id() == name)
+                || protected.contains(name)
+            {
+                continue;
+            }
+            let path = e.path();
+            let Ok(m) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if !m.is_dir() || m.file_type().is_symlink() || !older(&m, now, max_age) {
+                continue;
+            }
+            let usage_lock = root.join(format!(".usage-{name}.lock"));
+            if let Ok(um) = std::fs::symlink_metadata(&usage_lock)
+                && !older(&um, now, max_age)
+            {
+                continue;
+            }
+            let Ok(_guard) = try_lock_usage(&usage_lock) else {
+                continue;
+            };
+            if probe.in_use_by_other(&path) {
+                continue;
+            }
+            if std::fs::remove_dir_all(&path).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
 /// Where orphans may live: parents of registered roots, `~/.cache`,
 /// `~/.jcode/scratch`.
 pub fn bases(home: &Path, registered: &[PathBuf]) -> Vec<PathBuf> {
@@ -415,5 +603,94 @@ mod tests {
                 PathBuf::from("/home/u/.jcode/scratch")
             ]
         );
+    }
+
+    #[test]
+    fn runs_sweep_keeps_newest_and_prunes_old() {
+        let base = super::super::tests::scratch("orphan-runs");
+        let now = SystemTime::now();
+        for (name, age_days) in [
+            ("r-old-1", 10),
+            ("r-old-2", 9),
+            ("r-keep-old", 8),
+            ("r-new", 1),
+        ] {
+            let d = base.join(name);
+            std::fs::create_dir(&d).unwrap();
+            let t = now - Duration::from_secs(age_days * 86400);
+            std::fs::File::open(&d).unwrap().set_modified(t).unwrap();
+        }
+        // Keep newest 2 unconditionally, prune older than 7 days beyond that.
+        let removed = sweep_runs(&base, Duration::from_secs(7 * 86400), 2, now);
+        assert_eq!(removed, 2);
+        assert!(!base.join("r-old-1").exists());
+        assert!(!base.join("r-old-2").exists());
+        assert!(base.join("r-keep-old").exists());
+        assert!(base.join("r-new").exists());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn tmp_sweep_removes_only_old_unused_build_temps() {
+        let base = super::super::tests::scratch("orphan-tmp");
+        let now = SystemTime::now();
+        let old = now - Duration::from_secs(48 * 3600);
+        for name in ["jr-old", "rustc-busy", "justrust-fresh", "user-notes"] {
+            let d = base.join(name);
+            std::fs::create_dir(&d).unwrap();
+            if name != "justrust-fresh" {
+                std::fs::File::open(&d).unwrap().set_modified(old).unwrap();
+            }
+        }
+        let probe = P(secs(now), vec![base.join("rustc-busy/tmp")]);
+        let removed = sweep_tmp(&base, TMP_MAX_AGE, now, &probe);
+        assert_eq!(removed, 1);
+        assert!(!base.join("jr-old").exists());
+        assert!(base.join("rustc-busy").exists());
+        assert!(base.join("justrust-fresh").exists());
+        assert!(base.join("user-notes").exists());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn toolchain_sweep_spares_slots_policy_and_recent_jr() {
+        let home = super::super::tests::scratch("orphan-tc");
+        let tc = home.join("toolchains");
+        let staged = tc.join("staged");
+        std::fs::create_dir_all(&staged).unwrap();
+        let now = SystemTime::now();
+        let old = now - Duration::from_secs(10 * 86400);
+        for dir in [
+            tc.join("jr-1111111"),
+            tc.join("jr-2222222"),
+            tc.join("jr-3333333"),
+            staged.join("jr-4444444"),
+            tc.join("nightly-2026-10-08"),
+        ] {
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::File::open(&dir)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        std::fs::write(
+            tc.join(".slots.json"),
+            r#"{"version":1,"active":{"id":"jr-1111111","path":"/x"},"last_good":"jr-1111111","previous":null}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            home.join("toolchain-policy.json"),
+            r#"{"toolchain":"jr-2222222","protocol":1,"fetched_at":0}"#,
+        )
+        .unwrap();
+        let probe = P(secs(now), vec![]);
+        let removed = sweep_toolchains(&home, TOOLCHAIN_MAX_AGE, now, &probe);
+        assert_eq!(removed, 2);
+        assert!(tc.join("jr-1111111").exists(), "active slot kept");
+        assert!(tc.join("jr-2222222").exists(), "policy toolchain kept");
+        assert!(tc.join("nightly-2026-10-08").exists(), "non-jr kept");
+        assert!(!tc.join("jr-3333333").exists(), "stale jr pruned");
+        assert!(!staged.join("jr-4444444").exists(), "stale staged pruned");
+        std::fs::remove_dir_all(&home).unwrap();
     }
 }

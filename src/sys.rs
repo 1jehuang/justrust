@@ -378,8 +378,9 @@ fn has_exe_extension(p: &Path) -> bool {
     })
 }
 
-/// Bytes available to this user on the filesystem holding `dir`.
-pub fn free_bytes(dir: &Path) -> Option<u64> {
+/// `(free, total)` bytes on the filesystem holding `dir` (`free` is bytes
+/// available to this user).
+pub fn disk_space(dir: &Path) -> Option<(u64, u64)> {
     #[cfg(unix)]
     {
         let c = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()).ok()?;
@@ -388,23 +389,28 @@ pub fn free_bytes(dir: &Path) -> Option<u64> {
         if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
             return None;
         }
-        Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
+        let frsize = st.f_frsize as u64;
+        Some((
+            (st.f_bavail as u64).saturating_mul(frsize),
+            (st.f_blocks as u64).saturating_mul(frsize),
+        ))
     }
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
         let w: Vec<u16> = dir.as_os_str().encode_wide().chain([0]).collect();
         let mut free = 0u64;
+        let mut total = 0u64;
         // SAFETY: NUL-terminated wide path; optional outputs may be null.
         let ok = unsafe {
             windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
                 w.as_ptr(),
                 &mut free,
-                std::ptr::null_mut(),
+                &mut total,
                 std::ptr::null_mut(),
             )
         };
-        (ok != 0).then_some(free)
+        (ok != 0).then_some((free, total))
     }
 }
 

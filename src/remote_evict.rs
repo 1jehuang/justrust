@@ -39,11 +39,12 @@ mod outputs;
 mod lock_tests;
 
 /// Keep free space at least this fraction of the disk, or this many bytes,
-/// whichever is larger.
-pub const LOW_FRACTION: f64 = 0.15;
+/// whichever is larger. Kept strictly above 30% free so stale targets are
+/// reclaimed before hosted offline disk growth triggers at 70% used.
+pub const LOW_FRACTION: f64 = 0.35;
 pub const LOW_BYTES: u64 = 50 << 30;
 /// Once triggered, evict until this fraction is free.
-pub const HIGH_FRACTION: f64 = 0.25;
+pub const HIGH_FRACTION: f64 = 0.45;
 /// A root built more recently than this is never evicted.
 pub const DEFAULT_GRACE: Duration = Duration::from_secs(2 * 3600);
 /// Below this, refuse to start a build (after an eviction attempt).
@@ -940,23 +941,52 @@ pub fn command(apply: bool, prefix: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Drop artifact-download delta bases nobody used for `SENT_MAX_AGE`.
+/// Drop artifact-download delta bases, old run logs, stale build `/tmp`
+/// entries, and unreferenced `jr-*` toolchains on hosted machines.
 #[cfg(unix)]
 pub fn sweep_sent(dry: bool, log: &mut dyn FnMut(String)) {
-    let Ok(dir) = crate::paths::home().map(|h| h.join("sent")) else {
+    let Ok(home) = crate::paths::home() else {
         return;
     };
+    let sent_dir = home.join("sent");
+    let runs_dir = home.join("runs");
+    let tmp_dir = std::env::temp_dir();
     if dry {
         log(format!(
-            "evict: would prune delta bases older than {}s in {}",
+            "evict: would prune delta bases older than {}s in {}, runs older than {}s (keeping {}), build temps older than {}s in {}, and stale jr-* toolchains older than {}s",
             orphans::SENT_MAX_AGE.as_secs(),
-            dir.display()
+            sent_dir.display(),
+            orphans::RUNS_MAX_AGE.as_secs(),
+            orphans::RUNS_KEEP_NEWEST,
+            orphans::TMP_MAX_AGE.as_secs(),
+            tmp_dir.display(),
+            orphans::TOOLCHAIN_MAX_AGE.as_secs(),
         ));
         return;
     }
-    let (n, bytes) = orphans::sweep_sent(&dir, orphans::SENT_MAX_AGE, SystemTime::now());
+    let now = SystemTime::now();
+    let (n, bytes) = orphans::sweep_sent(&sent_dir, orphans::SENT_MAX_AGE, now);
     if n > 0 {
         log(format!("evict: pruned {n} old delta bases ({bytes} bytes)"));
+    }
+    let runs = orphans::sweep_runs(
+        &runs_dir,
+        orphans::RUNS_MAX_AGE,
+        orphans::RUNS_KEEP_NEWEST,
+        now,
+    );
+    if runs > 0 {
+        log(format!("evict: pruned {runs} old run log directories"));
+    }
+    let tmps = orphans::sweep_tmp(&tmp_dir, orphans::TMP_MAX_AGE, now, &System);
+    if tmps > 0 {
+        log(format!("evict: pruned {tmps} stale build temp entries"));
+    }
+    let tcs = orphans::sweep_toolchains(&home, orphans::TOOLCHAIN_MAX_AGE, now, &System);
+    if tcs > 0 {
+        log(format!(
+            "evict: pruned {tcs} stale unreferenced jr-* toolchains"
+        ));
     }
 }
 
@@ -1236,14 +1266,23 @@ mod tests {
             p.sizes.insert(r.join("target"), 50 * GIB);
         }
         let need = deficit(p.free, p.total);
-        assert_eq!(need, 90 * GIB, "25% of 400 GiB minus 10 GiB free");
+        assert_eq!(need, 170 * GIB, "45% of 400 GiB minus 10 GiB free");
         let (chosen, _) = plan(&reg.roots, need, DEFAULT_GRACE, &p);
         let names: Vec<_> = chosen
             .iter()
             .map(|e| e.target.parent().unwrap().file_name().unwrap().to_owned())
             .collect();
-        assert_eq!(names, ["old", "mid"]);
+        assert_eq!(names, ["old", "mid", "new"]);
         assert_eq!(deficit(200 * GIB, 400 * GIB), 0, "plenty free: nothing");
+        // Verify eviction always triggers before hosted 70% offline disk growth.
+        for gib in [48, 80, 128, 192, 288, 512, 768] {
+            let total = gib * GIB;
+            let free_at_70pct_used = total * 30 / 100;
+            assert!(
+                deficit(free_at_70pct_used, total) > 0,
+                "must evict before 70% used on {gib} GiB disk"
+            );
+        }
         std::fs::remove_dir_all(&base).unwrap();
     }
 

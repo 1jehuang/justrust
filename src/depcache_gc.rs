@@ -25,10 +25,15 @@ use crate::sys::Detach;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-/// Cap floor, and the cap when free space cannot be read.
+/// Cap floor on roomy disks, and the cap when filesystem size cannot be read.
 pub const DEFAULT_MAX_BYTES: u64 = 30 * 1024 * 1024 * 1024;
 /// Largest default cap on a roomy disk.
 const ROOMY_MAX_BYTES: u64 = 150 * 1024 * 1024 * 1024;
+/// Cap floor on compact disks (e.g. 48-192 GiB hosted guest volumes).
+const SMALL_DISK_FLOOR_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// Disks smaller than this scale the depcache cap down proportionally so
+/// depcache alone does not consume 40-60% of a hosted account disk.
+const SMALL_DISK_THRESHOLD_BYTES: u64 = 200 * 1024 * 1024 * 1024;
 const GC_INTERVAL_SECS: f64 = 600.0;
 /// Entries used this recently are never evicted (`JUSTRUST_DEPCACHE_GRACE`
 /// overrides it, for stress tests).
@@ -63,26 +68,32 @@ pub fn max_bytes() -> u64 {
         .ok()
         .and_then(|v| parse_size(&v))
         .unwrap_or_else(|| {
-            let free = depcache::cache_dir().and_then(|d| free_bytes(&d));
-            default_cap(free)
+            let space = depcache::cache_dir().and_then(|d| disk_space(&d));
+            default_cap_for_disk(space)
         })
 }
 
-/// Default cap: a quarter of the free space on the cache's filesystem,
-/// between 30 GB and 150 GB. A fixed 30 GB evicted 1.8k dependency units
-/// (0.9 h of rustc) in five days on a disk with 2.5 TB free (FINDINGS 49):
-/// a few toolchains times a few projects times debug/release does not fit.
-pub(crate) fn default_cap(free: Option<u64>) -> u64 {
-    match free {
-        Some(f) => (f / 4).clamp(DEFAULT_MAX_BYTES, ROOMY_MAX_BYTES),
+/// Default cap: on roomy disks (>= 200 GiB total), a quarter of free space
+/// clamped to 30-150 GiB (FINDINGS 49). On compact disks (< 200 GiB, e.g.
+/// hosted guest volumes), scale proportionally to 12.5-20% of total disk
+/// (at most 8 GiB floor, 30 GiB ceiling) so depcache does not trigger
+/// unnecessary host disk expansion.
+pub(crate) fn default_cap_for_disk(space: Option<(u64, u64)>) -> u64 {
+    match space {
+        Some((free, total)) if total > 0 && total < SMALL_DISK_THRESHOLD_BYTES => {
+            let ceiling = (total / 5).min(DEFAULT_MAX_BYTES);
+            let floor = (total / 8).min(SMALL_DISK_FLOOR_BYTES).min(ceiling);
+            (free / 4).clamp(floor, ceiling)
+        }
+        Some((free, _)) => (free / 4).clamp(DEFAULT_MAX_BYTES, ROOMY_MAX_BYTES),
         None => DEFAULT_MAX_BYTES,
     }
 }
 
-/// Bytes available to this user on the filesystem holding `dir` (or its
-/// nearest existing ancestor).
-fn free_bytes(dir: &Path) -> Option<u64> {
-    crate::sys::free_bytes(dir.ancestors().find(|p| p.exists())?)
+/// `(free, total)` bytes on the filesystem holding `dir` (or its nearest
+/// existing ancestor).
+fn disk_space(dir: &Path) -> Option<(u64, u64)> {
+    crate::sys::disk_space(dir.ancestors().find(|p| p.exists())?)
 }
 
 #[derive(Debug, Clone)]
@@ -667,13 +678,18 @@ mod tests {
     #[test]
     fn default_cap_follows_free_space() {
         const G: u64 = 1 << 30;
-        assert_eq!(default_cap(None), 30 * G);
-        // Small disk: the old fixed cap.
-        assert_eq!(default_cap(Some(40 * G)), 30 * G);
-        assert_eq!(default_cap(Some(400 * G)), 100 * G);
-        // Roomy disk: bounded.
-        assert_eq!(default_cap(Some(2500 * G)), 150 * G);
-        assert!(free_bytes(&std::env::temp_dir().join("no/such/dir")).is_some());
+        assert_eq!(default_cap_for_disk(None), 30 * G);
+        // Roomy disk (>= 200 GiB total): preserves 30-150 GiB behavior.
+        assert_eq!(default_cap_for_disk(Some((40 * G, 500 * G))), 30 * G);
+        assert_eq!(default_cap_for_disk(Some((400 * G, 1000 * G))), 100 * G);
+        assert_eq!(default_cap_for_disk(Some((2500 * G, 4000 * G))), 150 * G);
+        // Compact hosted guest disk (< 200 GiB total): bounded below 30 GiB
+        // so depcache does not force EBS growth on small account disks.
+        assert_eq!(default_cap_for_disk(Some((30 * G, 80 * G))), 8 * G);
+        assert_eq!(default_cap_for_disk(Some((70 * G, 80 * G))), 16 * G);
+        assert_eq!(default_cap_for_disk(Some((20 * G, 48 * G))), 6 * G);
+        assert_eq!(default_cap_for_disk(Some((40 * G, 48 * G))), 48 * G / 5);
+        assert!(disk_space(&std::env::temp_dir().join("no/such/dir")).is_some());
     }
 
     #[test]
