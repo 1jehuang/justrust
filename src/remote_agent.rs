@@ -1090,7 +1090,8 @@ fn start_run(
         .arg(cwd)
         .arg(mp)
         .arg(executable)
-        .args(args);
+        .args(args)
+        .env("JUSTRUST_BUILDD", "0");
         cmd
     } else {
         let mut cmd = Command::new(executable);
