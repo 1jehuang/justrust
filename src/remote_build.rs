@@ -1880,6 +1880,14 @@ fn run_remote_inner(
             h.to_string(),
         ));
     }
+    if let Some(repo) = roots
+        .iter()
+        .find(|r| cwd.starts_with(r))
+        .and_then(|r| crate::remote_sync::repo_id(r))
+        .and_then(|id| id.root_commits.into_iter().next())
+    {
+        env.push(("JUSTRUST_CANONICAL_REPO".to_string(), repo));
+    }
     let mut w = BufWriter::new(sock.try_clone()?);
     let mut r = BufReader::new(sock);
     // Declared after `r` so it clears the registered fd before `r` closes it.
