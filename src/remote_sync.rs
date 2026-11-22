@@ -330,18 +330,36 @@ fn walk_matching(root: &Path, wanted: Option<&std::ffi::OsStr>) -> Result<Vec<Pa
         let Ok(rd) = std::fs::read_dir(root.join(&rel)) else {
             continue;
         };
+        let mut dirs = Vec::new();
+        let mut files = Vec::new();
+        let mut is_cachedir = false;
         for e in rd.flatten() {
             let name = e.file_name();
             if name == "target" || name == ".git" || name == ".justrust" {
                 continue;
             }
             match e.file_type() {
-                Ok(t) if t.is_dir() => stack.push(rel.join(name)),
-                Ok(t) if t.is_file() && wanted.is_none_or(|wanted| name == wanted) => {
-                    out.push(rel.join(name));
+                Ok(t) if t.is_dir() => dirs.push(name),
+                Ok(t) if t.is_file() => {
+                    if name == "CACHEDIR.TAG" {
+                        is_cachedir = true;
+                        break;
+                    }
+                    if wanted.is_none_or(|wanted| name == wanted) {
+                        files.push(name);
+                    }
                 }
                 _ => {}
             }
+        }
+        if is_cachedir {
+            continue;
+        }
+        for name in dirs {
+            stack.push(rel.join(name));
+        }
+        for name in files {
+            out.push(rel.join(name));
         }
     }
     Ok(out)

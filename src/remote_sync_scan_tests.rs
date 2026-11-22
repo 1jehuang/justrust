@@ -123,6 +123,27 @@ fn filtered_walk_nested_ignored_and_pruned_directories() {
 }
 
 #[test]
+fn walk_prunes_cachedir_tag_directories() {
+    let tree = ScanTree::new();
+    tree.file("Cargo.lock");
+    tree.file("sub/Cargo.lock");
+    tree.file("build-out/CACHEDIR.TAG");
+    tree.file("build-out/Cargo.lock");
+    tree.file("build-out/nested/Cargo.lock");
+    tree.file("build-out/nested/lib.rs");
+    let mut found = filtered_locks(&tree.0);
+    found.sort();
+    assert_eq!(
+        found,
+        vec![PathBuf::from("Cargo.lock"), PathBuf::from("sub/Cargo.lock")]
+    );
+    assert!(
+        walk(&tree.0.join("build-out")).unwrap().is_empty(),
+        "CACHEDIR.TAG root must also be pruned"
+    );
+}
+
+#[test]
 fn filtered_walk_deep_paths_and_fresh_create_delete() {
     let tree = ScanTree::new();
     assert_locks(&tree.0, vec![]);

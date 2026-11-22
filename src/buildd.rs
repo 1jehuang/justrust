@@ -1206,7 +1206,11 @@ fn serve_build(
         lookup_ms,
         scan_ms,
         waited_ms,
-        build.stamp.as_deref().map(|s| &s[..8]).unwrap_or("native")
+        build
+            .stamp
+            .as_deref()
+            .map(|s| s.get(..8).unwrap_or(s))
+            .unwrap_or("native")
     ));
     let res = stream(&build, s, attached, replayed, joined_after, lookup_ms);
     let mut l = build.log.lock().unwrap();

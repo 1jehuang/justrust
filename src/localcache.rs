@@ -416,11 +416,9 @@ fn append_once(manifest: &Path, line: &str) -> Option<()> {
     let root = parent.parent().unwrap_or(parent);
     create_cache_dir(root, parent).ok()?;
     let known = std::fs::read_to_string(manifest).unwrap_or_default();
-    if !known.lines().any(|l| l == line) {
-        if paths::append_line(manifest, line).is_err() {
-            repair_dir_mode(parent);
-            paths::append_line(manifest, line).ok()?;
-        }
+    if !known.lines().any(|l| l == line) && paths::append_line(manifest, line).is_err() {
+        repair_dir_mode(parent);
+        paths::append_line(manifest, line).ok()?;
     }
     Some(())
 }
