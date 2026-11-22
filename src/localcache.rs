@@ -480,15 +480,50 @@ pub fn finish_main(dir: PathBuf) -> ! {
 }
 
 fn finisher_admission(root: &Path) -> Option<std::fs::File> {
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(root.join("finish.lock"))
-        .ok()?;
-    file.try_lock().ok()?;
-    Some(file)
+    let slots: usize = if portable_enabled() { 8 } else { 1 };
+    let wait = if slots > 1 {
+        Some(std::time::Duration::from_secs(5))
+    } else {
+        None
+    };
+    finisher_admission_with(root, slots, wait)
+}
+
+fn finisher_admission_with(
+    root: &Path,
+    slots: usize,
+    wait: Option<std::time::Duration>,
+) -> Option<std::fs::File> {
+    if !root.is_dir() {
+        return None;
+    }
+    let deadline = wait.map(|d| std::time::Instant::now() + d);
+    loop {
+        for slot in 0..slots {
+            let name = if slot == 0 {
+                "finish.lock".to_owned()
+            } else {
+                format!("finish.{slot}.lock")
+            };
+            let Ok(file) = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(root.join(name))
+            else {
+                continue;
+            };
+            if file.try_lock().is_ok() {
+                return Some(file);
+            }
+        }
+        let until = deadline?;
+        if std::time::Instant::now() >= until {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }
 
 /// Hash and check the staged outputs, then publish them.
@@ -635,13 +670,27 @@ mod tests {
             std::process::id()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        let first = finisher_admission(&root).unwrap();
-        assert!(finisher_admission(&root).is_none());
+        let first = finisher_admission_with(&root, 1, None).unwrap();
+        assert!(finisher_admission_with(&root, 1, None).is_none());
         let other = root.join("independent-cache");
         std::fs::create_dir_all(&other).unwrap();
-        assert!(finisher_admission(&other).is_some());
+        assert!(finisher_admission_with(&other, 1, None).is_some());
         drop(first);
-        assert!(finisher_admission(&root).is_some());
+        assert!(finisher_admission_with(&root, 1, None).is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn finisher_admission_allows_parallel_slots() {
+        let root =
+            std::env::temp_dir().join(format!("justrust-finisher-parallel-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let held: Vec<_> = (0..4)
+            .map(|_| finisher_admission_with(&root, 4, None).expect("slot available"))
+            .collect();
+        assert!(finisher_admission_with(&root, 4, None).is_none());
+        drop(held);
+        assert!(finisher_admission_with(&root, 4, None).is_some());
         std::fs::remove_dir_all(root).unwrap();
     }
 

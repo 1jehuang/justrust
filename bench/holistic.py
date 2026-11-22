@@ -266,6 +266,7 @@ def run_cold_clone(stacks: list[str], rounds: int) -> list[dict]:
     cases = [
         ('cold-rg-rel', 'ripgrep', 'build', ['--release', '--locked'], 'rg', False),
         ('cold-uv-check', 'uv', 'check', ['-p', 'uv-resolver', '--locked'], None, False),
+        ('cold-uv-rel', 'uv', 'build', ['--release', '-p', 'uv', '--bin', 'uv', '--locked'], 'uv', False),
         ('cold-jcode-test', 'jcode', 'test', ['-p', 'jcode-tui', '--lib', 'jarvis_listen', '--locked'], None, True),
         ('cold-jcode-rel', 'jcode', 'build', ['--release', '-p', 'jcode', '--bin', 'jcode', '--locked'], 'jcode', False),
     ]
