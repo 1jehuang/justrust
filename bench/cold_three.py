@@ -70,7 +70,7 @@ ROWS = {
            'build', ['--release', '-p', 'uv', '--locked'], 'uv'),
     'jcode-test': (Path.home() / 'jcode', 'https://github.com/1jehuang/jcode.git',
                    'b33d94f006ce2488bbc3b4b5ec818505ac750b28',
-                   'test', ['-p', 'jcode-tui', '--lib', 'jarvis', '--locked'], None),
+                   'test', ['-p', 'jcode-tui', '--lib', 'jarvis_listen', '--locked'], None),
     'ripgrep-test': (ROOT / 'src-ripgrep', 'https://github.com/BurntSushi/ripgrep.git',
                      'e89fff89ac9af12e8d4ce9d5fd07beb408ca730f',  # 15.2.0
                      'test', ['-p', 'ignore', '--lib', '--locked'], None),
