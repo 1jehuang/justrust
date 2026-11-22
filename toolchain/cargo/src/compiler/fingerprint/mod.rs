@@ -662,15 +662,16 @@ fn jr_cutoff_prepare(
         .join(jr_cutoff::RECORD_NAME);
     // Whatever happens next, the old record no longer describes the outputs
     // once rustc runs again. A cutoff probe reads it before that.
+    let is_check_non_custom = matches!(unit.mode, CompileMode::Check { .. })
+        && !unit.target.is_custom_build()
+        && !unit.target.proc_macro();
+    let is_non_linking_lib = unit.target.is_lib()
+        && !unit.requires_upstream_objects()
+        && matches!(unit.mode, CompileMode::Build)
+        && !unit.target.is_custom_build();
     let eligible_kind = jr_cutoff::enabled()
         && !build_runner.bcx.gctx.cli_unstable().fine_grain_locking
-        && unit.target.is_lib()
-        && !unit.requires_upstream_objects()
-        && matches!(
-            unit.mode,
-            CompileMode::Build | CompileMode::Check { test: false }
-        )
-        && !unit.target.is_custom_build();
+        && (is_check_non_custom || is_non_linking_lib);
     if !eligible_kind {
         jr_cutoff::remove_record(&record);
         return Ok(none);

@@ -37,6 +37,44 @@ pub struct JoinedLinker {
     compiled_modules: CompiledModules,
 }
 
+/// justrust: link before persisting incremental state and reply early to the
+/// caller (`JUSTRUST_RUSTC_EARLY_REPLY_FD`) even on single-threaded sessions
+/// (`-Zthreads=1`, the default for debug builds). Outputs are complete on disk
+/// before `jr_early_reply()` fires; `tcx.finish()` then persists in the
+/// background while the next session waits on `JR_PERSISTING` if needed.
+pub fn link_before_persist_enabled(sess: &Session) -> bool {
+    std::env::var_os("JUSTRUST_RUSTC_OVERLAP_PERSIST").is_none_or(|v| v != "0")
+        && std::env::var_os("JUSTRUST_RUSTC_EARLY_REPLY_FD").is_some()
+        && sess.opts.incremental.is_some()
+        && !sess.opts.unstable_opts.no_link
+        && !sess.opts.unstable_opts.offload.iter().any(|o| matches!(o, config::Offload::HostMetadata(_)))
+        && sess.opts.output_types.keys().any(|&i| i == OutputType::Exe || i == OutputType::Metadata)
+}
+
+/// justrust: single-threaded counterpart to `overlap_persist_and_link`.
+/// Joins codegen, links outputs, sends the early reply so cargo can proceed
+/// immediately, and then persists the incremental dep-graph and query cache.
+pub fn link_before_persist_and_reply(
+    tcx: TyCtxt<'_>,
+    linker: Linker,
+    codegen_backend: &dyn CodegenBackend,
+) -> Option<Svh> {
+    let sess = tcx.sess;
+    let crate_hash = linker.crate_hash;
+    let joined = linker.join(sess, tcx.incr_comp_session.as_ref(), codegen_backend);
+    joined.link(sess, codegen_backend);
+    if let Some(incr) = tcx.incr_comp_session.as_ref()
+        && sess.dcx().has_errors_or_delayed_bugs().is_none()
+    {
+        let marker = incr.new_session_directory.join(rustc_incremental::JR_PERSISTING);
+        if std::fs::write(&marker, b"").is_ok() && !sess.jr_early_reply() {
+            let _ = std::fs::remove_file(&marker);
+        }
+    }
+    tcx.finish();
+    crate_hash
+}
+
 /// justrust: overlap the incremental persist with the link
 /// (`JUSTRUST_RUSTC_OVERLAP_PERSIST=0` turns it off). Only taken when the
 /// session can run work on two threads (`-Zthreads` > 1), incremental is on,

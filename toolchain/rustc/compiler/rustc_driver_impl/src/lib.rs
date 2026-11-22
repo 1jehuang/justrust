@@ -521,6 +521,13 @@ fn analyze_and_codegen<'tcx>(
             codegen_backend,
         )));
     }
+    if rustc_interface::link_before_persist_enabled(sess) {
+        return Some(Done::Linked(rustc_interface::link_before_persist_and_reply(
+            tcx,
+            linker,
+            codegen_backend,
+        )));
+    }
 
     Some(Done::Pending(linker))
 }

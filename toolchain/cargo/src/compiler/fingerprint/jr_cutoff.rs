@@ -128,13 +128,29 @@ pub fn write_record(record: &Path, rmeta_deps: &[PathBuf], outputs: &[PathBuf]) 
         return;
     }
     let mut out = String::new();
+    let mut any_iface = false;
     for dep in rmeta_deps {
-        let Some(svh) = read_iface(dep) else {
-            debug!("jr-cutoff: no interface hash for {dep:?}, not recording");
+        if let Some(svh) = read_iface(dep) {
+            any_iface = true;
+            out.push_str(&format!("dep {svh} {}\n", dep.to_string_lossy()));
+        } else if let Some(m) = mtime_str(dep) {
+            // A dependency without a `.jriface` sidecar (e.g. restored from a
+            // prebuilt depcache without sidecars) falls back to its `.rmeta`
+            // mtime so it does not poison early cutoff for workspace crates.
+            // If that dependency is rebuilt, its mtime changes and cutoff
+            // conservatively declines.
+            out.push_str(&format!("mtime {m} {}\n", dep.to_string_lossy()));
+        } else {
+            debug!("jr-cutoff: unreadable dependency {dep:?}, not recording");
             remove_record(record);
             return;
-        };
-        out.push_str(&format!("dep {svh} {}\n", dep.to_string_lossy()));
+        }
+    }
+    if !any_iface {
+        // No dependency has an interface hash (e.g. stock rustc): keep the
+        // target dir identical to stock.
+        remove_record(record);
+        return;
     }
     for o in outputs {
         let Some(m) = mtime_str(o) else {
@@ -153,9 +169,14 @@ pub fn remove_record(record: &Path) {
     let _ = fs::remove_file(record);
 }
 
+enum DepExpect {
+    Iface(String),
+    Mtime(String),
+}
+
 struct Record {
-    /// `(rmeta path, svh)`
-    deps: Vec<(PathBuf, String)>,
+    /// `(rmeta path, expected interface hash or mtime)`
+    deps: Vec<(PathBuf, DepExpect)>,
     /// `(output path, mtime)`
     outs: Vec<(PathBuf, String)>,
 }
@@ -174,7 +195,10 @@ fn read_record(record: &Path) -> Option<Record> {
                 if val.len() != 32 || !val.bytes().all(|b| b.is_ascii_hexdigit()) {
                     return None;
                 }
-                r.deps.push((PathBuf::from(path), val.to_string()));
+                r.deps.push((PathBuf::from(path), DepExpect::Iface(val.to_string())));
+            }
+            "mtime" => {
+                r.deps.push((PathBuf::from(path), DepExpect::Mtime(val.to_string())));
             }
             "out" => r.outs.push((PathBuf::from(path), val.to_string())),
             _ => return None,
@@ -247,11 +271,22 @@ impl CutoffPlan {
             debug!("jr-cutoff: own outputs changed since the record");
             return false;
         }
-        for (p, h) in &r.deps {
-            let now = read_iface(p);
-            if now.as_deref() != Some(h.as_str()) {
-                debug!("jr-cutoff: interface of {p:?} changed: {h} -> {now:?}");
-                return false;
+        for (p, expect) in &r.deps {
+            match expect {
+                DepExpect::Iface(h) => {
+                    let now = read_iface(p);
+                    if now.as_deref() != Some(h.as_str()) {
+                        debug!("jr-cutoff: interface of {p:?} changed: {h} -> {now:?}");
+                        return false;
+                    }
+                }
+                DepExpect::Mtime(m) => {
+                    let now = mtime_str(p);
+                    if now.as_deref() != Some(m.as_str()) {
+                        debug!("jr-cutoff: mtime of sidecarless dep {p:?} changed: {m} -> {now:?}");
+                        return false;
+                    }
+                }
             }
         }
         true
@@ -363,6 +398,43 @@ mod tests {
         filetime::set_file_mtime(&p, FileTime::from_unix_time(2, 0)).unwrap();
         g.finish();
         assert!(!sidecar_path(&p).exists(), "rmeta rewritten, not restored");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn mixed_sidecar_and_mtime_deps_cut_off_cleanly() {
+        let dir = std::env::temp_dir().join(format!("jr-cutoff-mix-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        // Workspace dep has a .jriface sidecar; third-party depcache dep does not.
+        let ws = fake_rmeta(&dir, "libws.rmeta", 7);
+        let third_party = dir.join("libserde.rmeta");
+        fs::write(&third_party, b"serde").unwrap();
+        let out = dir.join("libme.rmeta");
+        fs::write(&out, b"me").unwrap();
+        let record = dir.join(RECORD_NAME);
+
+        // Zero sidecars anywhere -> no record written (stock behavior).
+        write_record(&record, &[third_party.clone()], &[out.clone()]);
+        assert!(!record.exists());
+
+        // Mixed: ws has sidecar, third_party falls back to mtime.
+        write_record(&record, &[ws.clone(), third_party.clone()], &[out.clone()]);
+        assert!(record.exists());
+        let plan = CutoffPlan {
+            record: record.clone(),
+            rmeta_deps: vec![ws.clone(), third_party.clone()],
+            outputs: vec![out.clone()],
+        };
+        assert!(plan.has_matching_record());
+        // Workspace dep rebuilt with same interface hash, third-party untouched -> cut off!
+        fake_rmeta(&dir, "libws.rmeta", 7);
+        assert!(plan.probe());
+        plan.commit();
+        // Third-party sidecarless dep rebuilt (mtime changed) -> conservative rebuild!
+        filetime::set_file_mtime(&third_party, FileTime::from_unix_time(123, 0)).unwrap();
+        assert!(!plan.probe());
+        assert!(!record.exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 }
