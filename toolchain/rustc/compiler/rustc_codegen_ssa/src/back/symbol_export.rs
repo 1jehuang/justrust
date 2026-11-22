@@ -564,6 +564,14 @@ fn upstream_monomorphizations_for_provider(
     tcx.upstream_monomorphizations(()).get(&def_id)
 }
 
+fn upstream_monomorphization_for_item_provider<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    (def_id, args): (DefId, GenericArgsRef<'tcx>),
+) -> Option<CrateNum> {
+    assert!(!def_id.is_local());
+    tcx.upstream_monomorphizations_for(def_id)?.get(&args).cloned()
+}
+
 fn upstream_drop_glue_for_provider<'tcx>(
     tcx: TyCtxt<'tcx>,
     args: GenericArgsRef<'tcx>,
@@ -590,6 +598,8 @@ pub(crate) fn provide(providers: &mut Providers) {
     providers.queries.exported_non_generic_symbols = exported_non_generic_symbols_provider_local;
     providers.queries.exported_generic_symbols = exported_generic_symbols_provider_local;
     providers.queries.upstream_monomorphizations = upstream_monomorphizations_provider;
+    providers.queries.upstream_monomorphization_for_item =
+        upstream_monomorphization_for_item_provider;
     providers.queries.is_unreachable_local_definition = is_unreachable_local_definition_provider;
     providers.queries.upstream_drop_glue_for = upstream_drop_glue_for_provider;
     providers.queries.upstream_async_drop_glue_for = upstream_async_drop_glue_for_provider;

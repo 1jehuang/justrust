@@ -2058,8 +2058,21 @@ rustc_queries! {
     /// NOTE: This query could easily be extended to also support other
     ///       common functions that have are large set of monomorphizations
     ///       (like `Clone::clone` for example).
+    /// justrust: per-instance cached lookup into `upstream_monomorphizations_for`.
+    /// Persisting this tiny `Option<CrateNum>` avoids decoding every upstream
+    /// crate's `exported_generic_symbols` on warm incremental builds when
+    /// upstream crates are unchanged (~25s of green_recompute across 179 warm
+    /// builds), and narrows dep-graph granularity from per-`DefId` to per-instance.
+    query upstream_monomorphization_for_item(
+        key: (DefId, GenericArgsRef<'tcx>),
+    ) -> Option<CrateNum> {
+        desc { "available upstream monomorphization for `{}`", tcx.def_path_str(key.0) }
+        cache_on_disk
+    }
+
     query upstream_drop_glue_for(args: GenericArgsRef<'tcx>) -> Option<CrateNum> {
         desc { "available upstream drop-glue for `{:?}`", args }
+        cache_on_disk
     }
 
     /// Returns the upstream crate that exports async-drop-glue for
@@ -2080,6 +2093,7 @@ rustc_queries! {
     ///       (like `Clone::clone` for example).
     query upstream_async_drop_glue_for(args: GenericArgsRef<'tcx>) -> Option<CrateNum> {
         desc { "available upstream async-drop-glue for `{:?}`", args }
+        cache_on_disk
     }
 
     /// Returns a list of all `extern` blocks of a crate.
