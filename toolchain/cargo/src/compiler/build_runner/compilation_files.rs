@@ -798,7 +798,17 @@ fn compute_metadata(
     // Throw in the profile we're compiling with. This helps caching
     // `panic=abort` and `panic=unwind` artifacts, additionally with various
     // settings like debuginfo and whatnot.
-    unit.profile.hash(&mut shared_hasher);
+    // justrust: for metadata-only `check` units, `codegen_units` and `strip`
+    // never affect `.rmeta` bytes; normalize them to default so workspaces
+    // with custom `codegen-units`/`strip` share `c_metadata` and depcache keys.
+    if unit.mode.is_check() {
+        let mut p = unit.profile.clone();
+        p.codegen_units = None;
+        p.strip = crate::workspace::profiles::Profile::default().strip;
+        p.hash(&mut shared_hasher);
+    } else {
+        unit.profile.hash(&mut shared_hasher);
+    }
     unit.mode.hash(&mut shared_hasher);
     build_runner.lto[unit].hash(&mut shared_hasher);
 
@@ -891,7 +901,8 @@ fn compute_metadata(
         }
     } else {
         if !has_remap_path_prefix(&unit.rustflags) {
-            unit.rustflags.hash(&mut unit_id_hasher);
+            let filtered = filter_inert_rustflags_for_unit_hash(unit);
+            filtered.hash(&mut unit_id_hasher);
         }
     }
 
@@ -904,6 +915,51 @@ fn compute_metadata(
         c_extra_filename,
         pkg_dir,
     }
+}
+
+/// justrust: filter out rustflags that are empirically bit-for-bit inert for
+/// this unit's outputs so `-C extra-filename` (`unit_id`) stays identical across
+/// `-Zthreads=N` and (for non-linked `lib`/`rlib` or `check` units) linker flags.
+fn filter_inert_rustflags_for_unit_hash(unit: &Unit) -> Vec<&str> {
+    let crate_types = unit.target.rustc_crate_types();
+    let rlib_only = !crate_types.is_empty()
+        && crate_types
+            .iter()
+            .all(|ct| matches!(ct, CrateType::Lib | CrateType::Rlib));
+    let no_link = unit.mode.is_check() || rlib_only;
+    let flags = &unit.rustflags;
+    let mut out = Vec::with_capacity(flags.len());
+    let mut i = 0;
+    while i < flags.len() {
+        let a = flags[i].as_str();
+        let next = flags.get(i + 1).map(String::as_str);
+        if a == "-Zthreads" || a.starts_with("-Zthreads=") {
+            i += 1;
+            continue;
+        }
+        if a == "-Z" && next.is_some_and(|v| v == "threads" || v.starts_with("threads=")) {
+            i += 2;
+            continue;
+        }
+        if no_link {
+            let codegen = if a == "-C" {
+                next
+            } else {
+                a.strip_prefix("-C")
+            };
+            if codegen.is_some_and(|v| {
+                v.starts_with("linker=")
+                    || v.starts_with("link-arg=")
+                    || v.starts_with("link-args=")
+            }) {
+                i += if a == "-C" { 2 } else { 1 };
+                continue;
+            }
+        }
+        out.push(a);
+        i += 1;
+    }
+    out
 }
 
 /// HACK: Detect the *potential* presence of `--remap-path-prefix`
