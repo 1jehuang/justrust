@@ -947,10 +947,10 @@ impl Mirror {
         let script = format!(
             "test -d {src} && test -d {dst} && test -z \"$(ls -A {dst} | grep -vx -e target -e .justrust)\" \
              && rsync -a --exclude=target/ --exclude=.justrust/ {src}/ {dst}/ \
-             && {{ for inc in {src}/target/*/incremental; do \
+             && {{ for inc in {src}/target/*/incremental {src}/target/justrust-slots/*/*/incremental; do \
                     [ -d \"$inc\" ] || continue; \
-                    prof=$(basename \"$(dirname \"$inc\")\"); \
-                    mkdir -p {dst}/target/\"$prof\" && cp -a --reflink=auto \"$inc\" {dst}/target/\"$prof\"/ 2>/dev/null || true; \
+                    rel=\"${{inc#*/target/}}\"; \
+                    mkdir -p \"$(dirname {dst}/target/\"$rel\")\" && cp -a --reflink=auto \"$inc\" {dst}/target/\"$rel\" 2>/dev/null || true; \
                   done; true; }}"
         );
         let mut c = match &self.target {
