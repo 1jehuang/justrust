@@ -77,6 +77,9 @@ pub struct Summary {
     /// Everything the caller waited for, client to report (`e2e`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub e2e: Option<crate::e2e::E2e>,
+    /// First-principles theoretical optimal wall-time floor for this run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theoretical_floor: Option<crate::theoretical::TheoreticalFloor>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -441,6 +444,9 @@ pub struct IndexEntry {
     pub remote: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<String>,
+    /// First-principles theoretical optimal wall-time floor in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theoretical_floor_secs: Option<f64>,
 }
 
 /// Resolve saved provenance, never today's configured backend. Older clients
@@ -1261,6 +1267,14 @@ pub fn build(
         .filter_map(|l| parse_dirty(&l.l))
         .collect::<Vec<_>>();
 
+    let theoretical_floor = Some(crate::theoretical::compute(
+        &meta.subcommand,
+        &meta.args,
+        &git,
+        &stats,
+        &phases,
+        &tests,
+    ));
     Summary {
         client_version: Some(crate::update::VERSION.into()),
         id: meta.id.clone(),
@@ -1297,6 +1311,7 @@ pub fn build(
         route: meta.route.clone(),
         early: None,
         e2e: None,
+        theoretical_floor,
     }
 }
 
@@ -1484,6 +1499,7 @@ impl Summary {
                 )
                 .into(),
             ),
+            theoretical_floor_secs: self.theoretical_floor.as_ref().map(|f| f.total_secs),
         }
     }
 

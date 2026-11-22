@@ -675,6 +675,9 @@ pub(crate) struct RunRow {
     pub reuse: Option<ReuseStats>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeline: Option<Timeline>,
+    /// First-principles theoretical optimal wall-time floor in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theoretical_floor_secs: Option<f64>,
 }
 
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
@@ -1048,6 +1051,7 @@ fn index_rows(tail: &str) -> Vec<RunRow> {
             reuse: None,
             timeline: None,
             opt_level: None,
+            theoretical_floor_secs: entry.theoretical_floor_secs,
         })
         .collect()
 }
@@ -1123,6 +1127,9 @@ fn hosted_row(value: &Value) -> Option<RunRow> {
             .as_str()
             .filter(|level| matches!(*level, "0" | "1" | "2" | "3" | "s" | "z" | "mixed"))
             .map(str::to_owned),
+        theoretical_floor_secs: summary["theoretical_floor"]["total_secs"]
+            .as_f64()
+            .filter(|n| n.is_finite() && *n >= 0.0),
     })
 }
 

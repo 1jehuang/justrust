@@ -820,10 +820,8 @@ fn active_row(
         spans.extend([
             strong(pad("building", RESULT_WIDTH - 2), ACCENT),
             span(format!(" {}", pad(&run.place, WHERE_WIDTH)), LABEL),
-            span(
-                format!(" {elapsed:>7}     -     -     -  "),
-                wall_color(run.elapsed),
-            ),
+            span(format!(" {elapsed:>7}"), wall_color(run.elapsed)),
+            span("      -     -     -     -  ", DIM),
             span(pad("-", version_width / 2), DIM),
             span(" ", DIM),
             span(
@@ -839,7 +837,7 @@ fn active_row(
             strong("building", ACCENT),
             span(" · ", LABEL),
             span(elapsed, wall_color(run.elapsed)),
-            span(" · - · - · - · ", LABEL),
+            span(" · - · - · - · - · ", LABEL),
             span(label, VALUE),
             span(format!("  {detail}"), DIM),
         ]);
@@ -1103,16 +1101,17 @@ fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
     }
     let width = inner.width as usize;
     let wide = width >= 84;
-    // FRESH, CGU and OPT each take five cells plus a separator.
-    let remaining = width.saturating_sub(RESULT_WIDTH + WHERE_WIDTH + 7 + 9 + 4 + 6 + 6 + 6);
+    // FLOOR takes six cells plus a separator; FRESH, CGU and OPT each take five plus a separator.
+    let remaining = width.saturating_sub(RESULT_WIDTH + WHERE_WIDTH + 7 + 9 + 4 + 7 + 6 + 6 + 6);
     let version_width = remaining.saturating_sub(10).min(34);
     let command_width = remaining.saturating_sub(version_width);
     let header = if wide {
         format!(
-            "  {} {} {:>7} FRESH   CGU   OPT  {} {}{}{:>9}",
+            "  {} {} {:>7} {:>6} FRESH   CGU   OPT  {} {}{}{:>9}",
             pad("RESULT", RESULT_WIDTH - 2),
             pad("WHERE", WHERE_WIDTH),
             "WALL",
+            "FLOOR",
             pad(
                 if version_width / 2 >= 9 {
                     "TOOLCHAIN"
@@ -1129,12 +1128,12 @@ fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
             "WHEN"
         )
     } else {
-        "  RESULT · WHEN · FRESH · CGU · OPT · COMMAND · TC  CLIENT".into()
+        "  RESULT · WHEN · FLOOR · FRESH · CGU · OPT · COMMAND · TC  CLIENT".into()
     };
     let mut lines = vec![
         kind_bar(state, width, rows),
         line(
-            "-: unavailable · FRESH: Cargo units fresh · CGU: codegen units reused",
+            "-: unavailable · FLOOR: theoretical optimal · FRESH: Cargo units fresh · CGU: codegen units reused",
             DIM,
             width,
         ),
@@ -1186,6 +1185,10 @@ fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
             },
         );
         let opt = run.opt_level.as_deref().unwrap_or("-");
+        let floor = run
+            .theoretical_floor_secs
+            .map(crate::theoretical::format_short)
+            .unwrap_or_else(|| "-".into());
         let versions = run_versions(
             run,
             if run.origin == "local" {
@@ -1212,7 +1215,10 @@ fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
                         DIM
                     },
                 ),
-                span(format!(" {fresh:>5} {reuse:>5} {opt:>5}  "), LABEL),
+                span(
+                    format!(" {floor:>6} {fresh:>5} {reuse:>5} {opt:>5}  "),
+                    LABEL,
+                ),
             ]);
             let padding = version_width.saturating_sub(versions.width());
             spans.extend(versions.spans);
@@ -1226,7 +1232,10 @@ fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
             spans.extend([
                 span(result, color),
                 span(
-                    format!(" · {} · {fresh} · {reuse} · {opt} · ", when(run.start)),
+                    format!(
+                        " · {} · {floor} · {fresh} · {reuse} · {opt} · ",
+                        when(run.start)
+                    ),
                     LABEL,
                 ),
             ]);
@@ -2368,18 +2377,19 @@ mod tests {
         );
         failed.start = crate::paths::now() - 300.0;
         failed.opt_level = Some("z".into());
+        failed.theoretical_floor_secs = Some(0.025);
         failed.place = "remote".into();
         state.snapshot.runs = vec![failed];
         let text = screen(&state, 140, 30);
         assert!(text.contains("tests failed"), "{text}");
         assert!(text.contains("5m ago"), "{text}");
-        assert!(text.contains("FRESH   CGU   OPT  TOOLCHAIN"));
+        assert!(text.contains("FLOOR FRESH   CGU   OPT  TOOLCHAIN"));
         let row = text.lines().find(|l| l.contains("● tests failed")).unwrap();
         assert!(
-            row.contains("-     z  -") && row.contains("test -p ui"),
+            row.contains("25ms") && row.contains("-     z  -") && row.contains("test -p ui"),
             "{row}"
         );
-        assert!(screen(&state, 70, 30).contains(" · - · - · z · test -p ui"));
+        assert!(screen(&state, 76, 30).contains(" · 25ms · - · - · z · test -p ui"));
         assert!(text.contains("WHEN"));
         // The wide layout shows the age in place of the run ID.
         let history = text.split("─ Runs").nth(1).unwrap();
@@ -2510,7 +2520,7 @@ mod tests {
         assert!(!screen(&state, 140, 30).contains("jcode test  hosted"));
         state.snapshot.active[0].running = vec![("serde".into(), 1.0)];
         // The narrow layout keeps it too.
-        assert!(screen(&state, 70, 30).contains("building · 1m15s · - · - · - · jcode test"));
+        assert!(screen(&state, 70, 30).contains("building · 1m15s · - · - · - · - · jcode test"));
 
         assert_eq!(wall_color(2.0), GOOD);
         assert_eq!(wall_color(30.0), VALUE);

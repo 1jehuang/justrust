@@ -77,6 +77,9 @@ pub struct GitInfo {
     pub root: Option<String>,
     pub head: Option<String>,
     pub dirty_files: Option<usize>,
+    /// Total added + deleted lines in modified `.rs` files relative to HEAD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dirty_rs_lines: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1786,7 +1789,19 @@ fn git_info() -> GitInfo {
         head,
         dirty_files: run(&["status", "--porcelain", "--untracked-files=no"])
             .map(|s| s.lines().count()),
+        dirty_rs_lines: run(&["diff", "--numstat", "HEAD", "--", "*.rs"]).map(parse_numstat_lines),
     }
+}
+
+fn parse_numstat_lines(out: String) -> usize {
+    out.lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let add: usize = parts.next()?.parse().ok()?;
+            let del: usize = parts.next()?.parse().ok()?;
+            Some(add.saturating_add(del))
+        })
+        .sum()
 }
 
 fn git_root_head(run: impl Fn(&[&str]) -> Option<String>) -> (Option<String>, Option<String>) {

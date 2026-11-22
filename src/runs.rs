@@ -208,14 +208,19 @@ pub fn list(limit: usize, here: bool, json: bool, filter: FailFilter) -> Result<
         return Ok(());
     }
     println!(
-        "{:<26} {:>8} {:>8} {:>8} {:>6} {:>5} {:<9}  {:<10} COMMAND",
-        "ID", "WALL", "COMPILE", "TESTS", "UNITS", "EXIT", "CAUSE", "WHEN"
+        "{:<26} {:>8} {:>7} {:>8} {:>8} {:>6} {:>5} {:<9}  {:<10} COMMAND",
+        "ID", "WALL", "FLOOR", "COMPILE", "TESTS", "UNITS", "EXIT", "CAUSE", "WHEN"
     );
     for r in &runs {
+        let floor = r
+            .theoretical_floor_secs
+            .map(crate::theoretical::format_short)
+            .unwrap_or_else(|| "-".into());
         println!(
-            "{:<26} {:>7.1}s {:>7.1}s {:>7.1}s {:>6} {:>5} {:<9}  {:<10} cargo {}",
+            "{:<26} {:>7.1}s {:>7} {:>7.1}s {:>7.1}s {:>6} {:>5} {:<9}  {:<10} cargo {}",
             r.id,
             r.wall,
+            floor,
             r.compile + 0.0,
             r.test_run + 0.0,
             r.units_compiled,
@@ -418,6 +423,25 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
     }
     if let Some(a) = &s.agent_session {
         let _ = writeln!(o, "agent    {a}");
+    }
+    if let Some(f) = &s.theoretical_floor {
+        let ratio = if f.total_secs > 0.0 {
+            format!(" ({:.1}x above theoretical optimal)", s.wall / f.total_secs)
+        } else {
+            String::new()
+        };
+        let _ = writeln!(
+            o,
+            "floor    {}{ratio}  [overhead {}, frontend {}, codegen {}, link {}, tests {}; {} dirty lines{}]",
+            crate::theoretical::format_short(f.total_secs),
+            crate::theoretical::format_short(f.overhead_secs),
+            crate::theoretical::format_short(f.frontend_secs),
+            crate::theoretical::format_short(f.codegen_secs),
+            crate::theoretical::format_short(f.link_secs),
+            crate::theoretical::format_short(f.test_secs),
+            f.dirty_lines,
+            if f.cold { ", cold" } else { "" },
+        );
     }
     if let Some(r) = &s.remote {
         let meta = std::fs::read(dir.join("meta.json"))

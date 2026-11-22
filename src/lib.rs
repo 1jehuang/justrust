@@ -56,6 +56,7 @@ mod remote_windows;
 mod reuse;
 mod stock_verify;
 mod test_reuse;
+mod theoretical;
 // Build-host eviction runs on Unix hosts only.
 #[cfg_attr(not(unix), allow(dead_code))]
 mod remote_evict;
