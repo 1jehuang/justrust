@@ -1024,6 +1024,7 @@ struct CanonicalDirGuard {
     origin: PathBuf,
     canonical: PathBuf,
     origin_file: PathBuf,
+    shared_incr: PathBuf,
     _lock: std::fs::File,
 }
 
@@ -1068,10 +1069,13 @@ impl CanonicalDirGuard {
             let _ = std::fs::remove_file(&origin_file);
             return None;
         }
+        let shared_incr = ws_dir.join(format!("{repo}.incr"));
+        let _ = std::fs::create_dir_all(&shared_incr);
         Some(Self {
             origin: cwd.to_path_buf(),
             canonical,
             origin_file,
+            shared_incr,
             _lock: lock_file,
         })
     }
@@ -1123,6 +1127,10 @@ fn start_run(
     let run_cwd = cwd;
 
     let mut c = Command::new(executable);
+    #[cfg(unix)]
+    if let Some(g) = &_canonical_guard {
+        c.env("JUSTRUST_SHARED_INCREMENTAL_DIR", &g.shared_incr);
+    }
     c.args(args)
         .current_dir(run_cwd)
         .envs(env.iter().map(|(k, v)| (k, v)).filter(|(k, _)| {

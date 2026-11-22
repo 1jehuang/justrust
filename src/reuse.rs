@@ -252,16 +252,26 @@ pub fn render_run(units: &[crate::shim::Unit]) -> String {
         .collect();
     rows.sort_by(|a, b| b.1.avoidable_secs.total_cmp(&a.1.avoidable_secs));
     for (u, t) in rows.iter().take(8) {
+        let cold_note = if t.cgu_reused == 0 && t.cgu_recompiled > 0 {
+            match u.incr_prior_session {
+                Some(false) => "  [empty incr dir]",
+                Some(true) => "  [prior session rejected]",
+                None => "",
+            }
+        } else {
+            ""
+        };
         let _ = writeln!(
             o,
-            "  {:<28} {:>7.1}s {:>8.2}s {:>7.2}s {:>8.2}s {:>5}/{:<3}",
+            "  {:<28} {:>7.1}s {:>8.2}s {:>7.2}s {:>8.2}s {:>5}/{:<3}{}",
             unit_label(u),
             u.wall,
             t.avoidable_secs,
             t.opaque_secs,
             t.necessary_secs,
             t.cgu_reused,
-            t.cgu_reused + t.cgu_recompiled
+            t.cgu_reused + t.cgu_recompiled,
+            cold_note,
         );
     }
     let queries = by_query(with.iter().map(|u| u.reuse.as_slice()));

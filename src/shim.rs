@@ -42,6 +42,12 @@ pub struct Unit {
     pub emit: String,
     pub opt_level: String,
     pub incremental: bool,
+    /// For incremental compiles, whether `-C incremental=<dir>` already
+    /// contained a prior `s-*` session for this crate before rustc started.
+    /// Distinguishes an unseeded/empty incremental dir from rustc rejecting a
+    /// prior session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incr_prior_session: Option<bool>,
     pub frontend_threads: Option<u32>,
     pub start: f64,
     pub end: f64,
@@ -169,9 +175,27 @@ fn share_slot_incremental(args: &mut [OsString]) {
     }
 }
 
-/// `<root>/justrust-slots/<n>/<rest...>/incremental` -> `<root>/<rest...>/incremental`.
+/// Redirect `-C incremental=...` to a shared incremental directory:
+/// 1. If `JUSTRUST_SHARED_INCREMENTAL_DIR` is set (e.g. hosted canonical repo
+///    guard), map `<anything>/<profile>/incremental` to
+///    `<JUSTRUST_SHARED_INCREMENTAL_DIR>/<profile>/incremental` so all
+///    worktrees of the same repo share one warm incremental cache.
+/// 2. Otherwise map `<root>/justrust-slots/<n>/<rest...>/incremental` ->
+///    `<root>/<rest...>/incremental`.
 fn shared_incremental_dir(p: &std::path::Path) -> Option<PathBuf> {
     let comps: Vec<_> = p.components().collect();
+    if comps.last()?.as_os_str() != "incremental" {
+        return None;
+    }
+    if let Some(base) = std::env::var_os("JUSTRUST_SHARED_INCREMENTAL_DIR")
+        && !base.is_empty()
+        && comps.len() >= 2
+    {
+        let profile = comps[comps.len() - 2].as_os_str();
+        let out = PathBuf::from(base).join(profile).join("incremental");
+        let _ = std::fs::create_dir_all(&out);
+        return Some(out);
+    }
     let at = comps
         .iter()
         .position(|c| c.as_os_str() == "justrust-slots")?;
@@ -179,12 +203,53 @@ fn shared_incremental_dir(p: &std::path::Path) -> Option<PathBuf> {
     if slot.is_empty() || !slot.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    if comps.last()?.as_os_str() != "incremental" || comps.len() < at + 4 {
+    if comps.len() < at + 4 {
         return None;
     }
     let mut out: PathBuf = comps[..at].iter().collect();
     out.extend(&comps[at + 2..]);
     Some(out)
+}
+
+/// Check whether `-C incremental=<dir>` already contains a prior `s-*`
+/// session directory for `crate_name` before rustc runs.
+fn prior_incr_session(args: &[OsString], crate_name: &str) -> Option<bool> {
+    let mut dir: Option<PathBuf> = None;
+    for i in 0..args.len() {
+        let a = args[i].to_string_lossy();
+        if let Some(p) = a.strip_prefix("-Cincremental=") {
+            dir = Some(PathBuf::from(p));
+            break;
+        }
+        if a == "-C"
+            && let Some(next) = args.get(i + 1)
+            && let Some(p) = next.to_string_lossy().strip_prefix("incremental=")
+        {
+            dir = Some(PathBuf::from(p));
+            break;
+        }
+    }
+    let dir = dir?;
+    let prefix = format!("{crate_name}-");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Some(false),
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(&prefix) {
+            continue;
+        }
+        if let Ok(sub) = std::fs::read_dir(entry.path()) {
+            for s in sub.flatten() {
+                if s.file_name().to_string_lossy().starts_with("s-") {
+                    return Some(true);
+                }
+            }
+        }
+    }
+    Some(false)
 }
 
 fn exec(real: &PathBuf, args: &[OsString]) -> ! {
@@ -638,6 +703,11 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     let early = (plan.is_none() && described.local && described.incremental && early_reply_on())
         .then(|| EarlyReply::attach(&mut cmd))
         .flatten();
+    let incr_prior_session = if described.incremental {
+        prior_incr_session(args, &described.crate_name)
+    } else {
+        None
+    };
     let start = paths::now();
     let spawned = cmd.spawn();
     let early = early.map(EarlyReply::spawned);
@@ -768,6 +838,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     if exit == 0 {
         write_unit_cost(args, user + sys, "cpu");
     }
+    unit.incr_prior_session = incr_prior_session;
     if let Ok(line) = serde_json::to_string(&unit) {
         let _ = paths::append_line(&run_dir.join("units.jsonl"), &line);
     }
