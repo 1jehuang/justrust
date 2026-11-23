@@ -106,6 +106,7 @@ const FORWARDED_ENV: &[&str] = &[
     "JUSTRUST_UNIFY_FEATURES",
     "JUSTRUST_EARLY",
     "JUSTRUST_EARLY_EXPERIMENTAL",
+    "JUSTRUST_CANONICAL_WS",
     // Explicit guest-side experiment. Never forward local native paths.
     "JUSTRUST_HOSTED_HYBRID",
     "JUSTRUST_HOSTED_HYBRID_ENGINE",

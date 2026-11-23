@@ -1089,6 +1089,34 @@ fn bwrap_canonical_mount(cwd: &Path, env: &[(String, String)]) -> Option<PathBuf
         return None;
     }
     std::fs::create_dir_all(&canonical).ok()?;
+    // Verify the bind mount actually exposes Cargo.toml inside the bwrap
+    // namespace before committing to it; fail open to `cwd` otherwise.
+    let uid = unsafe { libc::geteuid() };
+    let gid = unsafe { libc::getegid() };
+    let verified = Command::new("/usr/bin/bwrap")
+        .args(["--unshare-user", "--uid"])
+        .arg(uid.to_string())
+        .arg("--gid")
+        .arg(gid.to_string())
+        .args(["--dev-bind", "/", "/", "--bind"])
+        .arg(cwd)
+        .arg(&canonical)
+        .arg("--chdir")
+        .arg(&canonical)
+        .args(["--", "/usr/bin/test", "-f", "Cargo.toml"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !verified {
+        eprintln!(
+            "justrust agent: bwrap canonical mount probe failed (cwd={}, canonical={}); falling back to cwd",
+            cwd.display(),
+            canonical.display()
+        );
+        return None;
+    }
     Some(canonical)
 }
 
@@ -1169,11 +1197,16 @@ fn start_run(
     }))
     .env_remove(crate::remote_proto::CLIENT_UMASK)
     .env_remove(crate::remote_proto::CLIENT_LIVE_CPU)
-    .env_remove("JUSTRUST_CANONICAL_REPO")
-    .stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .detached();
+    .env_remove("JUSTRUST_CANONICAL_REPO");
+    if canonical_mount.is_some() {
+        // An out-of-namespace jr-cargo daemon cannot see this process's private
+        // bwrap bind mount; keep Cargo inside the bwrap mount namespace.
+        c.env("JUSTRUST_CARGO_DAEMON", "0");
+    }
+    c.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .detached();
     own_run_lifetime(&mut c);
     // Never allow inherited experiment state or detached prewarm to leak into
     // ordinary guest runs. Fallback re-execs keep ON_AGENT and remove HYBRID,
