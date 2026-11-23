@@ -1047,7 +1047,7 @@ fn bwrap_available() -> bool {
             .arg(uid.to_string())
             .arg("--gid")
             .arg(gid.to_string())
-            .args(["--dev-bind", "/", "/", "--", "/bin/true"])
+            .args(["--dev-bind", "/", "/", "--", "/usr/bin/true"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1073,7 +1073,7 @@ fn bwrap_canonical_mount(cwd: &Path, env: &[(String, String)]) -> Option<PathBuf
         return None;
     }
     let (_, repo) = env.iter().find(|(k, _)| k == "JUSTRUST_CANONICAL_REPO")?;
-    if !valid_canonical_repo(repo) || !cwd.is_dir() || !cwd.join(".git").exists() {
+    if !valid_canonical_repo(repo) || !cwd.is_dir() || !cwd.join("Cargo.toml").is_file() {
         return None;
     }
     let canonical = crate::paths::home().ok()?.join("ws").join(repo);

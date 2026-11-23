@@ -1904,7 +1904,7 @@ fn run_remote_inner(
     }
     if let Some(repo) = roots
         .iter()
-        .find(|r| cwd.starts_with(r))
+        .find(|r| cwd == **r)
         .and_then(|r| crate::remote_sync::repo_id(r))
         .and_then(|id| id.root_commits.into_iter().next())
     {
