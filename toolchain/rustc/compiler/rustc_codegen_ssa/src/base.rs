@@ -768,7 +768,7 @@ pub fn codegen_crate<
     let bitcode_needed = regular_module_config.bitcode_needed();
     let allocator_module_config = ModuleConfig::new(ModuleKind::Allocator, tcx, no_builtins);
 
-    let ongoing_codegen = start_async_codegen(
+    let mut ongoing_codegen = start_async_codegen(
         backend.clone(),
         tcx,
         Arc::new(regular_module_config),
@@ -853,6 +853,7 @@ pub fn codegen_crate<
             match cgu_reuse[i] {
                 CguReuse::No => no_reuse.push(i),
                 CguReuse::PreLto => {
+                    ongoing_codegen.wait_for_signal_to_codegen_item();
                     ongoing_codegen.check_for_errors(tcx.sess);
                     submit_pre_lto_module_to_llvm(
                         tcx,
@@ -865,6 +866,8 @@ pub fn codegen_crate<
                     tcx.dcx().abort_if_errors();
                 }
                 CguReuse::PostLto => {
+                    ongoing_codegen.wait_for_signal_to_codegen_item();
+                    ongoing_codegen.check_for_errors(tcx.sess);
                     submit_post_lto_module_to_llvm(
                         &ongoing_codegen.coordinator,
                         CachedModuleCodegen {
@@ -877,27 +880,17 @@ pub fn codegen_crate<
         }
         if !no_reuse.is_empty() {
             let start_time = Instant::now();
-            let sender = IntoDynSyncSend(std::sync::Mutex::new(
-                ongoing_codegen.coordinator.sender.clone(),
-            ));
+            let submit = IntoDynSyncSend(std::sync::Mutex::new(&mut ongoing_codegen));
             par_for_each_in(no_reuse, |i| {
-                let sender = &sender;
+                let submit = &submit;
                 let _jr_cpu = rustc_data_structures::profiling::jr_cgu_cpu(
                     codegen_units[*i].name().as_str(),
                 );
                 let (module, cost) =
                     backend.compile_codegen_unit(tcx, codegen_units[*i].name(), bitcode_needed);
-                let llvm_work_item = crate::back::write::WorkItem::Optimize(module);
-                drop(
-                    sender
-                        .0
-                        .lock()
-                        .unwrap()
-                        .send(crate::back::write::Message::CodegenDone::<B> {
-                            llvm_work_item,
-                            cost,
-                        }),
-                );
+                let guard = submit.0.lock().unwrap();
+                guard.wait_for_signal_to_codegen_item();
+                submit_codegened_module_to_llvm(&guard.coordinator, module, cost);
             });
             total_codegen_time += start_time.elapsed();
             ongoing_codegen.check_for_errors(tcx.sess);
