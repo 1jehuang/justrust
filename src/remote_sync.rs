@@ -137,6 +137,7 @@ pub struct Scan {
 /// files that are not gitignored (or a plain walk outside git).
 pub fn scan(root: &Path) -> Result<Scan> {
     let mut out = Scan::default();
+    let ignore = JustrustIgnore::load(root);
     let (listed, locks) = discover_source_entries(root);
     let rels: Vec<PathBuf> = match listed {
         Ok(o) if o.status.success() => o
@@ -145,7 +146,7 @@ pub fn scan(root: &Path) -> Result<Scan> {
             .filter(|p| !p.is_empty())
             .map(|p| PathBuf::from(String::from_utf8_lossy(p).into_owned()))
             .collect(),
-        _ => walk(root)?,
+        _ => walk_with_ignore(root, None, &ignore)?,
     };
     let mut rels = rels;
     // Lockfiles decide which dependency versions the machine builds. Many
@@ -159,7 +160,7 @@ pub fn scan(root: &Path) -> Result<Scan> {
     }
     let mut files = Vec::with_capacity(rels.len());
     for rel in rels {
-        if skip_listed(root, &rel) {
+        if skip_listed(root, &rel) || ignore.matches(&rel) {
             continue;
         }
         // Tracked files deleted from the worktree fail here and count as gone.
@@ -317,13 +318,134 @@ fn skip_listed(root: &Path, rel: &Path) -> bool {
     false
 }
 
-fn walk(root: &Path) -> Result<Vec<PathBuf>> {
-    walk_matching(root, None)
+#[derive(Debug, Default)]
+struct JustrustIgnore {
+    rules: Vec<IgnoreRule>,
+}
+
+#[derive(Debug)]
+struct IgnoreRule {
+    pattern: String,
+    anchored: bool,
+    dir_only: bool,
+}
+
+impl JustrustIgnore {
+    fn load(root: &Path) -> Self {
+        let Ok(text) = std::fs::read_to_string(root.join(".justrustignore")) else {
+            return Self::default();
+        };
+        Self::parse(&text)
+    }
+
+    fn parse(text: &str) -> Self {
+        let mut rules = Vec::new();
+        for raw in text.lines() {
+            let line = raw.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
+                continue;
+            }
+            let dir_only = line.ends_with('/');
+            let trimmed = line.trim_end_matches('/');
+            if trimmed.is_empty() {
+                continue;
+            }
+            let anchored = trimmed.starts_with('/') || trimmed.contains('/');
+            let pattern = trimmed.trim_start_matches('/').to_string();
+            if !pattern.is_empty() {
+                rules.push(IgnoreRule {
+                    pattern,
+                    anchored,
+                    dir_only,
+                });
+            }
+        }
+        Self { rules }
+    }
+
+    fn matches(&self, rel: &Path) -> bool {
+        if self.rules.is_empty() {
+            return false;
+        }
+        let rel_str = rel.to_string_lossy();
+        let rel_norm = rel_str.replace('\\', "/");
+        let rel_norm = rel_norm.trim_matches('/');
+        if rel_norm.is_empty() {
+            return false;
+        }
+        for rule in &self.rules {
+            if rule.anchored {
+                if glob_match(&rule.pattern, rel_norm) {
+                    return true;
+                }
+                // Also match any descendant of an ignored directory/prefix.
+                if let Some(rest) = rel_norm.strip_prefix(&rule.pattern)
+                    && rest.starts_with('/')
+                {
+                    return true;
+                }
+            } else {
+                // Unanchored single-segment pattern: match any path component
+                // (or for dir_only, any non-final component or the whole path when checking a dir).
+                let mut parts = rel_norm.split('/').peekable();
+                while let Some(part) = parts.next() {
+                    let is_last = parts.peek().is_none();
+                    if rule.dir_only && is_last {
+                        // Still match if caller is checking a directory path itself,
+                        // or if it's a file, dir_only won't match a file's leaf unless
+                        // checked as a dir. In scan() rel is a file, in walk() dirs are
+                        // checked before descending.
+                        if glob_match(&rule.pattern, part) && !rel_norm.contains('/') {
+                            return true;
+                        }
+                    } else if glob_match(&rule.pattern, part) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let p = pattern.as_bytes();
+    let t = text.as_bytes();
+    let (mut pi, mut ti) = (0, 0);
+    let (mut star_pi, mut star_ti) = (None, 0);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == b'?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == b'*' {
+            star_pi = Some(pi);
+            star_ti = ti;
+            pi += 1;
+        } else if let Some(sp) = star_pi {
+            pi = sp + 1;
+            star_ti += 1;
+            ti = star_ti;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == b'*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+fn walk_matching(root: &Path, wanted: Option<&std::ffi::OsStr>) -> Result<Vec<PathBuf>> {
+    walk_with_ignore(root, wanted, &JustrustIgnore::load(root))
 }
 
 /// Traverse with identical pruning and symlink rules, optionally retaining only
 /// a specific filename. Check entry type/name before constructing its path.
-fn walk_matching(root: &Path, wanted: Option<&std::ffi::OsStr>) -> Result<Vec<PathBuf>> {
+fn walk_with_ignore(
+    root: &Path,
+    wanted: Option<&std::ffi::OsStr>,
+    ignore: &JustrustIgnore,
+) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     let mut stack = vec![PathBuf::new()];
     while let Some(rel) = stack.pop() {
@@ -339,14 +461,22 @@ fn walk_matching(root: &Path, wanted: Option<&std::ffi::OsStr>) -> Result<Vec<Pa
                 continue;
             }
             match e.file_type() {
-                Ok(t) if t.is_dir() => dirs.push(name),
+                Ok(t) if t.is_dir() => {
+                    let child = rel.join(&name);
+                    if !ignore.matches(&child) {
+                        dirs.push(name);
+                    }
+                }
                 Ok(t) if t.is_file() => {
                     if name == "CACHEDIR.TAG" {
                         is_cachedir = true;
                         break;
                     }
                     if wanted.is_none_or(|wanted| name == wanted) {
-                        files.push(name);
+                        let child = rel.join(&name);
+                        if !ignore.matches(&child) {
+                            files.push(name);
+                        }
                     }
                 }
                 _ => {}
@@ -402,6 +532,7 @@ fn target_source_filters(root: &Path) -> Vec<String> {
 }
 
 fn target_filters_from_listing(root: &Path, listing: &[u8]) -> Vec<String> {
+    let ignore = JustrustIgnore::load(root);
     let mut files = BTreeSet::new();
     let mut directories = BTreeSet::new();
     let mut targets = BTreeSet::new();
@@ -410,6 +541,9 @@ fn target_filters_from_listing(root: &Path, listing: &[u8]) -> Vec<String> {
         .filter(|name| !name.is_empty())
     {
         let rel = PathBuf::from(String::from_utf8_lossy(name).into_owned());
+        if ignore.matches(&rel) {
+            continue;
+        }
         if !rel
             .parent()
             .is_some_and(|parent| parent.components().any(|c| c.as_os_str() == "target"))
@@ -1004,6 +1138,7 @@ impl Mirror {
             "--exclude=.justrust/",
             // Lockfiles travel even when gitignored (see `scan`).
             "--include=Cargo.lock",
+            "--filter=:- .justrustignore",
             "--filter=:- .gitignore",
         ]);
         let dst = match &self.target {
@@ -2573,6 +2708,54 @@ mod tests {
         let seeds = pick_seeds(&archive, &[unrelated.clone(), edited.clone(), orig.clone()]);
         assert_eq!(seeds, vec![orig.clone(), edited.clone()]);
         assert!(pick_seeds(&unrelated, &[orig.clone(), edited.clone()]).is_empty());
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn justrustignore_excludes_tracked_and_untracked_trees_from_scan_and_rsync() {
+        let d = std::env::temp_dir().join(format!("jr-ignore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let src = d.join("src_repo");
+        let dst = d.join("dst_mirror");
+        std::fs::create_dir_all(src.join("src")).unwrap();
+        std::fs::create_dir_all(src.join("toolchain/rustc")).unwrap();
+        std::fs::create_dir_all(src.join("bench/results")).unwrap();
+        std::fs::write(
+            src.join(".justrustignore"),
+            "# comment\n/toolchain/\n/bench/results/\n*.tmp\n",
+        )
+        .unwrap();
+        std::fs::write(src.join("src/lib.rs"), "pub fn ok() {}\n").unwrap();
+        std::fs::write(src.join("src/scratch.tmp"), "ignored\n").unwrap();
+        std::fs::write(src.join("toolchain/rustc/big.rs"), "ignored\n").unwrap();
+        std::fs::write(src.join("bench/results/out.json"), "{}\n").unwrap();
+
+        let scanned = scan(&src).unwrap();
+        assert!(scanned.files.contains_key(Path::new("src/lib.rs")));
+        assert!(
+            !scanned
+                .files
+                .contains_key(Path::new("toolchain/rustc/big.rs"))
+        );
+        assert!(
+            !scanned
+                .files
+                .contains_key(Path::new("bench/results/out.json"))
+        );
+        assert!(!scanned.files.contains_key(Path::new("src/scratch.tmp")));
+
+        let mirror = Mirror {
+            target: None,
+            prefix: dst.display().to_string(),
+        };
+        mirror.prepare(&src).unwrap();
+        mirror.rsync_with(&src, false).unwrap();
+        let remote = PathBuf::from(mirror.remote(&src));
+        assert!(remote.join("src/lib.rs").is_file());
+        assert!(!remote.join("toolchain/rustc/big.rs").exists());
+        assert!(!remote.join("bench/results/out.json").exists());
+        assert!(!remote.join("src/scratch.tmp").exists());
 
         let _ = std::fs::remove_dir_all(&d);
     }

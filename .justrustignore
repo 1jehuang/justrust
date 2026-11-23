@@ -1,0 +1,4 @@
+# Exclude large vendored/generated directories not needed for building or testing the justrust client.
+/toolchain/
+/.wrangler/
+/bench/results/
