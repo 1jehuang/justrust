@@ -940,18 +940,13 @@ impl Mirror {
             shell_quote(&self.remote(from)),
             shell_quote(&self.remote(root)),
         );
-        // Only into a mirror holding nothing but build output. After seeding
-        // sources, best-effort copy rustc's content-hashed incremental dirs
-        // (`target/*/incremental`) so the first edit in a new worktree reuses
-        // incremental query state instead of compiling the edited crate cold.
+        // Only into a mirror holding nothing but build output. Sources only:
+        // incremental state is shared across worktrees via CanonicalDirGuard's
+        // JUSTRUST_SHARED_INCREMENTAL_DIR with zero copying (copying multi-GB
+        // incremental dirs on ext4 previously cost 22s+ on cold clones).
         let script = format!(
             "test -d {src} && test -d {dst} && test -z \"$(ls -A {dst} | grep -vx -e target -e .justrust)\" \
-             && rsync -a --exclude=target/ --exclude=.justrust/ {src}/ {dst}/ \
-             && {{ for inc in {src}/target/*/incremental {src}/target/justrust-slots/*/*/incremental; do \
-                    [ -d \"$inc\" ] || continue; \
-                    rel=\"${{inc#*/target/}}\"; \
-                    mkdir -p \"$(dirname {dst}/target/\"$rel\")\" && cp -a --reflink=auto \"$inc\" {dst}/target/\"$rel\" 2>/dev/null || true; \
-                  done; true; }}"
+             && rsync -a --exclude=target/ --exclude=.justrust/ {src}/ {dst}/"
         );
         let mut c = match &self.target {
             Some(t) => {

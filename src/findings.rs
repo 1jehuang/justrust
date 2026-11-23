@@ -228,9 +228,14 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
             format!(
                 "{} dependency units missed the shared dependency cache and compiled \
                  ({:.1}s of rustc); they are cached now, so other target dirs, slots, \
-                 and checkouts reuse them{}{}",
+                 and checkouts reuse them{}{}{}",
                 u.depcache_misses,
                 u.depcache_miss_secs,
+                if u.depcache_misses >= 20 && u.depcache_hits == 0 {
+                    ". Shared/prebuilt cache had 0 hits for this toolchain (the prebuild fleet may not have published it yet)"
+                } else {
+                    ""
+                },
                 if u.depcache_miss_why.is_empty() {
                     String::new()
                 } else {
