@@ -1,6 +1,6 @@
 [package]
 name = "justrust"
-version = "0.1.51"
+version = "0.1.52"
 edition = "2024"
 rust-version = "1.91"
 readme = "README.md"
