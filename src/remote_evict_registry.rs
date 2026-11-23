@@ -110,7 +110,7 @@ impl Store {
         Ok(meta)
     }
 
-    fn read(&self, path: &Path) -> io::Result<(Receipt, File, u64)> {
+    fn read_verified_receipt(&self, path: &Path) -> io::Result<(Receipt, File, u64)> {
         let file = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
@@ -132,15 +132,20 @@ impl Store {
         {
             return Err(io::Error::other("receipt principal/scope mismatch"));
         }
-        let root = self.identity(&receipt.root)?;
-        if root.dev() != receipt.device || root.ino() != receipt.inode {
-            return Err(io::Error::other("registered root was replaced"));
-        }
         let stamp = meta
             .modified()?
             .duration_since(UNIX_EPOCH)
             .map_err(io::Error::other)?
             .as_secs();
+        Ok((receipt, file, stamp))
+    }
+
+    fn read(&self, path: &Path) -> io::Result<(Receipt, File, u64)> {
+        let (receipt, file, stamp) = self.read_verified_receipt(path)?;
+        let root = self.identity(&receipt.root)?;
+        if root.dev() != receipt.device || root.ino() != receipt.inode {
+            return Err(io::Error::other("registered root was replaced"));
+        }
         Ok((receipt, file, stamp))
     }
 
@@ -155,9 +160,19 @@ impl Store {
     pub fn register(&self, root: &Path) -> io::Result<()> {
         let meta = self.identity(root)?;
         let path = self.path(root);
+        let mut replace_stale = false;
         if path.try_exists()? {
-            // Do not overwrite an invalid receipt, even through a new Synced.
-            return self.activity(root);
+            // Do not overwrite an untrusted or foreign receipt, even through a new Synced.
+            // If the receipt itself is valid for this principal/scope/root and only its
+            // (device, inode) is stale because the mirror directory was recreated, refresh it.
+            let (existing, _, _) = self.read_verified_receipt(&path)?;
+            if existing.root != root {
+                return Err(io::Error::other("receipt root mismatch"));
+            }
+            if existing.device == meta.dev() && existing.inode == meta.ino() {
+                return self.activity(root);
+            }
+            replace_stale = true;
         }
         let receipt = Receipt {
             version: 1,
@@ -184,13 +199,17 @@ impl Store {
                 .open(&temp)?;
             f.write_all(&serde_json::to_vec(&receipt)?)?;
             f.sync_all()?;
-            // Hard link publishes without replacing a concurrent registration.
-            match std::fs::hard_link(&temp, &path) {
-                Ok(()) => (),
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
-                Err(e) => return Err(e),
+            if replace_stale {
+                std::fs::rename(&temp, &path)?;
+            } else {
+                // Hard link publishes without replacing a concurrent registration.
+                match std::fs::hard_link(&temp, &path) {
+                    Ok(()) => (),
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
+                    Err(e) => return Err(e),
+                }
+                std::fs::remove_file(&temp)?;
             }
-            std::fs::remove_file(&temp)?;
             File::open(&self.dir)?.sync_all()?;
             self.activity(root)
         })();

@@ -487,3 +487,31 @@ fn real_live_process_cwd_is_excluded() {
     child.wait().unwrap();
     assert!(busy);
 }
+
+#[test]
+fn register_refreshes_valid_receipt_with_stale_inode_but_rejects_tampered() {
+    if ev::lock_tests::isolated_lock_test(
+        "remote_evict::durable::tests::register_refreshes_valid_receipt_with_stale_inode_but_rejects_tampered",
+    ) {
+        return;
+    }
+    let f = Fixture::new();
+    let root = f.root("recreated");
+    let store = f.store();
+    store.register(&root).unwrap();
+
+    // Replace root directory with a new inode; state() must still fail closed,
+    // while a fresh register() from Synced heals the stale inode.
+    std::fs::rename(&root, f.0.join("recreated-old")).unwrap();
+    f.root("recreated");
+    assert!(store.state(&root).is_err());
+    store.register(&root).unwrap();
+    assert!(store.state(&root).is_ok());
+
+    // A tampered receipt (wrong scope) must still be rejected even by register().
+    let path = store.path(&root);
+    let mut receipt: Receipt = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    receipt.scope = "foreign-principal".into();
+    std::fs::write(&path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+    assert!(store.register(&root).is_err());
+}

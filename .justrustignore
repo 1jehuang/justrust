@@ -2,3 +2,4 @@
 /toolchain/
 /.wrangler/
 /bench/results/
+/data/

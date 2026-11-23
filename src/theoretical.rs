@@ -31,6 +31,8 @@ const DIRTY_FALLBACK_LINES: usize = 50;
 const EST_OVERHEAD_SECS: f64 = 0.12;
 /// Optimistic realistic warm incremental check base (frontend + incr load/save).
 const EST_CHECK_BASE_SECS: f64 = 0.25;
+/// Optimistic realistic warm clippy base (lint passes run over the edited crate).
+const EST_CLIPPY_BASE_SECS: f64 = 1.20;
 /// Optimistic realistic warm incremental debug build/test base (frontend + codegen).
 const EST_DEBUG_BASE_SECS: f64 = 0.45;
 /// Optimistic realistic warm incremental release build/test base.
@@ -63,16 +65,26 @@ pub struct TheoreticalFloor {
     pub cold: bool,
 }
 
-fn needs_codegen(subcommand: &str, args: &[String]) -> bool {
-    let sub = if subcommand.is_empty() {
+fn resolved_subcommand<'a>(subcommand: &'a str, args: &'a [String]) -> &'a str {
+    if subcommand.is_empty() {
         args.iter()
             .map(String::as_str)
             .find(|a| !a.starts_with('+'))
             .unwrap_or("")
     } else {
         subcommand
-    };
-    !matches!(sub, "check" | "c" | "clippy" | "metadata" | "tree" | "fmt")
+    }
+}
+
+fn needs_codegen(subcommand: &str, args: &[String]) -> bool {
+    !matches!(
+        resolved_subcommand(subcommand, args),
+        "check" | "c" | "clippy" | "metadata" | "tree" | "fmt"
+    )
+}
+
+fn is_clippy(subcommand: &str, args: &[String]) -> bool {
+    resolved_subcommand(subcommand, args) == "clippy"
 }
 
 fn is_release(args: &[String], opt_level: Option<&str>) -> bool {
@@ -142,28 +154,56 @@ pub fn compute(
 
     let total_secs = overhead_secs + frontend_secs + codegen_secs + link_secs + test_secs;
 
-    let est_compile_secs = if units.compiled == 0 || units.local == 0 {
-        0.0
-    } else if !needs_codegen(subcommand, args) {
-        if cold {
-            0.40 + (units.local.min(16) as f64) * 0.10 + (dirty_lines as f64 / 50_000.0)
+    let release = is_release(args, units.opt_level.as_deref());
+    let clippy = is_clippy(subcommand, args);
+    let local_scale = units.local.min(16) as f64 + (units.local.saturating_sub(16) as f64) * 0.25;
+    let dep_miss_secs = if units.depcache_misses > 0 {
+        let per_dep = if !needs_codegen(subcommand, args) {
+            0.03
+        } else if release {
+            0.25
         } else {
-            EST_CHECK_BASE_SECS + (dirty_lines as f64 / 50_000.0)
-        }
-    } else if is_release(args, units.opt_level.as_deref()) {
+            0.08
+        };
+        (units.depcache_misses as f64) * per_dep
+    } else {
+        0.0
+    };
+
+    let est_compile_secs = if units.compiled == 0 || units.local == 0 {
+        dep_miss_secs
+    } else if !needs_codegen(subcommand, args) {
+        let base = if clippy {
+            if cold {
+                1.20 + local_scale * 0.20
+            } else {
+                EST_CLIPPY_BASE_SECS + (units.local.saturating_sub(1).min(8) as f64) * 0.15
+            }
+        } else if cold {
+            0.40 + local_scale * 0.10
+        } else {
+            EST_CHECK_BASE_SECS
+        };
+        base + (dirty_lines as f64 / 50_000.0) + dep_miss_secs
+    } else if release {
         if cold {
-            1.20 + (units.local.min(16) as f64) * 0.25
+            1.20 + local_scale * 0.30
                 + (dirty_lines as f64 / 5_000.0)
                 + EST_LINK_COLD_SECS
+                + dep_miss_secs
         } else {
-            EST_RELEASE_BASE_SECS + (dirty_lines as f64 / 5_000.0) + EST_LINK_COLD_SECS
+            EST_RELEASE_BASE_SECS
+                + (dirty_lines as f64 / 5_000.0)
+                + EST_LINK_COLD_SECS
+                + dep_miss_secs
         }
     } else if cold {
-        0.60 + (units.local.min(16) as f64) * 0.15
+        0.60 + local_scale * 0.20
             + (dirty_lines as f64 / 20_000.0)
             + EST_LINK_COLD_SECS
+            + dep_miss_secs
     } else {
-        EST_DEBUG_BASE_SECS + (dirty_lines as f64 / 20_000.0) + EST_LINK_INCR_SECS
+        EST_DEBUG_BASE_SECS + (dirty_lines as f64 / 20_000.0) + EST_LINK_INCR_SECS + dep_miss_secs
     };
     let optimistic_est_secs = (EST_OVERHEAD_SECS + est_compile_secs + test_secs).max(total_secs);
 
@@ -283,5 +323,57 @@ mod tests {
         assert_eq!(format_short(0.025), "25ms");
         assert_eq!(format_short(0.15), "0.15s");
         assert_eq!(format_short(12.34), "12.3s");
+    }
+
+    #[test]
+    fn clippy_and_depcache_misses_scale_optimistic_estimate_without_changing_floor() {
+        let git = GitInfo {
+            dirty_rs_lines: Some(50),
+            ..Default::default()
+        };
+        let check_units = UnitStats {
+            compiled: 1,
+            local: 1,
+            fresh: 40,
+            ..Default::default()
+        };
+        let check_f = compute(
+            "check",
+            &["check".into()],
+            &git,
+            &check_units,
+            &Phases::default(),
+            &TestStats::default(),
+        );
+        let clippy_f = compute(
+            "clippy",
+            &["clippy".into()],
+            &git,
+            &check_units,
+            &Phases::default(),
+            &TestStats::default(),
+        );
+        assert!((check_f.total_secs - clippy_f.total_secs).abs() < 1e-9);
+        assert!(clippy_f.optimistic_est_secs > check_f.optimistic_est_secs + 0.8);
+
+        let cold_rel = UnitStats {
+            compiled: 200,
+            local: 10,
+            fresh: 0,
+            depcache_misses: 100,
+            ..Default::default()
+        };
+        let rel_f = compute(
+            "build",
+            &["build".into(), "--release".into()],
+            &GitInfo::default(),
+            &cold_rel,
+            &Phases::default(),
+            &TestStats::default(),
+        );
+        // Theoretical floor still assumes 0s for third-party deps, while optimistic estimate
+        // accounts for the 100 compiled depcache misses.
+        assert!(rel_f.total_secs < 1.0);
+        assert!(rel_f.optimistic_est_secs > 25.0);
     }
 }

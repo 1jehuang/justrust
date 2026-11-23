@@ -1078,9 +1078,13 @@ impl Mirror {
         // incremental state is shared across worktrees via CanonicalDirGuard's
         // JUSTRUST_SHARED_INCREMENTAL_DIR with zero copying (copying multi-GB
         // incremental dirs on ext4 previously cost 22s+ on cold clones).
+        // `--link-dest` hardlinks unchanged source files instead of copying bytes
+        // (O(inodes) on ext4/xfs; automatically falls back to copy across devices).
+        // Safe because subsequent `rsync` and `remote_agent::write_atomic` always
+        // write temp files and rename rather than mutating hardlinked files in place.
         let script = format!(
             "test -d {src} && test -d {dst} && test -z \"$(ls -A {dst} | grep -vx -e target -e .justrust)\" \
-             && rsync -a --exclude=target/ --exclude=.justrust/ {src}/ {dst}/"
+             && rsync -a --link-dest={src}/ --exclude=target/ --exclude=.justrust/ --filter=':- .justrustignore' {src}/ {dst}/"
         );
         let mut c = match &self.target {
             Some(t) => {
