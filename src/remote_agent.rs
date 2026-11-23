@@ -1069,7 +1069,12 @@ fn bwrap_available() -> bool {
 ///   `env!("CARGO_MANIFEST_DIR")`.
 #[cfg(target_os = "linux")]
 fn bwrap_canonical_mount(cwd: &Path, env: &[(String, String)]) -> Option<PathBuf> {
-    if std::env::var("JUSTRUST_CANONICAL_WS").as_deref() == Ok("0") {
+    // Opt-in via JUSTRUST_CANONICAL_WS=1 until hosted empty-dir mount issue is resolved.
+    let enabled = std::env::var("JUSTRUST_CANONICAL_WS").as_deref() == Ok("1")
+        || env
+            .iter()
+            .any(|(k, v)| k == "JUSTRUST_CANONICAL_WS" && v == "1");
+    if !enabled {
         return None;
     }
     let (_, repo) = env.iter().find(|(k, _)| k == "JUSTRUST_CANONICAL_REPO")?;
