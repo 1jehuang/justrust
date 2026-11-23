@@ -135,7 +135,7 @@ jobs:
         shell: bash
         working-directory: release-client/${{ matrix.target }}
         run: |
-          destination="$RUNNER_TEMP/client-release/${{ matrix.target }}"
+          destination="$RUNNER_TEMP/client-release-v2/${{ matrix.target }}"
           mkdir -p "$destination"
           cp -a . "$destination/"
 
@@ -214,7 +214,7 @@ jobs:
 
       - name: Install hosted Linux prerequisites
         if: ${{ matrix.zig }}
-        working-directory: ${{ runner.temp }}/client-release/${{ matrix.target }}
+        working-directory: ${{ runner.temp }}/client-release-v2/${{ matrix.target }}
         run: |
           # Stock bootstrap also supplies pinned C-only musl ABI objects.
           # It never supplies Rust rlibs to the service-selected compiler.
@@ -227,7 +227,7 @@ jobs:
 
       - name: Build and verify hosted Linux release
         if: ${{ matrix.zig }}
-        working-directory: ${{ runner.temp }}/client-release/${{ matrix.target }}
+        working-directory: ${{ runner.temp }}/client-release-v2/${{ matrix.target }}
         env:
           JCODE_API_KEY: ${{ secrets.JCODE_API_KEY }}
           JUSTRUST_REMOTE_REQUIRED: "1"
@@ -262,10 +262,7 @@ jobs:
             build_std+=(--config "target.${{ matrix.target }}.rustflags=$flags_json")
           fi
           # shellcheck disable=SC2086
-          if ! justrust build --remote --release --locked --target "${{ matrix.target }}" --bin justrust "${build_std[@]}" $DIST_FLAGS; then
-            justrust clean --remote || true
-            justrust build --remote --release --locked --target "${{ matrix.target }}" --bin justrust "${build_std[@]}" $DIST_FLAGS
-          fi
+          justrust build --remote --release --locked --target "${{ matrix.target }}" --bin justrust "${build_std[@]}" $DIST_FLAGS
           mkdir -p dist
           python3 "$RUNNER_TEMP/release-policy/release-policy.py" attest \
             --snapshot "$RUNNER_TEMP/release-policy/release-policy.json" \
@@ -276,7 +273,7 @@ jobs:
           bash "$RUNNER_TEMP/check-linux-release.sh" "target/${{ matrix.target }}/release/justrust" "${{ matrix.target }}" "$version"
 
       - name: Package
-        working-directory: ${{ matrix.zig && format('{0}/client-release/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}
+        working-directory: ${{ matrix.zig && format('{0}/client-release-v2/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}
         shell: bash
         run: |
           name="justrust-${{ matrix.target }}"
@@ -298,15 +295,15 @@ jobs:
         with:
           name: justrust-${{ matrix.target }}
           path: |
-            ${{ matrix.zig && format('{0}/client-release/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}/dist/*.tar.gz
-            ${{ matrix.zig && format('{0}/client-release/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}/dist/*.sha256
-            ${{ matrix.zig && format('{0}/client-release/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}/dist/compiler-*
+            ${{ matrix.zig && format('{0}/client-release-v2/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}/dist/*.tar.gz
+            ${{ matrix.zig && format('{0}/client-release-v2/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}/dist/*.sha256
+            ${{ matrix.zig && format('{0}/client-release-v2/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}/dist/compiler-*
 
       # Publication belongs to this platform, not the matrix completion barrier.
       # The checksum is uploaded last, making the platform selectable only after
       # its archive and compiler provenance are available.
       - name: Publish checked platform independently
-        working-directory: ${{ matrix.zig && format('{0}/client-release/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}
+        working-directory: ${{ matrix.zig && format('{0}/client-release-v2/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
