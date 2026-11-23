@@ -756,8 +756,6 @@ fn record(
         Some(tc) => tc.cargo(),
         None => paths::real_cargo()?,
     };
-    let shim = paths::ensure_rustc_shim()?;
-    trace.mark("toolchain");
     let me = std::env::current_exe()?.canonicalize()?;
     // Respect an existing RUSTC unless it already points at us.
     let real_rustc = match &pinned {
@@ -768,6 +766,8 @@ fn record(
             .or_else(|| paths::find_on_path("rustc", &me))
             .context("could not find rustc")?,
     };
+    let shim = paths::ensure_rustc_shim_for(&real_rustc)?;
+    trace.mark("toolchain");
 
     let run_dir = paths::runs_dir()?.join(id);
     std::fs::create_dir_all(&run_dir)?;

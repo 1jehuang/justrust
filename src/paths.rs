@@ -86,10 +86,21 @@ pub fn index_file() -> Result<PathBuf> {
 /// schemes inside one build. `bin/shim/rustc` is still kept pointing at
 /// the most recent binary for anything that runs it directly.
 pub fn ensure_rustc_shim() -> Result<PathBuf> {
+    ensure_rustc_shim_for(Path::new(""))
+}
+
+/// Like [`ensure_rustc_shim`], but also keys the shim directory on the
+/// underlying `real_rustc` path so Cargo's `target/.rustc_info.json` (which
+/// keys cached `rustc --print sysroot` on `RUSTC` path/mtime) never reuses a
+/// stale sysroot from an evicted toolchain after a toolchain switch.
+pub fn ensure_rustc_shim_for(real_rustc: &Path) -> Result<PathBuf> {
     let exe = std::env::current_exe()?.canonicalize()?;
     let base = home()?.join("bin/shim");
     let mut h = crate::depcache::H128::new();
     h.field(exe.as_os_str().as_encoded_bytes());
+    if !real_rustc.as_os_str().is_empty() {
+        h.field(real_rustc.as_os_str().as_encoded_bytes());
+    }
     let dir = base.join(&h.hex()[..16]);
     std::fs::create_dir_all(&dir)?;
     let link = dir.join(RUSTC_SHIM_NAME);
