@@ -2054,7 +2054,7 @@ impl SharedEmitterMain {
 }
 
 pub struct Coordinator<B: WriteBackendMethods> {
-    sender: Sender<Message<B>>,
+    pub(crate) sender: Sender<Message<B>>,
     future: Option<thread::JoinHandle<Result<MaybeLtoModules<B>, ()>>>,
     // Only used for the Message type.
     phantom: PhantomData<B>,

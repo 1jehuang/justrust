@@ -12,9 +12,9 @@ use rustc_ast::expand::allocator::{
 use rustc_attr_ir::lang_items::LangItem;
 use rustc_attr_ir::target::Target;
 use rustc_attr_ir::{DebuggerVisualizerType, EiiDecl, EiiImpl, OptimizeAttr, find_attr};
-use rustc_data_structures::fx::{FxHashMap, FxIndexMap, FxIndexSet};
+use rustc_data_structures::fx::{FxIndexMap, FxIndexSet};
 use rustc_data_structures::profiling::{get_resident_set_size, print_time_passes_entry};
-use rustc_data_structures::sync::{IntoDynSyncSend, par_map};
+use rustc_data_structures::sync::{IntoDynSyncSend, par_for_each_in};
 use rustc_data_structures::unord::UnordMap;
 use rustc_hir as hir;
 use rustc_hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
@@ -846,98 +846,98 @@ pub fn codegen_crate<
     // non-parallel compiler anymore, we can compile CGUs end-to-end in
     // parallel and get rid of the complicated scheduling logic.
     let frontend_threads = tcx.sess.opts.jobs.frontend.map(|n| n.get()).unwrap_or(1);
-    let mut pre_compiled_cgus: FxHashMap<
-        usize,
-        IntoDynSyncSend<(ModuleCodegen<<B as WriteBackendMethods>::Module>, u64)>,
-    > = FxHashMap::default();
-    let mut first_batch = true;
 
-    for (i, cgu) in codegen_units.iter().enumerate() {
-        ongoing_codegen.wait_for_signal_to_codegen_item();
-        ongoing_codegen.check_for_errors(tcx.sess);
+    if frontend_threads > 1 {
+        let mut no_reuse: Vec<usize> = Vec::new();
+        for (i, cgu) in codegen_units.iter().enumerate() {
+            match cgu_reuse[i] {
+                CguReuse::No => no_reuse.push(i),
+                CguReuse::PreLto => {
+                    ongoing_codegen.check_for_errors(tcx.sess);
+                    submit_pre_lto_module_to_llvm(
+                        tcx,
+                        &ongoing_codegen.coordinator,
+                        CachedModuleCodegen {
+                            name: cgu.name().to_string(),
+                            source: cgu.previous_work_product(tcx),
+                        },
+                    );
+                    tcx.dcx().abort_if_errors();
+                }
+                CguReuse::PostLto => {
+                    submit_post_lto_module_to_llvm(
+                        &ongoing_codegen.coordinator,
+                        CachedModuleCodegen {
+                            name: cgu.name().to_string(),
+                            source: cgu.previous_work_product(tcx),
+                        },
+                    );
+                }
+            }
+        }
+        if !no_reuse.is_empty() {
+            let start_time = Instant::now();
+            let sender = IntoDynSyncSend(std::sync::Mutex::new(
+                ongoing_codegen.coordinator.sender.clone(),
+            ));
+            par_for_each_in(no_reuse, |i| {
+                let sender = &sender;
+                let _jr_cpu = rustc_data_structures::profiling::jr_cgu_cpu(
+                    codegen_units[*i].name().as_str(),
+                );
+                let (module, cost) =
+                    backend.compile_codegen_unit(tcx, codegen_units[*i].name(), bitcode_needed);
+                let llvm_work_item = crate::back::write::WorkItem::Optimize(module);
+                drop(
+                    sender
+                        .0
+                        .lock()
+                        .unwrap()
+                        .send(crate::back::write::Message::CodegenDone::<B> {
+                            llvm_work_item,
+                            cost,
+                        }),
+                );
+            });
+            total_codegen_time += start_time.elapsed();
+            ongoing_codegen.check_for_errors(tcx.sess);
+            tcx.dcx().abort_if_errors();
+        }
+    } else {
+        for (i, cgu) in codegen_units.iter().enumerate() {
+            ongoing_codegen.wait_for_signal_to_codegen_item();
+            ongoing_codegen.check_for_errors(tcx.sess);
 
-        let cgu_reuse_i = cgu_reuse[i];
-
-        match cgu_reuse_i {
-            CguReuse::No => {
-                let (module, cost) = if let Some(cgu) = pre_compiled_cgus.remove(&i) {
-                    cgu.0
-                } else if frontend_threads > 1 {
-                    let batch: Vec<_> = cgu_reuse
-                        .iter()
-                        .enumerate()
-                        .skip(i)
-                        .filter(|&(_, reuse)| reuse == &CguReuse::No)
-                        .take(frontend_threads)
-                        .collect();
-                    let start_time = Instant::now();
-                    let compiled = if first_batch {
-                        first_batch = false;
-                        tcx.sess.time("compile_first_CGU_batch", || {
-                            par_map(batch, |(j, _)| {
-                                let _jr_cpu = rustc_data_structures::profiling::jr_cgu_cpu(
-                                    codegen_units[j].name().as_str(),
-                                );
-                                let module = backend.compile_codegen_unit(
-                                    tcx,
-                                    codegen_units[j].name(),
-                                    bitcode_needed,
-                                );
-                                (j, IntoDynSyncSend(module))
-                            })
-                        })
-                    } else {
-                        par_map(batch, |(j, _)| {
-                            let _jr_cpu = rustc_data_structures::profiling::jr_cgu_cpu(
-                                codegen_units[j].name().as_str(),
-                            );
-                            let module = backend.compile_codegen_unit(
-                                tcx,
-                                codegen_units[j].name(),
-                                bitcode_needed,
-                            );
-                            (j, IntoDynSyncSend(module))
-                        })
-                    };
-                    total_codegen_time += start_time.elapsed();
-                    pre_compiled_cgus = compiled;
-                    pre_compiled_cgus.remove(&i).unwrap().0
-                } else {
+            match cgu_reuse[i] {
+                CguReuse::No => {
                     let start_time = Instant::now();
                     let _jr_cpu = rustc_data_structures::profiling::jr_cgu_cpu(cgu.name().as_str());
-                    let module = backend.compile_codegen_unit(tcx, cgu.name(), bitcode_needed);
+                    let (module, cost) =
+                        backend.compile_codegen_unit(tcx, cgu.name(), bitcode_needed);
                     total_codegen_time += start_time.elapsed();
-                    module
-                };
-                // This will unwind if there are errors, which triggers our `AbortCodegenOnDrop`
-                // guard. Unfortunately, just skipping the `submit_codegened_module_to_llvm` makes
-                // compilation hang on post-monomorphization errors.
-                tcx.dcx().abort_if_errors();
-
-                submit_codegened_module_to_llvm(&ongoing_codegen.coordinator, module, cost);
-            }
-            CguReuse::PreLto => {
-                submit_pre_lto_module_to_llvm(
-                    tcx,
-                    &ongoing_codegen.coordinator,
-                    CachedModuleCodegen {
-                        name: cgu.name().to_string(),
-                        source: cgu.previous_work_product(tcx),
-                    },
-                );
-                // This will unwind if there are errors, which triggers our `AbortCodegenOnDrop`
-                // guard. Unfortunately, just skipping the `submit_pre_lto_module_to_llvm` makes
-                // compilation hang on post-monomorphization errors.
-                tcx.dcx().abort_if_errors();
-            }
-            CguReuse::PostLto => {
-                submit_post_lto_module_to_llvm(
-                    &ongoing_codegen.coordinator,
-                    CachedModuleCodegen {
-                        name: cgu.name().to_string(),
-                        source: cgu.previous_work_product(tcx),
-                    },
-                );
+                    tcx.dcx().abort_if_errors();
+                    submit_codegened_module_to_llvm(&ongoing_codegen.coordinator, module, cost);
+                }
+                CguReuse::PreLto => {
+                    submit_pre_lto_module_to_llvm(
+                        tcx,
+                        &ongoing_codegen.coordinator,
+                        CachedModuleCodegen {
+                            name: cgu.name().to_string(),
+                            source: cgu.previous_work_product(tcx),
+                        },
+                    );
+                    tcx.dcx().abort_if_errors();
+                }
+                CguReuse::PostLto => {
+                    submit_post_lto_module_to_llvm(
+                        &ongoing_codegen.coordinator,
+                        CachedModuleCodegen {
+                            name: cgu.name().to_string(),
+                            source: cgu.previous_work_product(tcx),
+                        },
+                    );
+                }
             }
         }
     }

@@ -487,7 +487,7 @@ fn release_frontend_threads_args(real: &std::path::Path, args: &[OsString]) -> O
         .or_else(|_| std::env::var("JUSTRUST_RELEASE_FRONTEND_THREADS"))
     {
         Ok(v) => v.parse::<usize>().ok()?,
-        Err(_) => std::thread::available_parallelism().map_or(1, |n| n.get().min(16)),
+        Err(_) => std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).clamp(1, 16)),
     };
     frontend_threads_for(
         args,
