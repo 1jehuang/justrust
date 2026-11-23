@@ -435,6 +435,11 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     pi == p.len()
 }
 
+#[cfg(test)]
+fn walk(root: &Path) -> Result<Vec<PathBuf>> {
+    walk_matching(root, None)
+}
+
 fn walk_matching(root: &Path, wanted: Option<&std::ffi::OsStr>) -> Result<Vec<PathBuf>> {
     walk_with_ignore(root, wanted, &JustrustIgnore::load(root))
 }
