@@ -472,8 +472,8 @@ fn parse_phase_ledger(text: &str) -> Vec<Pass> {
 /// `-Zthreads` is UNTRACKED). Only local crates (registry crates come from the
 /// depcache), and never when the unit already sets a thread count.
 /// `JUSTRUST_FRONTEND_THREADS=0` (or `JUSTRUST_RELEASE_FRONTEND_THREADS=0`)
-/// turns it off; `=N` picks the count (default min(8, CPUs), FINDINGS: 16 is
-/// never better).
+/// turns it off; `=N` picks the count (default min(16, CPUs), now that
+/// jr-rustc parallelizes all CGU MIR-to-LLVM-IR batches under `-Zthreads`).
 fn release_frontend_threads_args(real: &std::path::Path, args: &[OsString]) -> Option<OsString> {
     let is_jr = real
         .parent()
@@ -487,7 +487,7 @@ fn release_frontend_threads_args(real: &std::path::Path, args: &[OsString]) -> O
         .or_else(|_| std::env::var("JUSTRUST_RELEASE_FRONTEND_THREADS"))
     {
         Ok(v) => v.parse::<usize>().ok()?,
-        Err(_) => std::thread::available_parallelism().map_or(1, |n| n.get().min(8)),
+        Err(_) => std::thread::available_parallelism().map_or(1, |n| n.get().min(16)),
     };
     frontend_threads_for(
         args,
