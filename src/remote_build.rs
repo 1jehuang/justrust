@@ -1404,6 +1404,7 @@ pub fn run_remote(
     let mut lifecycle = crate::telemetry::BuildLifecycle::start(&run_id, sub, "remote");
     crate::e2e::mark("remote_preflight");
     let mut hosted_run = None;
+    let mut overlap_admit_rx: Option<OverlapAdmitRx> = None;
     let mut recovered = BTreeSet::new();
     let result = loop {
         let attempt_started = crate::paths::now() as u64;
@@ -1415,7 +1416,13 @@ pub fn run_remote(
             &run_id,
             &mut lifecycle,
             &mut hosted_run,
+            &mut overlap_admit_rx,
         );
+        // If run_remote_inner returned early (e.g. remote_transport failure or
+        // cancellation) while overlapped admission was still in flight, settle
+        // it now so the queued row is marked abandoned (or reused on retry)
+        // instead of staying orphaned in build_runs.
+        settle_pending_overlap_admit(&mut hosted_run, &mut overlap_admit_rx, &run_id, started);
         if cancel_signal::received().is_some() {
             break result;
         }
@@ -1706,6 +1713,23 @@ fn report_remote_failure(sub: &str, d: &RemoteDiagnostic, elapsed: f64) {
     crate::telemetry::maybe_spawn_background();
 }
 
+type OverlapAdmitRx = std::sync::mpsc::Receiver<Result<std::result::Result<bool, String>>>;
+
+fn settle_pending_overlap_admit(
+    hosted_run: &mut Option<HostedRun>,
+    overlap_admit_rx: &mut Option<OverlapAdmitRx>,
+    run_id: &str,
+    started: Instant,
+) {
+    if hosted_run.is_none()
+        && let Some(rx) = overlap_admit_rx.take()
+        && let Ok(Ok(Ok(hosted))) = rx.recv_timeout(Duration::from_secs(5))
+    {
+        *hosted_run = Some(HostedRun::new(hosted, run_id, started));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_remote_inner(
     sub: &str,
     args: &[String],
@@ -1714,6 +1738,7 @@ fn run_remote_inner(
     run_id: &str,
     lifecycle: &mut crate::telemetry::BuildLifecycle,
     admitted: &mut Option<HostedRun>,
+    overlap_admit_rx: &mut Option<OverlapAdmitRx>,
 ) -> Result<std::result::Result<Outcome, Infra>> {
     diagnostic.run_id = Some(run_id.to_owned());
     let total = Instant::now();
@@ -1758,9 +1783,6 @@ fn run_remote_inner(
         && crate::remote_hosted::creds()
             .ok()
             .is_some_and(|c| c.warm_admit_ready());
-    let mut overlap_admit_rx: Option<
-        std::sync::mpsc::Receiver<Result<std::result::Result<bool, String>>>,
-    > = None;
     let pre_sync_handle = if !overlap_admit
         && admitted.is_none()
         && remote_backend::load() == Some(remote_backend::Backend::Hosted)
@@ -1782,7 +1804,7 @@ fn run_remote_inner(
             std::thread::spawn(move || {
                 let _ = tx.send(charge_hosted(&rid, &cmd, proj.as_deref()));
             });
-            overlap_admit_rx = Some(rx);
+            *overlap_admit_rx = Some(rx);
             mark("charged (overlapped)");
             crate::e2e::mark("admitted");
         } else {

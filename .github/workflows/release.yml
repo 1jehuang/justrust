@@ -25,8 +25,8 @@ env:
   # Immutable bootstrap client with fail-closed hosted routing support.
   HOSTED_CLIENT_REV: 616de6552f08a9c40a5d0a79b3d0f510ce80ff46
   # Download the reviewed published bootstrap instead of compiling it per job.
-  HOSTED_CLIENT_TAG: v0.1.26
-  HOSTED_CLIENT_SHA256: d9de0d20432364f72d5839b0ffbe8ecf46c98e28e046b6316dc4b1bf128488c1
+  HOSTED_CLIENT_TAG: v0.1.48
+  HOSTED_CLIENT_SHA256: 0daa2acca46e9e185240e5e30c1d109929c4567d43722bf6d2ab3c6c492d55b6
   # Small, fast release binaries without editing Cargo.toml.
   DIST_FLAGS: >-
     --config profile.release.lto="thin"
