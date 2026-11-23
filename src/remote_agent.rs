@@ -1014,7 +1014,7 @@ fn valid_canonical_repo(repo: &str) -> bool {
 }
 
 /// Return the shared per-repo incremental cache directory
-/// (`<parent>/.jr-ws/<repo>.incr`) for `cwd` without moving or renaming `cwd`.
+/// (`~/.justrust/ws/<repo>.incr`) for `cwd` without moving or renaming `cwd`.
 /// Keeping `cwd` in place preserves `remote_evict` root inodes and avoids any
 /// race with concurrent `rsync` or parallel swarm builds, while `rustc`'s own
 /// session-dir locking safely shares the incremental cache across worktrees.
@@ -1027,10 +1027,64 @@ fn shared_repo_incremental_dir(cwd: &Path, env: &[(String, String)]) -> Option<P
     if !valid_canonical_repo(repo) || !cwd.is_dir() {
         return None;
     }
-    let ws_dir = cwd.parent()?.join(".jr-ws");
+    let ws_dir = crate::paths::home().ok()?.join("ws");
     let shared_incr = ws_dir.join(format!("{repo}.incr"));
     std::fs::create_dir_all(&shared_incr).ok()?;
     Some(shared_incr)
+}
+
+#[cfg(target_os = "linux")]
+fn bwrap_available() -> bool {
+    static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OK.get_or_init(|| {
+        if !Path::new("/usr/bin/bwrap").is_file() {
+            return false;
+        }
+        let uid = unsafe { libc::geteuid() };
+        let gid = unsafe { libc::getegid() };
+        Command::new("/usr/bin/bwrap")
+            .args(["--unshare-user", "--uid"])
+            .arg(uid.to_string())
+            .arg("--gid")
+            .arg(gid.to_string())
+            .args(["--dev-bind", "/", "/", "--", "/bin/true"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    })
+}
+
+/// Return a per-repo canonical mountpoint (`~/.justrust/ws/<repo>`) to
+/// bind-mount `cwd` onto inside a private `bwrap` mount namespace.
+///
+/// Unlike renaming `cwd` in the host namespace, a private bind mount:
+/// - never moves or replaces `cwd` (preserving `remote_evict` root inodes),
+/// - requires no lock (concurrent `swarm` builds of the same repo run in
+///   parallel in separate mount namespaces), and
+/// - gives every worktree and checkout of the same repo identical `getcwd()`,
+///   `CARGO_MANIFEST_DIR`, and `OUT_DIR` paths so `localcache` and `rustc`
+///   incremental CGUs reuse across worktrees even for crates that embed
+///   `env!("CARGO_MANIFEST_DIR")`.
+#[cfg(target_os = "linux")]
+fn bwrap_canonical_mount(cwd: &Path, env: &[(String, String)]) -> Option<PathBuf> {
+    if std::env::var("JUSTRUST_CANONICAL_WS").as_deref() == Ok("0") {
+        return None;
+    }
+    let (_, repo) = env.iter().find(|(k, _)| k == "JUSTRUST_CANONICAL_REPO")?;
+    if !valid_canonical_repo(repo) || !cwd.is_dir() || !cwd.join(".git").exists() {
+        return None;
+    }
+    let canonical = crate::paths::home().ok()?.join("ws").join(repo);
+    if cwd == canonical {
+        return None;
+    }
+    if !bwrap_available() {
+        return None;
+    }
+    std::fs::create_dir_all(&canonical).ok()?;
+    Some(canonical)
 }
 
 fn prebuilt_proxy_url() -> Option<&'static str> {
@@ -1061,26 +1115,60 @@ fn start_run(
     if hybrid.is_empty() && env.iter().any(|(key, _)| key == "JUSTRUST_HOSTED_HYBRID") {
         send(out, &Msg::Out { id, stream: 2 }, b"justrust remote: hosted hybrid Cargo fallback (native artifact delivery unsupported for this request)\n");
     }
-    let mut c = Command::new(executable);
+    #[cfg(target_os = "linux")]
+    let canonical_mount = bwrap_canonical_mount(cwd, env);
+    #[cfg(not(target_os = "linux"))]
+    let canonical_mount: Option<PathBuf> = None;
+
+    let mut c = if let Some(ref canonical) = canonical_mount {
+        #[cfg(target_os = "linux")]
+        {
+            let uid = unsafe { libc::geteuid() };
+            let gid = unsafe { libc::getegid() };
+            let mut b = Command::new("/usr/bin/bwrap");
+            b.args(["--unshare-user", "--uid"])
+                .arg(uid.to_string())
+                .arg("--gid")
+                .arg(gid.to_string())
+                .args(["--dev-bind", "/", "/", "--bind"])
+                .arg(cwd)
+                .arg(canonical)
+                .arg("--chdir")
+                .arg(canonical)
+                .arg("--")
+                .arg(executable)
+                .args(args);
+            b
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = canonical;
+            let mut b = Command::new(executable);
+            b.args(args).current_dir(cwd);
+            b
+        }
+    } else {
+        let mut b = Command::new(executable);
+        b.args(args).current_dir(cwd);
+        b
+    };
     #[cfg(unix)]
     if let Some(shared_incr) = shared_repo_incremental_dir(cwd, env) {
         c.env("JUSTRUST_SHARED_INCREMENTAL_DIR", shared_incr);
     }
-    c.args(args)
-        .current_dir(cwd)
-        .envs(env.iter().map(|(k, v)| (k, v)).filter(|(k, _)| {
-            *k != CLIENT_CARGO_HOME
-                && *k != crate::remote_proto::CLIENT_UMASK
-                && *k != crate::remote_proto::CLIENT_LIVE_CPU
-                && *k != "JUSTRUST_CANONICAL_REPO"
-        }))
-        .env_remove(crate::remote_proto::CLIENT_UMASK)
-        .env_remove(crate::remote_proto::CLIENT_LIVE_CPU)
-        .env_remove("JUSTRUST_CANONICAL_REPO")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .detached();
+    c.envs(env.iter().map(|(k, v)| (k, v)).filter(|(k, _)| {
+        *k != CLIENT_CARGO_HOME
+            && *k != crate::remote_proto::CLIENT_UMASK
+            && *k != crate::remote_proto::CLIENT_LIVE_CPU
+            && *k != "JUSTRUST_CANONICAL_REPO"
+    }))
+    .env_remove(crate::remote_proto::CLIENT_UMASK)
+    .env_remove(crate::remote_proto::CLIENT_LIVE_CPU)
+    .env_remove("JUSTRUST_CANONICAL_REPO")
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .detached();
     own_run_lifetime(&mut c);
     // Never allow inherited experiment state or detached prewarm to leak into
     // ordinary guest runs. Fallback re-execs keep ON_AGENT and remove HYBRID,
