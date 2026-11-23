@@ -529,27 +529,45 @@ def main() -> None:
         doc['updated'] = time.strftime('%Y%m%d-%H%M%S')
         out_path.write_text(json.dumps(doc, indent=2) + '\n')
 
+    ordered_cats = [c for c in ('warm-tiny', 'warm-heavy', 'swarm-4', 'worktree', 'cold-clone') if c in cats]
+    total_steps = max(1, len(ordered_cats))
+    done_steps = 0
+
+    def emit_progress(label):
+        print(f"JCODE_PROGRESS {json.dumps({'done': done_steps, 'total': total_steps, 'label': label})}", flush=True)
+
     if 'warm-tiny' in cats:
+        emit_progress('warm-tiny')
         doc['samples'].extend(run_warm('warm-tiny', [
             ('warm-rg-test', 'ripgrep', 'test', ['-p', 'ignore', '--lib', '--locked'], True),
             ('warm-uv-check', 'uv', 'check', ['-p', 'uv-resolver', '--locked'], False),
         ], stacks, args.rounds))
         save()
+        done_steps += 1
     if 'warm-heavy' in cats:
+        emit_progress('warm-heavy')
         doc['samples'].extend(run_warm('warm-heavy', [
             ('warm-jcode-test', 'jcode', 'test', ['-p', 'jcode-tui', '--lib', 'jarvis_listen', '--locked'], True),
             ('warm-jcode-bin', 'jcode', 'check', ['-p', 'jcode', '--bin', 'jcode', '--locked'], False),
         ], stacks, args.rounds))
         save()
+        done_steps += 1
     if 'swarm-4' in cats:
+        emit_progress('swarm-4')
         doc['samples'].extend(run_swarm4(stacks, max(1, min(args.rounds, 2))))
         save()
+        done_steps += 1
     if 'worktree' in cats:
+        emit_progress('worktree')
         doc['samples'].extend(run_worktree(stacks, args.cold_rounds))
         save()
+        done_steps += 1
     if 'cold-clone' in cats:
+        emit_progress('cold-clone')
         doc['samples'].extend(run_cold_clone(stacks, args.cold_rounds))
         save()
+        done_steps += 1
+    emit_progress('done')
 
     s = doc['summary']
     print('\n================ HOLISTIC SUMMARY ================')
