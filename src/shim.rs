@@ -589,10 +589,18 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     // Local units link with wild when installed (fail open inside the `ld`
     // dispatcher). Never for depcache units (registry crates).
     let nightly = std::env::var_os("JUSTRUST_TOOLCHAIN_NIGHTLY").is_some();
-    let link_args = match plan {
+    let mut link_args = match plan {
         None => crate::linker::rustc_args(args, described.local, nightly),
         Some(_) => Vec::new(),
     };
+    // Local opt-level=0 codegen units use Cranelift when the active nightly
+    // toolchain ships `librustc_codegen_cranelift*.so`. Registry deps stay on
+    // LLVM so they hit the prebuilt store; Cranelift links cleanly against
+    // LLVM-compiled `.rlib`s (identical `.rmeta` + ELF `.o` ABI).
+    let cranelift_on = plan.is_none() && cranelift_eligible(real, args, &described, nightly);
+    if cranelift_on {
+        link_args.push(OsString::from("-Zcodegen-backend=cranelift"));
+    }
     // Workspace and path crates: the local cache (`localcache.rs`), keyed
     // with the link arguments the shim adds, since they change the output.
     let plan_t0 = paths::now();
@@ -717,7 +725,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     let rmeta_at: Arc<Mutex<Option<f64>>> = Arc::default();
     let passes: Arc<Mutex<Vec<Pass>>> = Arc::default();
     let captured: Option<Arc<Mutex<Vec<Vec<u8>>>>> =
-        (plan.is_some() || local_plan.is_some()).then(Arc::default);
+        (plan.is_some() || local_plan.is_some() || cranelift_on).then(Arc::default);
     let reader = {
         let rmeta_at = rmeta_at.clone();
         let passes = passes.clone();
@@ -747,6 +755,28 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     if replied {
         // Not reaped: cargo never waits for it, init adopts it on exit.
         std::mem::forget(child);
+    }
+
+    // Fail open: if Cranelift hit a backend ICE or unsupported feature, retry
+    // the exact same unit with default LLVM so the build still succeeds.
+    if cranelift_on
+        && exit != 0
+        && captured
+            .as_ref()
+            .is_some_and(|c| cranelift_fallback_needed(&c.lock().unwrap()))
+    {
+        eprintln!(
+            "justrust: cranelift fallback to llvm for {}",
+            described.crate_name
+        );
+        let mut retry = Command::new(real);
+        retry.args(args);
+        for a in &link_args {
+            if a != "-Zcodegen-backend=cranelift" {
+                retry.arg(a);
+            }
+        }
+        return retry.status().ok().and_then(|s| s.code());
     }
 
     let mut unit = described;
@@ -1109,6 +1139,126 @@ fn describe(args: &[OsString]) -> Unit {
     u.local = !u.manifest_dir.is_empty()
         && !std::path::Path::new(&u.manifest_dir).starts_with(&cargo_home);
     u
+}
+
+fn cranelift_enabled_env() -> bool {
+    match std::env::var("JUSTRUST_CRANELIFT") {
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "off" | "false" | "no" | "llvm"
+        ),
+        Err(_) => true,
+    }
+}
+
+fn cranelift_backend_present(real: &std::path::Path) -> bool {
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    {
+        let _ = real;
+        return false;
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        let Some(sysroot) = real.parent().and_then(|p| p.parent()) else {
+            return false;
+        };
+        let backends = sysroot
+            .join("lib")
+            .join("rustlib")
+            .join("x86_64-unknown-linux-gnu")
+            .join("codegen-backends");
+        let Ok(entries) = std::fs::read_dir(backends) else {
+            return false;
+        };
+        entries.flatten().any(|e| {
+            let name = e.file_name();
+            let s = name.to_string_lossy();
+            s.starts_with("librustc_codegen_cranelift") && s.ends_with(".so")
+        })
+    }
+}
+
+fn cranelift_args_eligible(args: &[OsString], described: &Unit) -> bool {
+    if !described.local || described.opt_level != "0" || described.build_script {
+        return false;
+    }
+    if described
+        .crate_types
+        .iter()
+        .any(|t| matches!(t.as_str(), "proc-macro" | "cdylib" | "staticlib"))
+    {
+        return false;
+    }
+    let emits_codegen = described.emit.is_empty()
+        || described
+            .emit
+            .split(',')
+            .any(|e| matches!(e, "link" | "obj"));
+    if !emits_codegen {
+        return false;
+    }
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].to_string_lossy();
+        let next = args
+            .get(i + 1)
+            .map(|x| x.to_string_lossy())
+            .unwrap_or_default();
+        if a == "--target" || a.starts_with("--target=") {
+            return false;
+        }
+        if a == "-Z" {
+            if next.starts_with("codegen-backend") || next.starts_with("sanitizer") {
+                return false;
+            }
+            i += 2;
+            continue;
+        }
+        if a.starts_with("-Zcodegen-backend") || a.starts_with("-Zsanitizer") {
+            return false;
+        }
+        let cg = if a == "-C" || a == "--codegen" {
+            i += 1;
+            Some(next.as_ref())
+        } else {
+            a.strip_prefix("-C")
+                .or_else(|| a.strip_prefix("--codegen="))
+        };
+        if let Some(opt) = cg
+            && (opt.starts_with("instrument-coverage")
+                || opt.starts_with("linker-plugin-lto")
+                || opt == "embed-bitcode=yes"
+                || opt == "lto"
+                || opt
+                    .strip_prefix("lto=")
+                    .is_some_and(|v| !matches!(v, "off" | "false" | "no" | "n")))
+        {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn cranelift_eligible(
+    real: &std::path::Path,
+    args: &[OsString],
+    described: &Unit,
+    nightly: bool,
+) -> bool {
+    nightly
+        && cranelift_enabled_env()
+        && cranelift_args_eligible(args, described)
+        && cranelift_backend_present(real)
+}
+
+fn cranelift_fallback_needed(captured: &[Vec<u8>]) -> bool {
+    captured.iter().any(|line| {
+        contains(line, b"rustc_codegen_cranelift")
+            || contains(line, b"cg_clif")
+            || contains(line, b"internal compiler error")
+            || contains(line, b"cranelift")
+    })
 }
 
 /// Shim entry check: was this process started as `rustc` by justrust?
@@ -1505,5 +1655,55 @@ mod tests {
         assert_eq!(p.name, "type_check_crate");
         assert_eq!(p.secs, 1.5);
         assert_eq!(p.rss_end_mb, 2.0);
+    }
+
+    #[test]
+    fn cranelift_eligibility_filters_check_release_cross_and_user_backend() {
+        let os = |s: &[&str]| s.iter().map(OsString::from).collect::<Vec<_>>();
+        let mut u = Unit {
+            local: true,
+            opt_level: "0".into(),
+            emit: "dep-info,link".into(),
+            ..Default::default()
+        };
+        assert!(cranelift_args_eligible(&os(&["--crate-name", "foo"]), &u));
+        // cargo check (metadata only) -> skip
+        u.emit = "dep-info,metadata".into();
+        assert!(!cranelift_args_eligible(&os(&["--crate-name", "foo"]), &u));
+        u.emit = "dep-info,link".into();
+        // release / optimized -> skip
+        u.opt_level = "3".into();
+        assert!(!cranelift_args_eligible(&os(&["--crate-name", "foo"]), &u));
+        u.opt_level = "0".into();
+        // cross / musl target -> skip
+        assert!(!cranelift_args_eligible(
+            &os(&["--target", "x86_64-unknown-linux-musl"]),
+            &u
+        ));
+        // user-specified backend -> skip
+        assert!(!cranelift_args_eligible(
+            &os(&["-Zcodegen-backend=llvm"]),
+            &u
+        ));
+        // build script & proc-macro -> skip
+        u.build_script = true;
+        assert!(!cranelift_args_eligible(&os(&[]), &u));
+        u.build_script = false;
+        u.crate_types = vec!["proc-macro".into()];
+        assert!(!cranelift_args_eligible(&os(&[]), &u));
+        u.crate_types.clear();
+        // non-local registry dep -> skip
+        u.local = false;
+        assert!(!cranelift_args_eligible(&os(&[]), &u));
+    }
+
+    #[test]
+    fn cranelift_fallback_matches_backend_errors_not_normal_compile_errors() {
+        assert!(cranelift_fallback_needed(&[
+            b"error: internal compiler error: rustc_codegen_cranelift panicked".to_vec()
+        ]));
+        assert!(!cranelift_fallback_needed(&[
+            b"error[E0308]: mismatched types".to_vec()
+        ]));
     }
 }

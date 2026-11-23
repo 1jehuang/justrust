@@ -261,11 +261,12 @@ jobs:
             flags_json=$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "${rustflags[@]}")
             build_std+=(--config "target.${{ matrix.target }}.rustflags=$flags_json")
           fi
-          target_dir="target/${JUSTRUST_TOOLCHAIN:-default}"
           # shellcheck disable=SC2086
-          justrust build --remote --release --locked --target "${{ matrix.target }}" --target-dir "$target_dir" --bin justrust "${build_std[@]}" $DIST_FLAGS
-          mkdir -p dist "target/${{ matrix.target }}/release"
-          cp -f "$target_dir/${{ matrix.target }}/release/justrust" "target/${{ matrix.target }}/release/justrust"
+          if ! justrust build --remote --release --locked --target "${{ matrix.target }}" --bin justrust "${build_std[@]}" $DIST_FLAGS; then
+            justrust clean --remote || true
+            justrust build --remote --release --locked --target "${{ matrix.target }}" --bin justrust "${build_std[@]}" $DIST_FLAGS
+          fi
+          mkdir -p dist
           python3 "$RUNNER_TEMP/release-policy/release-policy.py" attest \
             --snapshot "$RUNNER_TEMP/release-policy/release-policy.json" \
             --sha256 "$POLICY_SHA256" --protocol-source src/toolchain_policy.rs --target "${{ matrix.target }}" \
