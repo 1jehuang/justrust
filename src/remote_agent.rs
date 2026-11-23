@@ -544,8 +544,6 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                         );
                         return;
                     }
-                    #[cfg(unix)]
-                    CanonicalDirGuard::recover_for(&cwd);
                     let root = roots.lock().ok().and_then(|r| r.root_of(&cwd));
                     // Shared per-root lock: eviction of this root's target/
                     // waits for the build, and the build for an eviction.
@@ -1015,126 +1013,24 @@ fn valid_canonical_repo(repo: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
-/// RAII guard that atomically moves `cwd` to a canonical per-repo directory
-/// (`<parent>/.jr-ws/<repo>`) for the duration of a build when uncontended,
-/// then moves it back on drop. Because it is a real host-namespace directory
-/// on the same filesystem, `getcwd()`, `CARGO_MANIFEST_DIR`, `justrust-buildd`,
-/// and `justrust __test-runner` all see the exact same canonical path across
-/// git worktrees of the same repo.
+/// Return the shared per-repo incremental cache directory
+/// (`<parent>/.jr-ws/<repo>.incr`) for `cwd` without moving or renaming `cwd`.
+/// Keeping `cwd` in place preserves `remote_evict` root inodes and avoids any
+/// race with concurrent `rsync` or parallel swarm builds, while `rustc`'s own
+/// session-dir locking safely shares the incremental cache across worktrees.
 #[cfg(unix)]
-struct CanonicalDirGuard {
-    origin: PathBuf,
-    canonical: PathBuf,
-    origin_file: PathBuf,
-    shared_incr: PathBuf,
-    _lock: std::fs::File,
-}
-
-#[cfg(unix)]
-impl CanonicalDirGuard {
-    /// Recover any orphaned `<parent>/.jr-ws/<repo>` left behind by a prior
-    /// killed `remote-agent` before `remote_evict` checks `cwd`'s inode.
-    fn recover_for(cwd: &Path) {
-        let Some(ws_dir) = cwd.parent().map(|p| p.join(".jr-ws")) else {
-            return;
-        };
-        let Ok(entries) = std::fs::read_dir(&ws_dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            let Some(repo) = name.strip_suffix(".origin") else {
-                continue;
-            };
-            let Ok(prev) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let prev = PathBuf::from(prev.trim());
-            if prev != cwd {
-                continue;
-            }
-            let Ok(lock_file) = std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .read(true)
-                .write(true)
-                .open(ws_dir.join(format!("{repo}.lock")))
-            else {
-                continue;
-            };
-            if lock_file.try_lock().is_err() {
-                continue;
-            }
-            let canonical = ws_dir.join(repo);
-            if canonical.exists() && (!prev.exists() || std::fs::remove_dir(&prev).is_ok()) {
-                let _ = std::fs::rename(&canonical, &prev);
-            }
-            if !canonical.exists() {
-                let _ = std::fs::remove_file(&path);
-            }
-        }
+fn shared_repo_incremental_dir(cwd: &Path, env: &[(String, String)]) -> Option<PathBuf> {
+    if std::env::var("JUSTRUST_CANONICAL_WS").as_deref() == Ok("0") {
+        return None;
     }
-
-    fn acquire(cwd: &Path, env: &[(String, String)]) -> Option<Self> {
-        if std::env::var("JUSTRUST_CANONICAL_WS").as_deref() == Ok("0") {
-            return None;
-        }
-        let (_, repo) = env.iter().find(|(k, _)| k == "JUSTRUST_CANONICAL_REPO")?;
-        if !valid_canonical_repo(repo) || !cwd.is_dir() {
-            return None;
-        }
-        // Place `.jr-ws` in the same parent directory as `cwd` so `rename` is
-        // guaranteed O(1) on the same filesystem (no EXDEV).
-        let ws_dir = cwd.parent()?.join(".jr-ws");
-        std::fs::create_dir_all(&ws_dir).ok()?;
-        let lock_file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(ws_dir.join(format!("{repo}.lock")))
-            .ok()?;
-        lock_file.try_lock().ok()?;
-        let canonical = ws_dir.join(repo);
-        let origin_file = ws_dir.join(format!("{repo}.origin"));
-        // Recover from any prior crashed run that left `canonical` behind.
-        if canonical.exists() {
-            if let Ok(prev) = std::fs::read_to_string(&origin_file) {
-                let prev = PathBuf::from(prev.trim());
-                if !prev.as_os_str().is_empty() && !prev.exists() {
-                    let _ = std::fs::rename(&canonical, &prev);
-                }
-            }
-            if canonical.exists() {
-                return None;
-            }
-        }
-        std::fs::write(&origin_file, cwd.to_string_lossy().as_bytes()).ok()?;
-        if std::fs::rename(cwd, &canonical).is_err() {
-            let _ = std::fs::remove_file(&origin_file);
-            return None;
-        }
-        let shared_incr = ws_dir.join(format!("{repo}.incr"));
-        let _ = std::fs::create_dir_all(&shared_incr);
-        Some(Self {
-            origin: cwd.to_path_buf(),
-            canonical,
-            origin_file,
-            shared_incr,
-            _lock: lock_file,
-        })
+    let (_, repo) = env.iter().find(|(k, _)| k == "JUSTRUST_CANONICAL_REPO")?;
+    if !valid_canonical_repo(repo) || !cwd.is_dir() {
+        return None;
     }
-}
-
-#[cfg(unix)]
-impl Drop for CanonicalDirGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::rename(&self.canonical, &self.origin);
-        let _ = std::fs::remove_file(&self.origin_file);
-    }
+    let ws_dir = cwd.parent()?.join(".jr-ws");
+    let shared_incr = ws_dir.join(format!("{repo}.incr"));
+    std::fs::create_dir_all(&shared_incr).ok()?;
+    Some(shared_incr)
 }
 
 fn prebuilt_proxy_url() -> Option<&'static str> {
@@ -1165,22 +1061,13 @@ fn start_run(
     if hybrid.is_empty() && env.iter().any(|(key, _)| key == "JUSTRUST_HOSTED_HYBRID") {
         send(out, &Msg::Out { id, stream: 2 }, b"justrust remote: hosted hybrid Cargo fallback (native artifact delivery unsupported for this request)\n");
     }
-    #[cfg(unix)]
-    let _canonical_guard = CanonicalDirGuard::acquire(cwd, env);
-    #[cfg(unix)]
-    let run_cwd = _canonical_guard
-        .as_ref()
-        .map_or(cwd, |g| g.canonical.as_path());
-    #[cfg(not(unix))]
-    let run_cwd = cwd;
-
     let mut c = Command::new(executable);
     #[cfg(unix)]
-    if let Some(g) = &_canonical_guard {
-        c.env("JUSTRUST_SHARED_INCREMENTAL_DIR", &g.shared_incr);
+    if let Some(shared_incr) = shared_repo_incremental_dir(cwd, env) {
+        c.env("JUSTRUST_SHARED_INCREMENTAL_DIR", shared_incr);
     }
     c.args(args)
-        .current_dir(run_cwd)
+        .current_dir(cwd)
         .envs(env.iter().map(|(k, v)| (k, v)).filter(|(k, _)| {
             *k != CLIENT_CARGO_HOME
                 && *k != crate::remote_proto::CLIENT_UMASK
