@@ -544,6 +544,8 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                         );
                         return;
                     }
+                    #[cfg(unix)]
+                    CanonicalDirGuard::recover_for(&cwd);
                     let root = roots.lock().ok().and_then(|r| r.root_of(&cwd));
                     // Shared per-root lock: eviction of this root's target/
                     // waits for the build, and the build for an eviction.
@@ -1030,6 +1032,52 @@ struct CanonicalDirGuard {
 
 #[cfg(unix)]
 impl CanonicalDirGuard {
+    /// Recover any orphaned `<parent>/.jr-ws/<repo>` left behind by a prior
+    /// killed `remote-agent` before `remote_evict` checks `cwd`'s inode.
+    fn recover_for(cwd: &Path) {
+        let Some(ws_dir) = cwd.parent().map(|p| p.join(".jr-ws")) else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(&ws_dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Some(repo) = name.strip_suffix(".origin") else {
+                continue;
+            };
+            let Ok(prev) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let prev = PathBuf::from(prev.trim());
+            if prev != cwd {
+                continue;
+            }
+            let Ok(lock_file) = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(ws_dir.join(format!("{repo}.lock")))
+            else {
+                continue;
+            };
+            if lock_file.try_lock().is_err() {
+                continue;
+            }
+            let canonical = ws_dir.join(repo);
+            if canonical.exists() && (!prev.exists() || std::fs::remove_dir(&prev).is_ok()) {
+                let _ = std::fs::rename(&canonical, &prev);
+            }
+            if !canonical.exists() {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+
     fn acquire(cwd: &Path, env: &[(String, String)]) -> Option<Self> {
         if std::env::var("JUSTRUST_CANONICAL_WS").as_deref() == Ok("0") {
             return None;
