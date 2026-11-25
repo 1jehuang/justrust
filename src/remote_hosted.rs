@@ -2027,14 +2027,16 @@ fn connect_with_mode(
 }
 
 /// How long to wait before the next connect poll: the server's
-/// `retry_after_ms` hint (a fresh launch takes minutes, so it asks for 10 s
-/// instead of 2 s), clamped to [`poll`, 15 s] and to the time left.
+/// `retry_after_ms` hint (a fresh launch takes minutes, so it asks for 10 s;
+/// a fast slot boot asks for 500 ms), clamped to [min(250 ms, poll), 15 s]
+/// and to the time left.
 fn poll_wait(body: &Value, poll: Duration, left: Duration) -> Duration {
+    let min_wait = Duration::from_millis(250).min(poll);
     let hint = body["retry_after_ms"]
         .as_u64()
         .map(Duration::from_millis)
         .unwrap_or(poll);
-    hint.clamp(poll, Duration::from_secs(15).max(poll))
+    hint.clamp(min_wait, Duration::from_secs(15).max(poll))
         .min(left)
 }
 
@@ -2374,6 +2376,7 @@ fn open_master(t: &Target, d: &Path, window: Duration) -> Result<()> {
     }
     let start = Instant::now();
     let log = d.join("ssh.log");
+    let mut backoff = Duration::from_millis(300);
     loop {
         let err = std::fs::File::create(&log)?;
         let ok = t
@@ -2402,7 +2405,8 @@ fn open_master(t: &Target, d: &Path, window: Duration) -> Result<()> {
                 msg().trim()
             );
         }
-        std::thread::sleep(Duration::from_secs(2));
+        std::thread::sleep(backoff.min(window.saturating_sub(start.elapsed())));
+        backoff = (backoff * 2).min(Duration::from_secs(2));
     }
 }
 
@@ -3114,8 +3118,16 @@ mod tests {
             poll_wait(&json!({"retry_after_ms": 10000}), p, left),
             Duration::from_secs(10)
         );
-        // Never faster than the client's own poll, never past 15 s or the deadline.
-        assert_eq!(poll_wait(&json!({"retry_after_ms": 1}), p, left), p);
+        // Respects fast server hints (e.g. 500 ms slot boot) down to 250 ms,
+        // never past 15 s or the deadline.
+        assert_eq!(
+            poll_wait(&json!({"retry_after_ms": 500}), p, left),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            poll_wait(&json!({"retry_after_ms": 1}), p, left),
+            Duration::from_millis(250)
+        );
         assert_eq!(
             poll_wait(&json!({"retry_after_ms": 600000}), p, left),
             Duration::from_secs(15)
