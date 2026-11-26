@@ -164,7 +164,7 @@ jobs:
       - name: Release build runs
         run: |
           cargo build --release --locked --config profile.release.lto='"thin"' \
-            --config profile.release.codegen-units=1 --config profile.release.strip=true
+            --config profile.release.strip=true
           cd "$RUNNER_TEMP/dc-a" && "$GITHUB_WORKSPACE/target/release/justrust" test 2>&1 | tee rel.txt
           grep -q "1 passed" rel.txt
       # Run last: Homebrew may link rsync into a directory already on PATH.
@@ -278,7 +278,7 @@ jobs:
         shell: bash
         run: |
           cargo build --release --locked --config profile.release.lto='"thin"' \
-            --config profile.release.codegen-units=1 --config profile.release.strip=true
+            --config profile.release.strip=true
           cd "$RUNNER_TEMP/dc-a" && "$GITHUB_WORKSPACE/target/release/justrust.exe" test 2>&1 | tee rel.txt
           grep -q "1 passed" rel.txt
 

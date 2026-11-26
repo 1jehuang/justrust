@@ -27,10 +27,13 @@ env:
   # Download the reviewed published bootstrap instead of compiling it per job.
   HOSTED_CLIENT_TAG: v0.1.58
   HOSTED_CLIENT_SHA256: 00c8f49728eacf38ea2d6c2542345905f18d364dda6e415a5a05d5a5726faec8
-  # Small, fast release binaries without editing Cargo.toml.
+  # Small, fast release binaries without editing Cargo.toml. Codegen units
+  # stay at rustc's default (16): one unit compiled the client serially (the
+  # `justrust` lib alone 69s of a 140s hosted build, about 28s with 16) for a
+  # binary 8% smaller and at most 3% faster (`cache --misses` 1.64s against
+  # 1.69s, `reuse` and `show` within 1%).
   DIST_FLAGS: >-
     --config profile.release.lto="thin"
-    --config profile.release.codegen-units=1
     --config profile.release.strip=true
 
 jobs:

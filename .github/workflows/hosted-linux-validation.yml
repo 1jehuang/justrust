@@ -88,7 +88,7 @@ jobs:
           for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
             justrust build --remote --release --locked --target "$target" --bin justrust \
               --config 'profile.release.lto="thin"' \
-              --config profile.release.codegen-units=1 --config profile.release.strip=true
+              --config profile.release.strip=true
             bash "$RUNNER_TEMP/check-linux-release.sh" "target/$target/release/justrust" "$target" "$version"
           done
 
