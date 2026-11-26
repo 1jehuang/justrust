@@ -732,7 +732,10 @@ fn confirm_alone(
         }
         Some(failed_names(&r).into_iter().map(str::to_owned).collect())
     };
-    let selective = selective_retry_is_cheap(&first);
+    // A process that died mid-run (abort, signal) left tests without an
+    // outcome. Its named failures do not account for them, so settling the
+    // names alone would report tests that never finished as passed.
+    let selective = selective_retry_is_cheap(&first) && ran_to_end(&first);
     if !failed.is_empty() && selective {
         // Quick check, next to whatever else runs: a real failure does not
         // wait for the pool to drain.
@@ -833,10 +836,21 @@ fn failed_names(f: &Finished) -> Vec<&str> {
         .collect()
 }
 
+/// libtest printed its `test result:` line, so every test it ran has an
+/// outcome. Without it the process died first (a panic that could not
+/// unwind, a signal, `process::exit` in a test).
+fn ran_to_end(f: &Finished) -> bool {
+    f.lines.iter().any(|(_, _, l)| {
+        String::from_utf8_lossy(l)
+            .trim_start()
+            .starts_with("test result: ")
+    })
+}
+
 /// `f` with the tests in `flaky` counted as passed: their outcome, their
 /// `test x ... FAILED` line, and the `test result:` counts. The process
-/// exits 0 when nothing else failed. Their failure output stays (it is the
-/// evidence), with the note the caller adds.
+/// exits 0 when nothing else failed and it ran to the end. Their failure
+/// output stays (it is the evidence), with the note the caller adds.
 fn drop_failures(mut f: Finished, flaky: &[&str]) -> Finished {
     let flaky: HashSet<String> = flaky.iter().map(|s| s.to_string()).collect();
     for o in &mut f.outcomes {
@@ -858,7 +872,7 @@ fn drop_failures(mut f: Finished, flaky: &[&str]) -> Finished {
             *l = adjust_result(&text, n).into_bytes();
         }
     }
-    if failed_names(&f).is_empty() {
+    if failed_names(&f).is_empty() && ran_to_end(&f) {
         f.exit = 0;
     }
     f
@@ -1468,6 +1482,65 @@ mod tests {
         );
         assert_eq!(h.exit, 0);
         assert!(failed_names(&h).is_empty());
+    }
+
+    /// Run 20261125-204126511-1296150: a 1128-test process printed one
+    /// FAILED line and then aborted ("failed to initiate panic"). The named
+    /// test passed alone, the exit status was cleared, and the run was
+    /// reported as "ok: 259 tests passed" with 870 outcomes missing.
+    #[test]
+    fn a_process_that_died_mid_run_keeps_its_exit_status() {
+        let mut f = fin(&[("a::x", false, 0.1), ("a::z", true, 0.1)]);
+        f.exit = 134;
+        f.lines = vec![
+            (0.0, "o", b"test a::x ... FAILED <0.100s>".to_vec()),
+            (0.0, "o", b"test a::z ... ok <0.100s>".to_vec()),
+            (
+                0.0,
+                "e",
+                b"fatal runtime error: failed to initiate panic, error 5, aborting".to_vec(),
+            ),
+        ];
+        assert!(!ran_to_end(&f));
+        let g = drop_failures(f, &["a::x"]);
+        assert!(failed_names(&g).is_empty());
+        assert_eq!(g.exit, 134);
+    }
+
+    /// The same process end to end: the failed name passes by itself, the
+    /// whole process dies again, so the failure stands.
+    #[cfg(unix)]
+    #[test]
+    fn a_crash_is_not_settled_by_rerunning_its_named_failure() {
+        let dir = TmpDir(std::env::temp_dir().join(format!("jr-crash-{}", std::process::id())));
+        std::fs::create_dir_all(dir.path()).unwrap();
+        let bin = dir.path().join("crash");
+        let calls = dir.path().join("calls");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$*\" in *--exact*) echo 'test t0 ... ok'; echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s'; exit 0;; esac\necho 'test t0 ... ok'\necho 'fatal runtime error: failed to initiate panic, error 5, aborting' >&2\nexit 134\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        crate::sys::set_mode(&bin, 0o755).unwrap();
+        let sink = Arc::new(VecSink(Mutex::new(Vec::new())));
+        let pool = Pool::start(dir.path(), dir.path(), Path::new("jr"), sink, true).unwrap();
+        let req = Request {
+            bin: bin.to_string_lossy().into_owned(),
+            args: s(&["group"]),
+            cwd: dir.path().to_string_lossy().into_owned(),
+            env: Vec::new(),
+        };
+        let mut first = fin(&[("t0", false, 0.1)]);
+        first.exit = 134;
+        first.lines = vec![(0.0, "o", b"test t0 ... FAILED <0.100s>".to_vec())];
+        let result = confirm_alone(&pool.inner, &req, "crash", &req.args, first);
+        assert_eq!(result.exit, 134);
+        let calls = std::fs::read_to_string(calls).unwrap();
+        assert!(!calls.contains("--exact"), "{calls}");
+        pool.finish();
     }
 
     #[test]

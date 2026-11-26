@@ -696,6 +696,104 @@ mod tests {
         format!("{i:032x}")
     }
 
+    /// Measurement against the real public store, from wherever this runs
+    /// (`justrust test --lib -- --ignored live_store_latency --nocapture`).
+    /// Two fresh mirrors, so every key is one this "machine" never fetched:
+    /// one proxy reads the CDN only (the behavior before sources were
+    /// ranked), the other every source. Disjoint keys, so neither warms the
+    /// CDN edge for the other.
+    #[test]
+    #[ignore = "real network: measures the public prebuilt store"]
+    fn live_store_latency() {
+        fn unit(base: &str, tmp: &Path, k: &str) -> Option<(f64, f64, u64)> {
+            let m = tmp.join(format!("m-{k}"));
+            let t0 = Instant::now();
+            if !matches!(
+                depcache_prebuilt::get(base, &format!("m/{k}.jsonl"), &m, 30, 1 << 20),
+                depcache_prebuilt::Got::Ok
+            ) {
+                return None;
+            }
+            let m_secs = t0.elapsed().as_secs_f64();
+            let text = std::fs::read_to_string(&m).ok()?;
+            let out = text.lines().rev().find_map(|l| {
+                let v: serde_json::Value = serde_json::from_str(l).ok()?;
+                v.get("out")?.as_str().map(str::to_owned)
+            })?;
+            let b = tmp.join(format!("o-{out}"));
+            let t1 = Instant::now();
+            if !matches!(
+                depcache_prebuilt::get(base, &format!("o/{out}.jrdc"), &b, 120, PUBLIC_MAX_BUNDLE),
+                depcache_prebuilt::Got::Ok
+            ) {
+                return None;
+            }
+            let bytes = std::fs::metadata(&b).map(|m| m.len()).unwrap_or(0);
+            Some((m_secs, t1.elapsed().as_secs_f64(), bytes))
+        }
+        fn median(mut v: Vec<f64>) -> f64 {
+            v.sort_by(|a, b| a.total_cmp(b));
+            v.get(v.len() / 2).copied().unwrap_or(f64::NAN)
+        }
+        let per_side: usize = std::env::var("JUSTRUST_LIVE_STORE_KEYS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60);
+        let store = depcache_prebuilt::DEFAULT_STORE;
+        let cdn_dir = test_dir("live-cdn");
+        let all_dir = test_dir("live-all");
+        let cdn = start(store.to_owned(), cdn_dir.clone()).unwrap();
+        let all = start_with(depcache_prebuilt::proxy_sources(store), all_dir.clone()).unwrap();
+
+        let idx = cdn_dir.join("index");
+        assert!(matches!(
+            depcache_prebuilt::get(&all, "index", &idx, 60, MAX_INDEX_BYTES),
+            depcache_prebuilt::Got::Ok
+        ));
+        let index = std::fs::read_to_string(&idx).unwrap();
+        let keys: Vec<&str> = index.lines().collect();
+        // Spread over the whole index, seeded by the clock so a rerun takes
+        // keys the CDN edge has not been asked for.
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as usize;
+        let step = (keys.len() / (2 * per_side)).max(1);
+        let picked: Vec<&str> = (0..2 * per_side)
+            .map(|i| keys[(seed % step + i * step) % keys.len()])
+            .collect();
+        println!(
+            "store index: {} keys, measuring {} per side",
+            keys.len(),
+            per_side
+        );
+        for (name, base, dir, mine) in [
+            ("cdn only ", &cdn, &cdn_dir, &picked[..per_side]),
+            ("ranked   ", &all, &all_dir, &picked[per_side..]),
+        ] {
+            let t0 = Instant::now();
+            let got: Vec<(f64, f64, u64)> =
+                mine.iter().filter_map(|k| unit(base, dir, k)).collect();
+            let total = t0.elapsed().as_secs_f64();
+            println!(
+                "{name} {} of {} units in {total:.2}s serial: manifest median {:.3}s, bundle median {:.3}s, per unit {:.3}s, {} bytes",
+                got.len(),
+                mine.len(),
+                median(got.iter().map(|g| g.0).collect()),
+                median(got.iter().map(|g| g.1).collect()),
+                total / mine.len() as f64,
+                got.iter().map(|g| g.2).sum::<u64>(),
+            );
+            assert!(got.len() * 10 >= mine.len() * 9, "store answered too few");
+        }
+        println!(
+            "{}",
+            std::fs::read_to_string(all_dir.join("upstreams")).unwrap_or_default()
+        );
+        let _ = std::fs::remove_dir_all(&cdn_dir);
+        let _ = std::fs::remove_dir_all(&all_dir);
+    }
+
     #[test]
     fn order_measures_every_upstream_then_prefers_the_fastest() {
         let ups: Vec<Upstream> = ["http://a", "http://b", "http://c"]
