@@ -166,6 +166,10 @@ struct Staged {
     /// are rejected from cross-worktree publication.
     #[serde(default)]
     workspace: Option<String>,
+    /// (file name, content hash) taken when the unit was staged, for outputs
+    /// whose mtime Cargo moves afterwards (see `staged_content`).
+    #[serde(default)]
+    content: Vec<(String, String)>,
 }
 
 /// After a successful compile: key the inputs, reflink the outputs into a
@@ -183,6 +187,24 @@ fn stage_with(
     stderr: &[Vec<u8>],
     sync: bool,
     target_bound: bool,
+) -> Option<String> {
+    stage_commit(plan, start, wall, stderr, target_bound, &|dir| {
+        if sync {
+            finish_why(dir).is_ok()
+        } else {
+            spawn_finisher(dir)
+        }
+    })
+}
+
+/// `stage`, handing the staged dir to `commit`.
+fn stage_commit(
+    plan: &Plan,
+    start: f64,
+    wall: f64,
+    stderr: &[Vec<u8>],
+    target_bound: bool,
+    commit: &dyn Fn(&Path) -> bool,
 ) -> Option<String> {
     let dep_info = plan
         .out_dir
@@ -317,6 +339,11 @@ fn stage_with(
                     .is_some()
         }
     });
+    let content = if ok {
+        staged_content(&plan.out_dir, &files)
+    } else {
+        Vec::new()
+    };
     let target_inputs = entry
         .inputs
         .iter()
@@ -333,6 +360,7 @@ fn stage_with(
         manifest,
         target_bound: scoped,
         workspace: plan.norm.workspace.clone(),
+        content,
     };
     let out = staged.entry.out.clone();
     if !ok
@@ -340,16 +368,50 @@ fn stage_with(
             .ok()
             .and_then(|b| std::fs::write(dir.join("stage.json"), b).ok())
             .is_none()
-        || !(if sync {
-            finish(&dir).is_some()
-        } else {
-            spawn_finisher(&dir)
-        })
+        || !commit(&dir)
     {
         let _ = std::fs::remove_dir_all(&dir);
         return None;
     }
     Some(out)
+}
+
+/// Content hashes for a metadata-only unit's `.rmeta` outputs.
+///
+/// Cargo sets a check unit's `.rmeta` mtime back to the invocation time as
+/// soon as rustc (this shim) exits. The stage hard-links that inode, so the
+/// finisher saw a different stamp and refused the stage: almost every
+/// `check` unit was compiled, staged, and then never published (44 of 44 on a
+/// hosted `check -p uv-resolver`, 2026-11-25). The stamp cannot tell that
+/// mtime move from a rewrite. A hash of the bytes staged here can: the
+/// finisher publishes its private copy only if it still hashes to this.
+///
+/// Only metadata-only units: Cargo moves no other output's mtime, their
+/// `.rmeta` is small, and every dependent hashes the same file to key
+/// itself. A linked unit keeps the stamp alone, so staging a large binary
+/// still costs no read. A file that changes while it is hashed gets no
+/// hash, and stays guarded by its stamp.
+///
+/// jr-rustc writes interface sidecars (`.rmeta.jriface`, `.rmeta.jritems`,
+/// `.rmeta.jrdeps`) next to the `.rmeta`. They belong to a metadata-only
+/// unit, and Cargo leaves their mtimes alone, so their stamps still hold.
+fn staged_content(out_dir: &Path, files: &[String]) -> Vec<(String, String)> {
+    if !files
+        .iter()
+        .all(|n| n.ends_with(".d") || n.ends_with(".rmeta") || n.contains(".rmeta."))
+    {
+        return Vec::new();
+    }
+    files
+        .iter()
+        .filter(|n| n.ends_with(".rmeta"))
+        .filter_map(|name| {
+            let src = out_dir.join(name);
+            let before = stamp(&std::fs::metadata(&src).ok()?);
+            let hash = depcache::file_hash(&src, false)?;
+            (stamp(&std::fs::metadata(&src).ok()?) == before).then(|| (name.clone(), hash))
+        })
+        .collect()
 }
 
 /// A tracked env var contains a fresh build-time stamp, so this result is
@@ -452,6 +514,15 @@ pub fn finish_main(dir: PathBuf) -> ! {
     };
     let Some(_admission) = finisher_admission(root) else {
         let _ = std::fs::remove_dir_all(&dir);
+        // A dropped stage is a later miss. Count it where refusals are
+        // counted, and never create a cache root that is not there.
+        if root.is_dir() {
+            let line = serde_json::json!({
+                "t": paths::now(), "secs": 0.0, "cpu": 0.0, "ok": false,
+                "target_bound": null, "why": "finisher_busy",
+            });
+            let _ = paths::append_line(&root.join("finish.jsonl"), &line.to_string());
+        }
         std::process::exit(0);
     };
     crate::sys::lower_priority();
@@ -462,16 +533,19 @@ pub fn finish_main(dir: PathBuf) -> ! {
         libc::syscall(libc::SYS_ioprio_set, 1, 0, 3 << 13);
     }
     let t0 = paths::now();
-    let outcome = finish(&dir);
+    let result = finish_why(&dir);
+    let outcome = result.ok();
     let ok = outcome.is_some();
     if !ok {
         let _ = std::fs::remove_dir_all(&dir);
     }
     if let Some(root) = dir.parent().and_then(Path::parent) {
         let cpu = crate::sys::self_cpu();
+        // The refusal reason names the guard that fired, never a path or a
+        // crate name: this log is read when a cache that should hit misses.
         let line = serde_json::json!({
             "t": t0, "secs": paths::now() - t0, "cpu": cpu, "ok": ok,
-            "target_bound": outcome,
+            "target_bound": outcome, "why": result.err(),
         });
         let _ = paths::append_line(&root.join("finish.jsonl"), &line.to_string());
         maybe_gc(root);
@@ -480,8 +554,16 @@ pub fn finish_main(dir: PathBuf) -> ! {
 }
 
 fn finisher_admission(root: &Path) -> Option<std::fs::File> {
-    let slots: usize = if portable_enabled() { 8 } else { 4 };
-    let wait = Some(std::time::Duration::from_secs(5));
+    // One writer per cache unless the cache is the hosted, portable one:
+    // unbounded finishers put a hosted guest at 81-84% IO wait (2026-11-13).
+    // Dropped stages are logged as `finisher_busy`. Measure those before
+    // raising either number.
+    let slots: usize = if portable_enabled() { 8 } else { 1 };
+    let wait = if slots > 1 {
+        Some(std::time::Duration::from_secs(5))
+    } else {
+        None
+    };
     finisher_admission_with(root, slots, wait)
 }
 
@@ -523,9 +605,17 @@ fn finisher_admission_with(
 }
 
 /// Hash and check the staged outputs, then publish them.
+#[cfg(test)]
 fn finish(dir: &Path) -> Option<bool> {
-    let mut staged: Staged =
-        serde_json::from_slice(&std::fs::read(dir.join("stage.json")).ok()?).ok()?;
+    finish_why(dir).ok()
+}
+
+/// `finish`, naming the guard that refused the stage.
+fn finish_why(dir: &Path) -> Result<bool, &'static str> {
+    let mut staged: Staged = std::fs::read(dir.join("stage.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .ok_or("stage_unreadable")?;
     let mut outs = Outputs {
         files: Vec::new(),
         stderr: staged.stderr,
@@ -536,25 +626,37 @@ fn finish(dir: &Path) -> Option<bool> {
     for name in &staged.files {
         let p = dir.join(name);
         let text = name.ends_with(".d");
-        if !text && !unlink_copy(&p)? {
-            return None;
+        let content = staged
+            .content
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, h)| h.as_str());
+        if !text {
+            unlink_copy(&p, content)?;
         }
         if !text {
-            let bytes = std::fs::read(&p).ok()?;
-            if !depcache::target_refs_are_inputs(&bytes, &staged.target, &staged.target_inputs)
-                || staged
-                    .workspace
-                    .as_deref()
-                    .is_some_and(|ws| memchr::memmem::find(&bytes, ws.as_bytes()).is_some())
-            {
+            let bytes = std::fs::read(&p).map_err(|_| "output_unreadable")?;
+            let target_ref =
+                !depcache::target_refs_are_inputs(&bytes, &staged.target, &staged.target_inputs);
+            let workspace_ref = staged
+                .workspace
+                .as_deref()
+                .is_some_and(|ws| memchr::memmem::find(&bytes, ws.as_bytes()).is_some());
+            if target_ref || workspace_ref {
                 // Do not weaken the portable guard. Runtime paths such as
                 // CARGO_BIN_EXE or unremapped workspace paths remain valid only
                 // in their original checkout/target.
-                staged.target_bound.as_ref()?;
+                if staged.target_bound.is_none() {
+                    return Err(if target_ref {
+                        "output_names_target_dir"
+                    } else {
+                        "output_names_workspace"
+                    });
+                }
                 target_bound = true;
             }
             if !name.ends_with(".rlib") && !name.ends_with(".rmeta") {
-                let need = depcache::needed_glibc(&p)?;
+                let need = depcache::needed_glibc(&p).ok_or("glibc_unreadable")?;
                 if need > (0, 0) {
                     outs.glibc = Some(outs.glibc.map_or(need, |g| g.max(need)));
                 }
@@ -562,32 +664,36 @@ fn finish(dir: &Path) -> Option<bool> {
         }
         outs.files.push(OutFile {
             name: name.clone(),
-            hash: depcache::file_hash(&p, false)?,
+            hash: depcache::file_hash(&p, false).ok_or("output_hash_failed")?,
             text,
         });
     }
     if target_bound {
-        let (manifest, out) = staged.target_bound.take()?;
+        let (manifest, out) = staged.target_bound.take().ok_or("target_bound_missing")?;
         staged.manifest = manifest;
         staged.entry.out = out;
     }
     let _ = std::fs::remove_file(dir.join("stage.json"));
-    std::fs::write(dir.join("meta.json"), serde_json::to_vec(&outs).ok()?).ok()?;
-    let root = dir.parent()?.parent()?;
-    create_cache_dir(root, &root.join("o")).ok()?;
+    serde_json::to_vec(&outs)
+        .ok()
+        .and_then(|b| std::fs::write(dir.join("meta.json"), b).ok())
+        .ok_or("meta_write_failed")?;
+    let root = dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("stage_outside_cache")?;
+    create_cache_dir(root, &root.join("o")).map_err(|_| "cache_dir_failed")?;
     let final_dir = root.join("o").join(&staged.entry.out);
     if std::fs::rename(dir, &final_dir).is_err() {
         // Another process committed the same result first.
         let _ = std::fs::remove_dir_all(dir);
         if !final_dir.join("meta.json").is_file() {
-            return None;
+            return Err("publish_rename_failed");
         }
     }
-    append_once(
-        &staged.manifest,
-        &serde_json::to_string(&staged.entry).ok()?,
-    )?;
-    Some(target_bound)
+    let line = serde_json::to_string(&staged.entry).map_err(|_| "entry_encode_failed")?;
+    append_once(&staged.manifest, &line).ok_or("manifest_append_failed")?;
+    Ok(target_bound)
 }
 
 fn stamp(m: &std::fs::Metadata) -> String {
@@ -595,27 +701,39 @@ fn stamp(m: &std::fs::Metadata) -> String {
     format!("{}:{}:{s}:{ns}", crate::sys::file_id(m).1, m.len())
 }
 
-/// Replace a staged hard link with a private copy. `Some(false)` when the
-/// build dir's file changed after staging (rewritten in place by a later
-/// build): its content no longer matches the key.
-fn unlink_copy(p: &Path) -> Option<bool> {
+/// Replace a staged hard link with a private copy. Refused when the build
+/// dir's file changed after staging (rewritten in place by a later build):
+/// its content no longer matches the key.
+///
+/// `content` is the hash of the bytes that were staged, when the shim took
+/// one. A stamp that moved is then not a refusal by itself: the copy is
+/// published if, and only if, it hashes to the staged bytes.
+fn unlink_copy(p: &Path, content: Option<&str>) -> Result<(), &'static str> {
+    const IO: &str = "output_copy_failed";
     let stamp_file = PathBuf::from(format!("{}.stamp", p.display()));
-    let want = std::fs::read_to_string(&stamp_file).ok()?;
+    let want = std::fs::read_to_string(&stamp_file).map_err(|_| IO)?;
     let _ = std::fs::remove_file(&stamp_file);
-    if stamp(&std::fs::metadata(p).ok()?) != want {
-        return Some(false);
+    let now = |p: &Path| std::fs::metadata(p).map(|m| stamp(&m)).map_err(|_| IO);
+    let moved = now(p)? != want;
+    if moved && content.is_none() {
+        return Err("output_stamp_moved");
     }
     let tmp = PathBuf::from(format!("{}.copy", p.display()));
     if !depcache::reflink_or_copy(p, &tmp) {
-        return None;
+        return Err(IO);
     }
     // Checked again after the copy: any write in between moves the mtime.
-    if stamp(&std::fs::metadata(p).ok()?) != want {
-        let _ = std::fs::remove_file(&tmp);
-        return Some(false);
+    if moved || now(p)? != want {
+        let Some(content) = content else {
+            let _ = std::fs::remove_file(&tmp);
+            return Err("output_stamp_moved");
+        };
+        if depcache::file_hash(&tmp, false).as_deref() != Some(content) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err("output_content_changed");
+        }
     }
-    std::fs::rename(&tmp, p).ok()?;
-    Some(true)
+    std::fs::rename(&tmp, p).map_err(|_| IO)
 }
 
 fn max_bytes() -> u64 {
@@ -759,6 +877,115 @@ mod tests {
     }
 
     #[test]
+    fn cargo_mtime_shift_does_not_refuse_a_check_unit() {
+        // Cargo resets a check unit's `.rmeta` mtime to the invocation time
+        // right after rustc exits, before the finisher runs.
+        let base = std::env::temp_dir().join(format!(
+            "justrust-localcache-mtime-shift-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let set_mtime = |path: &Path, secs: u64| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(
+                    std::fs::FileTimes::new()
+                        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs)),
+                )
+                .unwrap();
+        };
+        for (name, linked, rewritten, refusal) in [
+            ("shifted", false, false, None),
+            ("rewritten", false, true, Some("output_content_changed")),
+            ("linked", true, false, Some("output_stamp_moved")),
+        ] {
+            let published = refusal.is_none();
+            let ws = base.join(name);
+            let profile = ws.join("target/debug");
+            let out_dir = profile.join("deps");
+            let input = ws.join("src/lib.rs");
+            std::fs::create_dir_all(input.parent().unwrap()).unwrap();
+            std::fs::create_dir_all(&out_dir).unwrap();
+            std::fs::write(&input, "pub const VALUE: u8 = 2;").unwrap();
+            set_mtime(&input, 1000);
+            std::fs::write(
+                out_dir.join("fixture-123.d"),
+                format!("fixture: {}\n", input.display()),
+            )
+            .unwrap();
+            let rmeta = out_dir.join("libfixture-123.rmeta");
+            std::fs::write(&rmeta, b"compiled metadata").unwrap();
+            // jr-rustc's interface sidecars sit next to every `.rmeta`.
+            for side in ["jriface", "jritems", "jrdeps"] {
+                std::fs::write(
+                    out_dir.join(format!("libfixture-123.rmeta.{side}")),
+                    b"sidecar",
+                )
+                .unwrap();
+            }
+            if linked {
+                std::fs::write(out_dir.join("libfixture-123.rlib"), b"compiled code").unwrap();
+            }
+            let plan = Plan {
+                base: "base-key".into(),
+                out_dir,
+                extra: "-123".into(),
+                crate_name: "fixture".into(),
+                cwd: ws.clone(),
+                norm: depcache::Norm::with_cargo_home(&profile, &ws.join("cargo-home")).unwrap(),
+                root: ws.join("cache"),
+                extra_args: vec![],
+            };
+            let held = std::cell::RefCell::new(None);
+            assert!(
+                stage_commit(&plan, 1500.0, 1.0, &[], false, &|dir| {
+                    *held.borrow_mut() = Some(dir.to_path_buf());
+                    true
+                })
+                .is_some(),
+                "{name}: staged"
+            );
+            let dir = held.into_inner().expect("stage handed to the finisher");
+            if rewritten {
+                // Same inode and length, different bytes: a later build.
+                use std::io::Write;
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&rmeta)
+                    .unwrap()
+                    .write_all(b"REWRITTEN metadat")
+                    .unwrap();
+            }
+            set_mtime(&rmeta, 1500);
+            assert_eq!(finish_why(&dir), refusal.map_or(Ok(false), Err), "{name}");
+            assert_eq!(plan.manifest().exists(), published, "{name}: manifest");
+            if published {
+                let entry: Entry = serde_json::from_str(
+                    std::fs::read_to_string(plan.manifest())
+                        .unwrap()
+                        .lines()
+                        .next()
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    std::fs::read(
+                        plan.root
+                            .join("o")
+                            .join(entry.out)
+                            .join("libfixture-123.rmeta")
+                    )
+                    .unwrap(),
+                    b"compiled metadata"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
     fn build_time_stamps_are_volatile() {
         let now = 1_791_789_578.0;
         assert!(is_fresh_stamp("1791789570", now));
@@ -855,6 +1082,7 @@ mod tests {
                 manifest: manifest.clone(),
                 target_bound: scoped.then(|| (scoped_manifest.clone(), "scoped".into())),
                 workspace: None,
+                content: vec![],
             };
             let mut value = serde_json::to_value(&staged).unwrap();
             if !scoped {
