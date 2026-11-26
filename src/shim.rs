@@ -596,7 +596,8 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     // Local opt-level=0 codegen units use Cranelift when the active nightly
     // toolchain ships `librustc_codegen_cranelift*.so`. Registry deps stay on
     // LLVM so they hit the prebuilt store; Cranelift links cleanly against
-    // LLVM-compiled `.rlib`s (identical `.rmeta` + ELF `.o` ABI).
+    // LLVM-compiled `.rlib`s (identical `.rmeta` + ELF `.o` ABI). A backend
+    // without landing-pad support compiles `panic=abort` units only.
     let cranelift_on = plan.is_none() && cranelift_eligible(real, args, &described, nightly);
     if cranelift_on {
         link_args.push(OsString::from("-Zcodegen-backend=cranelift"));
@@ -1151,31 +1152,111 @@ fn cranelift_enabled_env() -> bool {
     }
 }
 
-fn cranelift_backend_present(real: &std::path::Path) -> bool {
+/// The Cranelift codegen backend library shipped in the toolchain's sysroot.
+fn cranelift_backend(real: &std::path::Path) -> Option<PathBuf> {
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     {
         let _ = real;
-        return false;
+        None
     }
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        let Some(sysroot) = real.parent().and_then(|p| p.parent()) else {
-            return false;
-        };
+        let sysroot = real.parent().and_then(|p| p.parent())?;
         let backends = sysroot
             .join("lib")
             .join("rustlib")
             .join("x86_64-unknown-linux-gnu")
             .join("codegen-backends");
-        let Ok(entries) = std::fs::read_dir(backends) else {
-            return false;
-        };
-        entries.flatten().any(|e| {
-            let name = e.file_name();
-            let s = name.to_string_lossy();
-            s.starts_with("librustc_codegen_cranelift") && s.ends_with(".so")
-        })
+        std::fs::read_dir(backends)
+            .ok()?
+            .flatten()
+            .find(|e| {
+                let name = e.file_name();
+                let s = name.to_string_lossy();
+                s.starts_with("librustc_codegen_cranelift") && s.ends_with(".so")
+            })
+            .map(|e| e.path())
     }
+}
+
+/// Exported by a backend that was built with landing-pad support
+/// (`toolchain/rustc/compiler/rustc_codegen_cranelift/src/lib.rs`).
+const CRANELIFT_UNWINDING_MARKER: &[u8] = b"JUSTRUST_CG_CLIF_UNWINDING_V1";
+
+/// Can this backend library compile `-Cpanic=unwind` code correctly? One
+/// built without its `unwinding` feature emits no landing pads: a
+/// `catch_unwind` in the crate does not catch, a panicking thread aborts the
+/// whole process (`failed to initiate panic, error 5`) and destructors are
+/// skipped while unwinding. That silently changes program behavior, so such
+/// a backend is used for `panic=abort` units only.
+fn cranelift_backend_unwinds(backend: &std::path::Path) -> bool {
+    let probes = crate::paths::home()
+        .ok()
+        .map(|home| home.join("cache").join("probe"));
+    cranelift_backend_unwinds_memo(backend, probes.as_deref())
+}
+
+fn cranelift_backend_unwinds_memo(
+    backend: &std::path::Path,
+    probes: Option<&std::path::Path>,
+) -> bool {
+    let Ok(meta) = std::fs::metadata(backend) else {
+        return false;
+    };
+    // The library is tens of megabytes: remember the answer per file
+    // identity so only the first unit after a toolchain install scans it.
+    let memo = probes.map(|dir| {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        backend.hash(&mut h);
+        meta.len().hash(&mut h);
+        meta.modified().ok().hash(&mut h);
+        dir.join(format!("clif-unwind-{:016x}", h.finish()))
+    });
+    if let Some(memo) = &memo {
+        match std::fs::read(memo).as_deref() {
+            Ok(b"1") => return true,
+            Ok(b"0") => return false,
+            _ => {}
+        }
+    }
+    let Ok(file) = std::fs::File::open(backend) else {
+        return false;
+    };
+    // SAFETY: a read-only private view of an installed toolchain file.
+    let Ok(map) = (unsafe { memmap2::Mmap::map(&file) }) else {
+        return false;
+    };
+    let unwinds = memchr::memmem::find(&map, CRANELIFT_UNWINDING_MARKER).is_some();
+    if let Some(memo) = &memo
+        && let Some(dir) = memo.parent()
+        && std::fs::create_dir_all(dir).is_ok()
+    {
+        let _ = std::fs::write(memo, if unwinds { b"1" } else { b"0" });
+    }
+    unwinds
+}
+
+/// Does the unit compile with `-C panic=abort`? (The last `-C panic` wins.)
+fn panic_aborts(args: &[OsString]) -> bool {
+    let mut strategy = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].to_string_lossy();
+        let cg = if a == "-C" || a == "--codegen" {
+            i += 1;
+            args.get(i).map(|x| x.to_string_lossy().into_owned())
+        } else {
+            a.strip_prefix("-C")
+                .or_else(|| a.strip_prefix("--codegen="))
+                .map(str::to_owned)
+        };
+        if let Some(v) = cg.as_deref().and_then(|c| c.strip_prefix("panic=")) {
+            strategy = Some(v.to_owned());
+        }
+        i += 1;
+    }
+    matches!(strategy.as_deref(), Some("abort" | "immediate-abort"))
 }
 
 fn cranelift_args_eligible(args: &[OsString], described: &Unit) -> bool {
@@ -1249,7 +1330,8 @@ fn cranelift_eligible(
     nightly
         && cranelift_enabled_env()
         && cranelift_args_eligible(args, described)
-        && cranelift_backend_present(real)
+        && cranelift_backend(real)
+            .is_some_and(|backend| panic_aborts(args) || cranelift_backend_unwinds(&backend))
 }
 
 fn cranelift_fallback_needed(captured: &[Vec<u8>]) -> bool {
@@ -1695,6 +1777,40 @@ mod tests {
         // non-local registry dep -> skip
         u.local = false;
         assert!(!cranelift_args_eligible(&os(&[]), &u));
+    }
+
+    #[test]
+    fn cranelift_needs_an_unwinding_backend_unless_the_unit_aborts() {
+        let os = |s: &[&str]| s.iter().map(OsString::from).collect::<Vec<_>>();
+        assert!(!panic_aborts(&os(&["--crate-name", "foo", "--test"])));
+        assert!(!panic_aborts(&os(&["-C", "panic=unwind"])));
+        assert!(panic_aborts(&os(&["-C", "panic=abort"])));
+        assert!(panic_aborts(&os(&["-Cpanic=abort", "-C", "opt-level=0"])));
+        assert!(panic_aborts(&os(&["--codegen=panic=immediate-abort"])));
+        // The last strategy wins, as in rustc.
+        assert!(!panic_aborts(&os(&["-Cpanic=abort", "-C", "panic=unwind"])));
+
+        let dir = std::env::temp_dir().join(format!("jr-clif-unwind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let probes = dir.join("probe");
+        let plain = dir.join("librustc_codegen_cranelift-old.so");
+        std::fs::write(&plain, b"\x7fELF __rustc_codegen_backend").unwrap();
+        let unwinding = dir.join("librustc_codegen_cranelift-new.so");
+        let mut bytes = b"\x7fELF __rustc_codegen_backend ".to_vec();
+        bytes.extend_from_slice(CRANELIFT_UNWINDING_MARKER);
+        std::fs::write(&unwinding, &bytes).unwrap();
+        for _memoized in 0..2 {
+            assert!(!cranelift_backend_unwinds_memo(&plain, Some(&probes)));
+            assert!(cranelift_backend_unwinds_memo(&unwinding, Some(&probes)));
+        }
+        assert_eq!(std::fs::read_dir(&probes).unwrap().count(), 2);
+        assert!(cranelift_backend_unwinds_memo(&unwinding, None));
+        assert!(!cranelift_backend_unwinds_memo(
+            &dir.join("missing.so"),
+            Some(&probes)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
