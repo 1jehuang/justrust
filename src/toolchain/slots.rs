@@ -403,15 +403,92 @@ pub fn run(command: Command) -> Result<()> {
     run_at(&root, command, &mut install)
 }
 
+fn begin_allowed(root: &Path, state: &State, next: &str) -> Result<()> {
+    id(next)?;
+    if state.active.id == next {
+        bail!("candidate is already active");
+    }
+    if state.previous.is_some() {
+        bail!(
+            "two slots occupied: validate the current candidate and cleanup before beginning another, or discard FAILED_ID after drain; last-good retained"
+        );
+    }
+    reject_retired(root, next)
+}
+
+fn validate_allowed(state: &State, active: &str) -> Result<()> {
+    id(active)?;
+    if active != state.active.id {
+        bail!("validation must name active compiler {}", state.active.id);
+    }
+    Ok(())
+}
+
+/// Download, unpack and verify the compilers a lifecycle change needs before
+/// it excludes builds.
+///
+/// Every build on this machine waits at the lifecycle gate while it is held
+/// exclusively. Installing a candidate takes seconds to minutes, so that
+/// happens here, holding the gate shared like builds do: they keep selecting
+/// and leasing compilers meanwhile. The installer lock still excludes other
+/// installers, and deletion needs the exclusive gate. Installation publishes
+/// a complete prefix with one rename, so a build never sees part of one.
+fn prepare(
+    root: &Path,
+    command: &Command,
+    install: &mut dyn FnMut(&str) -> Result<Slot>,
+) -> Result<Vec<Slot>> {
+    if !matches!(command, Command::Begin { .. } | Command::Validate { .. }) {
+        return Ok(Vec::new());
+    }
+    let gate = open_lock(&root.join(".slots.lock"))?;
+    gate.lock_shared()?;
+    let _install = super::lock_exclusive(&root.join(".install.lock"))?;
+    let state = read(root)?;
+    check_owned_prefixes(root, state.as_ref(), command)?;
+    let state = state.as_ref().context("initialize slots first")?;
+    let names = match command {
+        Command::Begin { next } => {
+            begin_allowed(root, state, next)?;
+            // Reverify CURRENT before NEXT. Neither activates defaults.
+            vec![state.active.id.as_str(), next.as_str()]
+        }
+        Command::Validate { active } => {
+            validate_allowed(state, active)?;
+            vec![active.as_str()]
+        }
+        _ => Vec::new(),
+    };
+    names.into_iter().map(install).collect()
+}
+
+/// A compiler `prepare` installed is still complete under the exclusive gate.
+fn still_installed(slot: &Slot) -> bool {
+    std::fs::read(slot.path.join(super::MARKER))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<super::Installed>(&bytes).ok())
+        .is_some_and(|info| info.id == slot.id)
+}
+
 fn run_at(
     root: &Path,
     command: Command,
     install: &mut dyn FnMut(&str) -> Result<Slot>,
 ) -> Result<()> {
     std::fs::create_dir_all(root)?;
+    let mut prepared = prepare(root, &command, install)?;
     let _lifecycle = super::lock_exclusive(&root.join(".slots.lock"))?;
     inheritable(&_lifecycle)?;
     let _install = super::lock_exclusive(&root.join(".install.lock"))?;
+    // Another lifecycle change may have run between preparing and this gate:
+    // every check repeats here, and a prepared compiler is reused only while
+    // it is still installed.
+    let mut install = |name: &str| -> Result<Slot> {
+        match prepared.iter().position(|slot| slot.id == name) {
+            Some(found) if still_installed(&prepared[found]) => Ok(prepared.swap_remove(found)),
+            _ => install(name),
+        }
+    };
     let mut state = read(root)?;
     check_owned_prefixes(root, state.as_ref(), &command)?;
     let mut outcome = "ok";
@@ -434,29 +511,17 @@ fn run_at(
             });
         }
         Command::Begin { next } => {
-            id(&next)?;
             let s = state.as_mut().context("initialize slots first")?;
-            if s.active.id == next {
-                bail!("candidate is already active");
-            }
-            if s.previous.is_some() {
-                bail!(
-                    "two slots occupied: validate the current candidate and cleanup before beginning another, or discard FAILED_ID after drain; last-good retained"
-                );
-            }
+            begin_allowed(root, s, &next)?;
             // Reverify CURRENT and install NEXT with the native installer. Neither activates defaults.
             install(&s.active.id)?;
-            reject_retired(root, &next)?;
             let candidate = install(&next)?;
             s.previous = Some(std::mem::replace(&mut s.active, candidate));
             s.discarded = None;
         }
         Command::Validate { active } => {
-            id(&active)?;
             let s = state.as_mut().context("initialize slots first")?;
-            if active != s.active.id {
-                bail!("validation must name active compiler {}", s.active.id);
-            }
+            validate_allowed(s, &active)?;
             install(&active)?;
             s.last_good = active;
         }
@@ -809,6 +874,92 @@ mod tests {
         assert_eq!(json["last_good"], "jr-aaaaaaa");
         assert_eq!(json["validated"], false);
         assert_eq!(json["status"], "busy");
+    }
+
+    #[test]
+    fn builds_keep_selecting_compilers_while_a_candidate_installs() {
+        let f = Fixture::new();
+        f.init();
+        let mut installs = Vec::new();
+        let mut installer = |name: &str| -> Result<Slot> {
+            // What a build does first: `selection_at`, then its usage lease.
+            let gate = open_lock(&f.0.join(".slots.lock"))?;
+            gate.try_lock_shared()
+                .map_err(|_| anyhow::anyhow!("installing {name} excluded builds"))?;
+            installs.push(name.to_owned());
+            let path = f.0.join("managed/staged").join(name);
+            std::fs::create_dir_all(&path)?;
+            let info = super::super::Installed {
+                id: name.into(),
+                ..Default::default()
+            };
+            std::fs::write(path.join(super::super::MARKER), serde_json::to_vec(&info)?)?;
+            Ok(Slot {
+                id: name.into(),
+                path,
+            })
+        };
+        run_at(
+            &f.0,
+            Command::Begin {
+                next: "jr-bbbbbbb".into(),
+            },
+            &mut installer,
+        )
+        .unwrap();
+        run_at(
+            &f.0,
+            Command::Validate {
+                active: "jr-bbbbbbb".into(),
+            },
+            &mut installer,
+        )
+        .unwrap();
+        // Each compiler is installed or reverified once, never again under
+        // the exclusive gate.
+        assert_eq!(installs, ["jr-aaaaaaa", "jr-bbbbbbb", "jr-bbbbbbb"]);
+        let state = read(&f.0).unwrap().unwrap();
+        assert_eq!(state.active.id, "jr-bbbbbbb");
+        assert_eq!(state.last_good, "jr-bbbbbbb");
+        assert_eq!(state.previous.unwrap().id, "jr-aaaaaaa");
+    }
+
+    #[test]
+    fn prepared_compiler_that_vanished_is_installed_again_under_the_gate() {
+        let f = Fixture::new();
+        f.init();
+        let slot = Slot {
+            id: "jr-aaaaaaa".into(),
+            path: f.0.join("managed/staged/jr-aaaaaaa"),
+        };
+        assert!(still_installed(&slot));
+        std::fs::write(
+            slot.path.join(super::super::MARKER),
+            b"{\"id\":\"jr-ccccccc\"}",
+        )
+        .unwrap();
+        assert!(!still_installed(&slot));
+        std::fs::remove_dir_all(&slot.path).unwrap();
+        assert!(!still_installed(&slot));
+        // Rejected requests install nothing before the gate either.
+        let mut calls = 0;
+        let rejected = run_at(
+            &f.0,
+            Command::Validate {
+                active: "jr-bbbbbbb".into(),
+            },
+            &mut |_| {
+                calls += 1;
+                bail!("must not install")
+            },
+        );
+        assert!(
+            rejected
+                .unwrap_err()
+                .to_string()
+                .contains("must name active compiler")
+        );
+        assert_eq!(calls, 0);
     }
 
     #[test]
