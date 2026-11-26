@@ -823,7 +823,7 @@ fn active_row(
             span(format!(" {}", pad(&run.place, WHERE_WIDTH)), LABEL),
             span(format!(" {}", pad("-", MACHINE_WIDTH)), DIM),
             span(format!(" {elapsed:>7}"), wall_color(run.elapsed)),
-            span("      -     -     -     -  ", DIM),
+            span("      -      -     -     -     -  ", DIM),
             span(pad("-", version_width / 2), DIM),
             span(" ", DIM),
             span(
@@ -839,7 +839,7 @@ fn active_row(
             strong("building", ACCENT),
             span(" · ", LABEL),
             span(elapsed, wall_color(run.elapsed)),
-            span(" · - · - · - · - · ", LABEL),
+            span(" · - · - · - · - · - · ", LABEL),
             span(label, VALUE),
             span(format!("  {detail}"), DIM),
         ]);
@@ -1111,12 +1111,13 @@ fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
         return;
     }
     let width = inner.width as usize;
-    let wide = width >= 84;
     // EST and FLOOR each take six cells plus a separator; FRESH, CGU and OPT each take five plus a separator.
-    let remaining = width.saturating_sub(
-        RESULT_WIDTH + WHERE_WIDTH + MACHINE_WIDTH + 1 + 7 + 9 + 4 + 7 + 7 + 6 + 6 + 6,
-    );
-    let version_width = remaining.saturating_sub(10).min(34);
+    let fixed = RESULT_WIDTH + WHERE_WIDTH + MACHINE_WIDTH + 1 + 7 + 9 + 4 + 7 + 7 + 6 + 6 + 6;
+    let remaining = width.saturating_sub(fixed);
+    // The columns are only worth it while the command still has a column.
+    let wide = remaining >= 10;
+    // The command comes first: versions only get what is left past 22 cells.
+    let version_width = remaining.saturating_sub(22).min(34);
     let command_width = remaining.saturating_sub(version_width);
     let header = if wide {
         format!(
@@ -1267,7 +1268,12 @@ fn history(f: &mut Frame, area: Rect, state: &State, rows: &[&RunRow]) {
             ]);
             let used = spans.iter().map(Span::width).sum::<usize>();
             let room = width.saturating_sub(used);
-            let command_width = room.saturating_sub(versions.width() + 3).max(room.min(8));
+            // A command is worth more than the versions beside it: it keeps
+            // up to 24 cells before they get any.
+            let want = UnicodeWidthStr::width(command.as_str()).min(24);
+            let command_width = room
+                .saturating_sub(versions.width() + 3)
+                .max(room.min(want));
             spans.push(span(clip(&command, command_width), VALUE));
             spans.push(span(" · ", DIM));
             spans.extend(versions.spans);
@@ -2415,7 +2421,11 @@ mod tests {
             row.contains("25ms") && row.contains("-     z  -") && row.contains("test -p ui"),
             "{row}"
         );
-        assert!(screen(&state, 76, 30).contains(" · 25ms · - · - · z · test -p ui"));
+        let narrow = screen(&state, 76, 30);
+        assert!(
+            narrow.contains(" · 25ms · - · - · z · test -p ui"),
+            "{narrow}"
+        );
         assert!(text.contains("WHEN"));
         // The wide layout shows the age in place of the run ID.
         let history = text.split("─ Runs").nth(1).unwrap();
@@ -2541,12 +2551,19 @@ mod tests {
         assert!(text.contains("╭─ Runs · 3 · 1 building "), "{text}");
         let row = text.lines().find(|l| l.contains("◌ building")).unwrap();
         assert!(row.contains("hosted") && row.contains("1m15s"), "{row}");
-        assert!(row.contains("jcode test  serde") && row.contains("now"));
+        assert!(
+            row.contains("jcode test  serde") && row.contains("now"),
+            "{row}"
+        );
         state.snapshot.active[0].running = vec![("hosted".into(), 1.0)];
         assert!(!screen(&state, 140, 30).contains("jcode test  hosted"));
         state.snapshot.active[0].running = vec![("serde".into(), 1.0)];
-        // The narrow layout keeps it too.
-        assert!(screen(&state, 70, 30).contains("building · 1m15s · - · - · - · - · jcode test"));
+        // The narrow layout keeps it too, one placeholder per column after WHEN.
+        let narrow = screen(&state, 70, 30);
+        assert!(
+            narrow.contains("building · 1m15s · - · - · - · - · - · jcode test"),
+            "{narrow}"
+        );
 
         assert_eq!(wall_color(2.0), GOOD);
         assert_eq!(wall_color(30.0), VALUE);
