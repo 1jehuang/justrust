@@ -1416,8 +1416,13 @@ mod tests {
             collect(&reg, &base, Mode::Off, DEFAULT_GRACE, &p, &mut |_| {}),
             0
         );
-        let freed = collect(&reg, &base, Mode::On, DEFAULT_GRACE, &p, &mut |_| {});
-        assert_eq!(freed, 12 * GIB);
+        // The log is the only record of why a pass skipped a target: keep it
+        // for the failure message (this test has failed under parallel load).
+        let mut lines = Vec::new();
+        let freed = collect(&reg, &base, Mode::On, DEFAULT_GRACE, &p, &mut |l| {
+            lines.push(l)
+        });
+        assert_eq!(freed, 12 * GIB, "{lines:#?}");
         assert!(!a.join("target").exists());
         assert!(a.join("src/lib.rs").exists());
         std::fs::remove_dir_all(&base).unwrap();
