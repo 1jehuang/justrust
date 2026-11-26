@@ -1611,6 +1611,12 @@ fn no_run_argv(argv: &[String]) -> Vec<String> {
 /// An unknown flag is taken to have no value. If it has one, two requests
 /// that differ there count as the same units, and the cost is waiting for a
 /// prebuild that helps less than hoped: the request still runs in full.
+///
+/// Flags that only change what Cargo prints or whether it keeps running
+/// tests are dropped. The test pool compiles with
+/// `test ARGS --no-run --message-format=json-render-diagnostics` before it
+/// runs anything, so every pooled `justrust test` arrives in that form, while
+/// the prebuild guessed from the previous request is `test ARGS --no-run`.
 fn units_argv(argv: &[String]) -> Option<Vec<String>> {
     if !is_test(argv) {
         return None;
@@ -1619,6 +1625,19 @@ fn units_argv(argv: &[String]) -> Option<Vec<String>> {
     let mut args = argv[1..].iter().take_while(|a| *a != "--");
     while let Some(a) = args.next() {
         if a == "--no-run" || !a.starts_with('-') {
+            continue;
+        }
+        if matches!(a.as_str(), "--message-format" | "--color") {
+            args.next();
+            continue;
+        }
+        if a.starts_with("--message-format=")
+            || a.starts_with("--color=")
+            || matches!(
+                a.as_str(),
+                "--no-fail-fast" | "-q" | "--quiet" | "-v" | "-vv" | "--verbose"
+            )
+        {
             continue;
         }
         out.push(a.clone());
@@ -2162,6 +2181,35 @@ mod tests {
         assert_ne!(units(&["test", "-p", "x", "--lib", "--release"]), lib);
         assert_ne!(units(&["test", "--package=x", "--lib"]), lib);
         assert_eq!(units(&["check", "-p", "x", "--lib"]), None);
+        // The pool's compile request, and other flags that only change what
+        // is printed or whether tests keep running.
+        assert_eq!(
+            units(&[
+                "test",
+                "-p",
+                "x",
+                "--lib",
+                "--no-run",
+                "--message-format=json-render-diagnostics"
+            ]),
+            lib
+        );
+        assert_eq!(
+            units(&[
+                "test",
+                "--message-format",
+                "json",
+                "--color",
+                "never",
+                "-p",
+                "x",
+                "--lib",
+                "-q",
+                "--no-fail-fast",
+                "--color=always"
+            ]),
+            lib
+        );
 
         let key = |env: &[(&str, &str)], a: &[&str]| units_key(&req(env, a));
         let base = key(&[("PATH", "/bin")], &["test", "--lib", "a::"]);
