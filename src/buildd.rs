@@ -1,9 +1,12 @@
 //! The resident build daemon: `justrust __buildd`.
 //!
-//! One per user, started on demand by the first agent build that wants it,
-//! exits after 15 minutes without requests or running builds. Agent builds
-//! (`justrust check|test|build|clippy`) hand their request to it over
-//! `~/.justrust/buildd/sock` instead of running cargo themselves:
+//! One per user and justrust build, started on demand by the first agent
+//! build that wants it, exits after 15 minutes without requests or running
+//! builds. Agent builds (`justrust check|test|build|clippy`) hand their
+//! request to it over `~/.justrust/buildd/<build>.sock` instead of running
+//! cargo themselves. Clients of different builds (a pinned CI client and a
+//! newer developer client on one hosted machine, or the client before and
+//! after an update) each talk to a daemon of their own build:
 //!
 //! - **Coalescing.** A request is identified by its working directory, its
 //!   full argv, the environment that can change the result (everything
@@ -144,8 +147,66 @@ fn dir() -> Result<PathBuf> {
     Ok(crate::paths::home()?.join("buildd"))
 }
 
+/// File stem of this build's daemon socket and lock. A daemon only serves
+/// clients of its own build, so each build gets its own pair: two builds
+/// sharing one pair evicted each other's daemon on every alternating request,
+/// and while the evicted one drained its builds nobody could start a daemon
+/// at all (each request then waited out the 3 s start timeout).
+fn build_stem(build: &str) -> String {
+    match build.strip_prefix("sha256-") {
+        Some(hex) if hex.len() >= 16 && hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            hex[..16].to_owned()
+        }
+        // An unreadable binary has a per-process id: nothing to share.
+        _ => "unidentified".to_owned(),
+    }
+}
+
+fn stem() -> String {
+    build_stem(&crate::remote_daemon::build_id())
+}
+
 pub fn sock_path() -> Result<PathBuf> {
-    Ok(dir()?.join("sock"))
+    Ok(dir()?.join(format!("{}.sock", stem())))
+}
+
+fn lock_path() -> Result<PathBuf> {
+    Ok(dir()?.join(format!("{}.lock", stem())))
+}
+
+/// Locks and sockets of builds that have had no daemon for this long go.
+const STALE_BUILD_FILES: Duration = Duration::from_secs(24 * 3600);
+
+/// Remove the socket and lock files daemons of other builds left behind.
+/// A lock is only removed while this process holds it, and a starting daemon
+/// checks that the lock it took is still the file at its path (`daemon`), so
+/// no two daemons of one build can result.
+fn sweep_stale(d: &Path, mine: &Path, older_than: Duration) {
+    let Ok(rd) = std::fs::read_dir(d) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p == mine || p.extension().is_none_or(|x| x != "lock") {
+            continue;
+        }
+        let old = e
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age >= older_than);
+        if !old {
+            continue;
+        }
+        let Ok(f) = std::fs::OpenOptions::new().write(true).open(&p) else {
+            continue;
+        };
+        if f.try_lock().is_ok() {
+            let _ = std::fs::remove_file(p.with_extension("sock"));
+            let _ = std::fs::remove_file(&p);
+        }
+    }
 }
 
 // ------------------------------------------------------------------ frames
@@ -933,14 +994,27 @@ pub fn daemon_main() -> ! {
 fn daemon() -> Result<()> {
     let d = dir()?;
     std::fs::create_dir_all(&d)?;
+    let lock_path = lock_path()?;
     let lock = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(d.join("lock"))?;
+        .open(&lock_path)?;
     if lock.try_lock().is_err() {
         bail!("another build daemon is running");
     }
+    // A sweeper may have removed the file between the open and the lock.
+    let same_file = |a: std::io::Result<std::fs::Metadata>,
+                     b: std::io::Result<std::fs::Metadata>| {
+        matches!((a, b), (Ok(a), Ok(b)) if crate::sys::file_id(&a) == crate::sys::file_id(&b))
+    };
+    if !same_file(lock.metadata(), std::fs::metadata(&lock_path)) {
+        bail!("the build daemon lock was replaced while starting");
+    }
+    // Its mtime says when a daemon of this build last started.
+    let _ = (&lock).write_all(b"\n");
+    let _ = lock.set_len(0);
+    sweep_stale(&d, &lock_path, STALE_BUILD_FILES);
     let sock = sock_path()?;
     let _ = std::fs::remove_file(&sock);
     let listener = UnixListener::bind(&sock)?;
@@ -1937,6 +2011,70 @@ fn reap(dm: &Daemon, key: &str, b: &Arc<Build>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_build_has_its_own_daemon_socket() {
+        let a = build_stem(&format!("sha256-{}", "ab12".repeat(16)));
+        let b = build_stem(&format!("sha256-{}", "cd34".repeat(16)));
+        assert_eq!(a, "ab12ab12ab12ab12");
+        assert_ne!(a, b);
+        // An unreadable binary has a fresh id per process: one shared name,
+        // and the daemon behind it still refuses clients of another build.
+        assert_eq!(build_stem("unreadable-12-34-0"), "unidentified");
+        assert_eq!(build_stem("sha256-../../etc"), "unidentified");
+        // sun_path holds 108 bytes: a home this deep still fits.
+        let deep = Path::new("/home")
+            .join("u".repeat(48))
+            .join(".justrust/buildd");
+        assert!(deep.join(format!("{a}.sock")).as_os_str().len() < 108);
+    }
+
+    #[test]
+    fn sweep_removes_only_unheld_files_of_other_builds() {
+        let d = std::env::temp_dir().join(format!("jr-buildd-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        for f in [
+            "mine.lock",
+            "mine.sock",
+            "gone.lock",
+            "gone.sock",
+            "live.lock",
+            "live.sock",
+            "lock",
+            "sock",
+            "daemon.log",
+        ] {
+            std::fs::write(d.join(f), b"").unwrap();
+        }
+        // A daemon of another build is running: it holds its lock.
+        let live = std::fs::File::open(d.join("live.lock")).unwrap();
+        live.try_lock().unwrap();
+        // Nothing is old enough yet.
+        sweep_stale(&d, &d.join("mine.lock"), Duration::from_secs(3600));
+        assert!(d.join("gone.lock").exists() && d.join("gone.sock").exists());
+        sweep_stale(&d, &d.join("mine.lock"), Duration::ZERO);
+        let mut left: Vec<String> = std::fs::read_dir(&d)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        // The legacy shared pair belongs to older clients: never touched.
+        assert_eq!(
+            left,
+            [
+                "daemon.log",
+                "live.lock",
+                "live.sock",
+                "lock",
+                "mine.lock",
+                "mine.sock",
+                "sock"
+            ]
+        );
+        drop(live);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     #[cfg(unix)]
