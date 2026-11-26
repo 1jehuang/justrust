@@ -283,7 +283,26 @@ macro_rules! top_level_options {
 
         impl Options {
             pub fn dep_tracking_hash(&self, for_crate_hash: bool) -> Hash64 {
+                // justrust: `--remap-path-prefix=FROM=TO` enters the
+                // incremental hash by `TO` only. `FROM` is where this build
+                // happens to live (the workspace checkout, the target dir or
+                // build slot); hashing it threw away the whole session every
+                // time a crate was built from another slot or worktree of the
+                // same repository, although the remapped names are the same.
+                // What `FROM` changes is still tracked where it is used: the
+                // working directory is its own tracked option and source
+                // files are identified by their remapped name in every span
+                // (`RealFileName`'s `Hash`), so a file that is remapped
+                // differently is a different file to the dep graph.
+                let jr_remap_destinations: Vec<PathBuf> =
+                    self.remap_path_prefix.iter().map(|(_from, to)| to.clone()).collect();
                 let mut sub_hashes = BTreeMap::new();
+                if !for_crate_hash {
+                    sub_hashes.insert(
+                        "remap_path_prefix",
+                        &jr_remap_destinations as &dyn dep_tracking::DepTrackingHash,
+                    );
+                }
                 $(
                     hash_opt!(
                         $opt,
@@ -412,7 +431,10 @@ top_level_options!(
         cli_forced_local_thinlto_off: bool [UNTRACKED],
 
         /// Remap source path prefixes in all output (messages, object files, debug, etc.).
-        remap_path_prefix: Vec<(PathBuf, PathBuf)> [TRACKED_NO_CRATE_HASH],
+        ///
+        /// justrust: not hashed here. `Options::dep_tracking_hash` adds the
+        /// remap destinations to the incremental hash instead (see there).
+        remap_path_prefix: Vec<(PathBuf, PathBuf)> [UNTRACKED],
         /// Defines which scopes of paths should be remapped by `--remap-path-prefix`.
         remap_path_scope: RemapPathScopeComponents [TRACKED_NO_CRATE_HASH],
 

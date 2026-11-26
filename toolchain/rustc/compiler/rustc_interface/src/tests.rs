@@ -694,6 +694,25 @@ fn test_top_level_options_tracked_no_crate() {
     );
     tracked!(remap_path_prefix, vec![("/home/bors/rust".into(), "src".into())]);
     // tidy-alphabetical-end
+
+    // justrust: where a remapped prefix lives on this machine (the checkout,
+    // the target dir or build slot) is not part of the incremental hash. What
+    // it is remapped to, and how many remappings there are, still is.
+    let remap = |pairs: &[(&str, &str)]| {
+        let mut opts = reference.clone();
+        opts.remap_path_prefix =
+            pairs.iter().map(|(from, to)| (PathBuf::from(*from), PathBuf::from(*to))).collect();
+        opts.dep_tracking_hash(false)
+    };
+    let primary = remap(&[("/w", "/jr-ws"), ("/w/target", "/justrust-target")]);
+    assert_eq!(
+        primary,
+        remap(&[("/w", "/jr-ws"), ("/w/target/justrust-slots/3", "/justrust-target")])
+    );
+    assert_eq!(primary, remap(&[("/other", "/jr-ws"), ("/other/target", "/justrust-target")]));
+    assert_ne!(primary, remap(&[("/w", "/jr-ws"), ("/w/target", "/elsewhere")]));
+    assert_ne!(primary, remap(&[("/w/target", "/justrust-target"), ("/w", "/jr-ws")]));
+    assert_ne!(primary, remap(&[("/w", "/jr-ws")]));
 }
 
 #[test]
