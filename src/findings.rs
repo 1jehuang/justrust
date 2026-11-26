@@ -705,7 +705,7 @@ fn unit_matches(unit_name: &str, package: &str) -> bool {
 }
 
 /// Cargo flags that take a value, so the next arg is not a test filter.
-const VALUE_FLAGS: &[&str] = &[
+pub(crate) const VALUE_FLAGS: &[&str] = &[
     "-p",
     "--package",
     "-F",

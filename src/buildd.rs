@@ -823,6 +823,9 @@ struct Build {
     /// A `test` prebuilt as `test --no-run`: requests wait for it, then run
     /// for real (on Fresh units), never take its output.
     compile_only: Mutex<bool>,
+    /// What a compile-only prebuild compiles ([`units_key`]): a request for
+    /// other tests of the same units waits for it too.
+    units_key: Mutex<Option<String>>,
     /// Agent session that asked (`JUSTRUST_SLOT_SESSION`).
     session: String,
     run_id: Option<String>,
@@ -1086,8 +1089,20 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
     let wait_start = Instant::now();
     if !req.prebuild {
         cancel_stale_prebuild(dm, &key, &stamp);
+        // Before the wrong guesses are stopped: this one is not wrong.
+        let same_units = claim_same_units(dm, &req, &key, &stamp);
         cancel_wrong_guess(dm, &key, &session_of(&req));
         settle_compile_only(dm, &key, &stamp);
+        if let Some(b) = same_units {
+            log(&format!(
+                "waiting for compile-only prebuild pid {} of the same units",
+                b.pid
+            ));
+            let mut l = b.log.lock().unwrap();
+            while l.exit.is_none() {
+                l = b.cv.wait(l).unwrap();
+            }
+        }
     }
     let waited_ms = wait_start.elapsed().as_secs_f64() * 1000.0;
     let (build, attached, replayed) = {
@@ -1451,6 +1466,7 @@ fn start(req: &Request, stamp: Option<String>, cwd: &Path) -> Result<Arc<Build>>
     let b = Arc::new(Build {
         stamp,
         compile_only: Mutex::default(),
+        units_key: Mutex::default(),
         session: session_of(req),
         run_id: req
             .env
@@ -1586,6 +1602,64 @@ fn no_run_argv(argv: &[String]) -> Vec<String> {
         out.push("--no-run".into());
     }
     out
+}
+
+/// `test ARGS [FILTER] [-- LIBTEST ARGS]` -> `test ARGS`: what decides the
+/// units Cargo compiles. `test --lib a::` and `test --lib -- b c` build the
+/// same test binary and differ only in which of its tests run.
+///
+/// An unknown flag is taken to have no value. If it has one, two requests
+/// that differ there count as the same units, and the cost is waiting for a
+/// prebuild that helps less than hoped: the request still runs in full.
+fn units_argv(argv: &[String]) -> Option<Vec<String>> {
+    if !is_test(argv) {
+        return None;
+    }
+    let mut out = vec!["test".to_owned()];
+    let mut args = argv[1..].iter().take_while(|a| *a != "--");
+    while let Some(a) = args.next() {
+        if a == "--no-run" || !a.starts_with('-') {
+            continue;
+        }
+        out.push(a.clone());
+        if crate::findings::VALUE_FLAGS.contains(&a.as_str()) {
+            out.extend(args.next().cloned());
+        }
+    }
+    Some(out)
+}
+
+/// [`request_key`] of the units a `test` request compiles, whatever it runs.
+fn units_key(req: &Request) -> Option<String> {
+    let mut same = req.clone();
+    same.argv = units_argv(&req.argv)?;
+    Some(request_key(&same))
+}
+
+/// A compile-only prebuild for this agent is compiling, from these sources,
+/// the units this request needs, guessed from a request for other tests of
+/// them (`test --lib a::` before `test --lib b::`). Claim it, so that it is
+/// not stopped as a wrong guess: the caller waits for it, and the real run
+/// that follows finds every unit Fresh. Stopping it would discard its
+/// progress and compile the same units again from the start.
+fn claim_same_units(dm: &Daemon, req: &Request, key: &str, stamp: &str) -> Option<Arc<Build>> {
+    let units = units_key(req)?;
+    let session = session_of(req);
+    let st = dm.state.lock().unwrap();
+    let b = st
+        .builds
+        .iter()
+        .find(|(k, b)| {
+            *k != key
+                && b.session == session
+                && b.stamp.as_deref() == Some(stamp)
+                && *b.compile_only.lock().unwrap()
+                && b.units_key.lock().unwrap().as_deref() == Some(&*units)
+                && b.log.lock().unwrap().exit.is_none()
+        })
+        .map(|(_, b)| b.clone())?;
+    b.log.lock().unwrap().claimed = true;
+    Some(b)
 }
 
 /// A compile-only prebuild of this request and these sources is running:
@@ -1771,6 +1845,7 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
             // sockets or processes, and a cancelled prebuild would kill
             // them mid-run. Compile the same units only.
             let compile_only = needs_compile_only(&req.argv);
+            let units = compile_only.then(|| units_key(&req)).flatten();
             if compile_only {
                 req.argv = no_run_argv(&req.argv);
             }
@@ -1787,6 +1862,7 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
             match start(&req, Some(stamp), &cwd) {
                 Ok(b) => {
                     *b.compile_only.lock().unwrap() = compile_only;
+                    *b.units_key.lock().unwrap() = units;
                     log(&format!(
                         "prebuild {} in {} (stamp {})",
                         req.argv.join(" "),
@@ -2069,6 +2145,112 @@ mod tests {
     }
 
     #[test]
+    fn other_tests_of_the_same_units_share_a_units_key() {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let units = |a: &[&str]| units_argv(&v(a));
+        let lib = Some(v(&["test", "-p", "x", "--lib"]));
+        assert_eq!(units(&["test", "-p", "x", "--lib"]), lib);
+        assert_eq!(units(&["test", "-p", "x", "--lib", "fps::"]), lib);
+        assert_eq!(units(&["test", "fps", "-p", "x", "--lib", "--no-run"]), lib);
+        assert_eq!(
+            units(&["test", "-p", "x", "--lib", "--", "a", "b", "--nocapture"]),
+            lib
+        );
+        // A flag's value is not a filter, and what is compiled differs.
+        assert_ne!(units(&["test", "-p", "y", "--lib"]), lib);
+        assert_ne!(units(&["test", "-p", "x"]), lib);
+        assert_ne!(units(&["test", "-p", "x", "--lib", "--release"]), lib);
+        assert_ne!(units(&["test", "--package=x", "--lib"]), lib);
+        assert_eq!(units(&["check", "-p", "x", "--lib"]), None);
+
+        let key = |env: &[(&str, &str)], a: &[&str]| units_key(&req(env, a));
+        let base = key(&[("PATH", "/bin")], &["test", "--lib", "a::"]);
+        assert!(base.is_some());
+        assert_eq!(
+            base,
+            key(&[("PATH", "/bin")], &["test", "--lib", "--", "b"])
+        );
+        assert_ne!(
+            base,
+            key(&[("PATH", "/usr/bin")], &["test", "--lib", "a::"])
+        );
+        assert_ne!(base, key(&[("PATH", "/bin")], &["test", "a::"]));
+    }
+
+    #[test]
+    fn a_prebuild_of_the_same_units_is_claimed_not_stopped() {
+        let dm = Daemon {
+            state: Mutex::default(),
+            watcher: None,
+            watched: Mutex::default(),
+            sock: (PathBuf::new(), (0, 0)),
+            exe: None,
+            draining: std::sync::atomic::AtomicBool::new(false),
+        };
+        let env = [("PATH", "/bin"), ("JUSTRUST_SLOT_SESSION", "agent")];
+        let guessed = req(&env, &["test", "--lib", "--", "a::"]);
+        let asked = req(&env, &["test", "--lib", "--", "b::", "c"]);
+        let (guessed_key, asked_key) = (request_key(&guessed), request_key(&asked));
+        assert_ne!(guessed_key, asked_key);
+        let prebuild = |units: Option<String>| {
+            let mut b = fake_build();
+            b.session = "agent".into();
+            *b.prebuild.lock().unwrap() = true;
+            *b.compile_only.lock().unwrap() = true;
+            *b.units_key.lock().unwrap() = units;
+            Arc::new(b)
+        };
+        let insert = |b: &Arc<Build>| {
+            let mut st = dm.state.lock().unwrap();
+            st.builds.clear();
+            st.builds.insert(guessed_key.clone(), b.clone());
+        };
+
+        // Other tests of the same units, same sources: wait for it.
+        let b = prebuild(units_key(&guessed));
+        insert(&b);
+        assert!(wrong_guess_candidate(&guessed_key, &b, &asked_key, "agent"));
+        let claimed = claim_same_units(&dm, &asked, &asked_key, "s").unwrap();
+        assert!(Arc::ptr_eq(&claimed, &b));
+        assert!(!wrong_guess_candidate(
+            &guessed_key,
+            &b,
+            &asked_key,
+            "agent"
+        ));
+
+        // Older sources, other units, another agent, or already over: a
+        // wrong guess as before.
+        let unclaimed = |b: &Arc<Build>, asked: &Request, stamp: &str| {
+            insert(b);
+            let key = request_key(asked);
+            assert!(claim_same_units(&dm, asked, &key, stamp).is_none());
+            assert!(!b.log.lock().unwrap().claimed);
+        };
+        unclaimed(&prebuild(units_key(&guessed)), &asked, "newer");
+        unclaimed(
+            &prebuild(units_key(&guessed)),
+            &req(&env, &["test", "--", "b::"]),
+            "s",
+        );
+        unclaimed(
+            &prebuild(units_key(&guessed)),
+            &req(&env, &["clippy", "--all-targets"]),
+            "s",
+        );
+        unclaimed(&prebuild(None), &asked, "s");
+        let other = prebuild(units_key(&guessed));
+        other.log.lock().unwrap().exit = Some(0);
+        unclaimed(&other, &asked, "s");
+        let mut b = fake_build();
+        b.session = "other".into();
+        *b.prebuild.lock().unwrap() = true;
+        *b.compile_only.lock().unwrap() = true;
+        *b.units_key.lock().unwrap() = units_key(&guessed);
+        unclaimed(&Arc::new(b), &asked, "s");
+    }
+
+    #[test]
     fn native_empty_requires_opt_in_and_no_candidates() {
         let mut st = State::default();
         let mut r = req(&[], &["check"]);
@@ -2319,6 +2501,7 @@ mod tests {
         Build {
             stamp: Some("s".into()),
             compile_only: Mutex::default(),
+            units_key: Mutex::default(),
             session: String::new(),
             run_id: None,
             started: Instant::now(),
