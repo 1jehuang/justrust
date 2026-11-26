@@ -87,6 +87,7 @@ pub const DEFAULT_STORE: &str = "https://d1j555vqgf2xkj.cloudfront.net";
 /// remote agent's proxy) reads a key the CDN edge does not hold faster from
 /// here, because the edge has to come here first: 0.10 s against 0.27 s per
 /// manifest from a us-west-2 build host.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub const DEFAULT_STORE_ORIGIN: &str =
     "https://jcode-justrust-prebuilt-production-280196252242.s3.us-east-1.amazonaws.com";
 
@@ -94,6 +95,7 @@ pub const DEFAULT_STORE_ORIGIN: &str =
 /// `infra/prebuilt-store-replica.yaml`), filled by S3 replication, so they
 /// can lag it: a key missing in one is asked for again from the store. From
 /// a build host in the same region a request takes about 4 ms.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub const DEFAULT_STORE_REPLICAS: &[&str] = &[
     "https://jcode-justrust-prebuilt-production-280196252242-us-west-2.s3.us-west-2.amazonaws.com",
 ];
@@ -102,6 +104,7 @@ pub const DEFAULT_STORE_REPLICAS: &[&str] = &[
 /// which it ranks by measured latency (`prebuilt_proxy`). The public store
 /// adds its bucket and replicas. `JUSTRUST_PREBUILT_REPLICAS` (https URLs
 /// separated by spaces or commas) names replicas of any store.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub fn proxy_sources(base: &str) -> Vec<crate::prebuilt_proxy::Source> {
     proxy_sources_with(
         base,
@@ -109,6 +112,7 @@ pub fn proxy_sources(base: &str) -> Vec<crate::prebuilt_proxy::Source> {
     )
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 fn proxy_sources_with(base: &str, replicas: Option<&str>) -> Vec<crate::prebuilt_proxy::Source> {
     use crate::prebuilt_proxy::Source;
     let base = base.trim_end_matches('/');

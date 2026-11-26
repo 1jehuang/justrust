@@ -44,6 +44,8 @@ mod nolocal;
 mod paths;
 mod peercache;
 mod platform_config;
+// Runs inside the remote agent, which is Unix only.
+#[cfg_attr(not(unix), allow(dead_code))]
 mod prebuilt_proxy;
 mod procfs;
 mod profile;

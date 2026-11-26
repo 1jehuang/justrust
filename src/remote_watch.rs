@@ -57,10 +57,13 @@ impl ChangedBatch {
     }
 }
 
+// Only `record_batch` (inotify, Linux) fills the file log.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const MAX_DIRTY_FILES: usize = 2048;
 const MAX_RESCAN_DIRS: usize = 256;
 
 #[derive(Default)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct DirtyLog {
     /// Generation of the last fully committed kernel event batch.
     seq: u64,

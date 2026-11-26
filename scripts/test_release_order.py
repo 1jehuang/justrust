@@ -115,8 +115,10 @@ class ReleaseOrderTests(unittest.TestCase):
 
     def test_published_bootstrap_replaces_cold_source_install(self):
         build = self.job("build")
-        self.assertIn("HOSTED_CLIENT_TAG: v0.1.26", self.workflow)
-        self.assertIn("d9de0d20432364f72d5839b0ffbe8ecf46c98e28e046b6316dc4b1bf128488c1", self.workflow)
+        # A pinned published bootstrap: an exact tag with its checksum. The
+        # values move with every bootstrap bump, so only their shape is fixed.
+        self.assertRegex(self.workflow, r"(?m)^  HOSTED_CLIENT_TAG: v\d+\.\d+\.\d+$")
+        self.assertRegex(self.workflow, r"(?m)^  HOSTED_CLIENT_SHA256: [0-9a-f]{64}$")
         self.assertIn('ci/install-published-client.py --tag "$HOSTED_CLIENT_TAG" --sha256 "$HOSTED_CLIENT_SHA256" --github-path', build)
         self.assertNotIn("install-hosted-client.sh", build)
         self.assertIn("Cache compatibility release dependencies", build)
@@ -148,9 +150,9 @@ class ReleaseOrderTests(unittest.TestCase):
 
     def test_platform_build_inputs_do_not_share_test_mirror_paths(self):
         build = self.job("build")
-        workspace = "${{ matrix.zig && format('{0}/client-release/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}"
+        workspace = "${{ matrix.zig && format('{0}/client-release-v2/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}"
         self.assertIn("working-directory: " + workspace, build)
-        self.assertEqual(build.count("working-directory: ${{ runner.temp }}/client-release/${{ matrix.target }}"), 2)
+        self.assertEqual(build.count("working-directory: ${{ runner.temp }}/client-release-v2/${{ matrix.target }}"), 2)
         self.assertIn(workspace + "/dist/*.tar.gz", build)
         self.assertIn(workspace + "/dist/*.sha256", build)
         self.assertIn("path: release-client/${{ matrix.target }}", build)
@@ -179,7 +181,7 @@ class ReleaseOrderTests(unittest.TestCase):
             runner_temp.mkdir()
             subprocess.run(["bash", "-e", "-c", script], cwd=source,
                            env=dict(os.environ, RUNNER_TEMP=str(runner_temp)), check=True)
-            isolated = runner_temp / "client-release/x86_64-unknown-linux-musl"
+            isolated = runner_temp / "client-release-v2/x86_64-unknown-linux-musl"
             self.assertFalse(isolated.is_relative_to(mirror))
             self.assertEqual((isolated / "Cargo.toml").read_text(), "committed client")
             self.assertEqual((isolated / ".git/config").read_text(), "copied repository metadata")

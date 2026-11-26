@@ -2651,8 +2651,11 @@ mod tests {
         assert!(m.seed(&wt, &main));
         assert_eq!(std::fs::read_to_string(dst.join("lib.rs")).unwrap(), "seed");
         assert!(!dst.join("target/big").exists());
-        // Never over an existing mirror.
-        std::fs::write(src.join("lib.rs"), "newer").unwrap();
+        // Never over an existing mirror. The seed hard-links unchanged
+        // sources, and sources are replaced (temp file, rename), never
+        // rewritten in place, so a seeded file keeps its content.
+        std::fs::write(src.join("lib.rs.tmp"), "newer").unwrap();
+        std::fs::rename(src.join("lib.rs.tmp"), src.join("lib.rs")).unwrap();
         assert!(!m.seed(&wt, &main));
         assert_eq!(std::fs::read_to_string(dst.join("lib.rs")).unwrap(), "seed");
 
