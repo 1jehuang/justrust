@@ -102,6 +102,22 @@ class ReleaseClientTests(unittest.TestCase):
             release.wait_for_publication(VERSION, SHA, 10, 1, production, clock=lambda: 0, sleep=mock.Mock())
             self.assertEqual(production.release_info.call_count, 2)
 
+    def test_unavailable_workflow_status_keeps_waiting_for_publication(self):
+        production = SimpleNamespace(target=lambda: "triple", release_info=mock.Mock(side_effect=[ValueError("old"), {}]))
+        error = release.subprocess.CalledProcessError(1, "gh")
+        with mock.patch.object(release, "remote_tag", return_value=SHA), \
+                mock.patch.object(release, "release_runs", side_effect=error):
+            sleep = mock.Mock()
+            release.wait_for_publication(VERSION, SHA, 10, 1, production, clock=lambda: 0, sleep=sleep)
+            sleep.assert_called_once_with(1)
+            self.assertEqual(production.release_info.call_count, 2)
+        # It still times out, and never reports publication, if nothing is published.
+        production = SimpleNamespace(target=lambda: "triple", release_info=mock.Mock(side_effect=ValueError("held")))
+        with mock.patch.object(release, "remote_tag", return_value=SHA), \
+                mock.patch.object(release, "release_runs", side_effect=error):
+            with self.assertRaisesRegex(TimeoutError, "held"):
+                release.wait_for_publication(VERSION, SHA, 10, 1, production, clock=mock.Mock(side_effect=[0, 11]))
+
     def test_failure_check_is_scoped_to_preflight_and_local_target(self):
         import json
         jobs = [dict(name="preflight", status="completed", conclusion="success"),

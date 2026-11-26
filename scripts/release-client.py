@@ -111,11 +111,19 @@ def wait_for_publication(tag, sha, timeout, poll, production, clock=time.monoton
             return
         except (ValueError, OSError) as error:
             message = str(error)
-        runs = release_runs(tag, sha)
-        # A workflow's full acceptance can continue after publication. We never
-        # wait for overall success before accepting service-selected bytes.
-        if (runs and runs[0]["status"] == "completed" and runs[0]["conclusion"] != "success"
-                and platform_failed(runs[0], triple)):
+        # The workflow is asked only so a failed build ends the wait early.
+        # Publication is decided above, so an unavailable API (v0.1.65: one
+        # HTTP 502 from GitHub ended the wait before activation) is retried.
+        try:
+            runs = release_runs(tag, sha)
+            # A workflow's full acceptance can continue after publication. We never
+            # wait for overall success before accepting service-selected bytes.
+            failed = (runs and runs[0]["status"] == "completed" and runs[0]["conclusion"] != "success"
+                      and platform_failed(runs[0], triple))
+        except subprocess.CalledProcessError:
+            print("Release workflow status unavailable; still waiting for publication.", flush=True)
+            failed = False
+        if failed:
             raise RuntimeError("release preflight or local platform failed before production selection: " + runs[0]["url"])
         if clock() >= deadline:
             raise TimeoutError("publication/production selection timed out: " + message)
