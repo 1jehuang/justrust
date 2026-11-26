@@ -2583,15 +2583,31 @@ fn plan_dirty_paths(root: &Path, tracked: &Root, dirty_paths: &[PathBuf]) -> Opt
         return None;
     }
     let mut plan = DirtyPlan::default();
+    let mut ignore = None;
     for full in dirty_paths {
         let rel = full.strip_prefix(root).ok()?;
         if rel.as_os_str().is_empty() {
             return None;
         }
         if rel.file_name().is_some_and(|n| {
-            n == ".gitignore" || n == ".ignore" || n == ".gitattributes" || n == ".gitmodules"
+            n == ".gitignore"
+                || n == ".ignore"
+                || n == ".gitattributes"
+                || n == ".gitmodules"
+                || n == ".justrustignore"
         }) {
             return None;
+        }
+        // A path this root's `.justrustignore` excludes is not this root's:
+        // its mirror never holds it, and a nested root (a workspace inside
+        // the excluded tree, `remote_build::excluded_root`) reports its own
+        // edits here too. Without this every such edit cost a full scan.
+        if !tracked.manifest.contains_key(rel)
+            && ignore
+                .get_or_insert_with(|| remote_sync::JustrustIgnore::load(root))
+                .matches(rel)
+        {
+            continue;
         }
         if tracked.oversized.iter().any(|p| p == rel) {
             return None;
@@ -3008,13 +3024,21 @@ fn check_sync_failures(st: &mut Sync, ack: &SyncAck, run_roots: Option<&[PathBuf
     }
     for f in failed {
         let f = Path::new(f);
-        for (root, r) in st.roots.iter_mut() {
-            if let Ok(rel) = f.strip_prefix(root) {
-                // Present: rewrite it. Absent (a failed delete): the stale
-                // entry makes the next diff delete it again.
-                r.pending_repair = true;
-                r.manifest.insert(rel.to_path_buf(), UNKNOWN);
-            }
+        // The innermost root: a root nested in a tree its enclosing root
+        // excludes owns the file, and an entry in the enclosing root's
+        // manifest would make that root's next diff delete it.
+        let owner = st
+            .roots
+            .iter_mut()
+            .filter(|(root, _)| f.starts_with(root))
+            .max_by_key(|(root, _)| root.components().count());
+        if let Some((root, r)) = owner
+            && let Ok(rel) = f.strip_prefix(root)
+        {
+            // Present: rewrite it. Absent (a failed delete): the stale
+            // entry makes the next diff delete it again.
+            r.pending_repair = true;
+            r.manifest.insert(rel.to_path_buf(), UNKNOWN);
         }
     }
     if ack.disk_full {
@@ -5147,6 +5171,19 @@ cmp "$base/expected-lib" "$live/src/lib.rs"
         let gi = root.join(".gitignore");
         std::fs::write(&gi, "target/\n").unwrap();
         assert!(plan_dirty_paths(&root, &tracked, &[gi]).is_none());
+
+        // A path the root's `.justrustignore` excludes is not its to mirror:
+        // no plan entry and no full scan. Editing the ignore file rescans.
+        let ji = root.join(".justrustignore");
+        std::fs::write(&ji, "/vendor/\n").unwrap();
+        std::fs::create_dir_all(root.join("vendor/tool/src")).unwrap();
+        let vendored = root.join("vendor/tool/src/lib.rs");
+        std::fs::write(&vendored, "pub fn v() {}\n").unwrap();
+        let plan = plan_dirty_paths(&root, &tracked, std::slice::from_ref(&vendored))
+            .expect("an excluded path stays incremental");
+        assert!(plan.changed.is_empty());
+        assert!(plan.deleted.is_empty());
+        assert!(plan_dirty_paths(&root, &tracked, &[ji]).is_none());
 
         std::fs::remove_dir_all(&root).unwrap();
     }

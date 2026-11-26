@@ -321,22 +321,16 @@ pub fn source_roots(cwd: &Path) -> Result<Vec<PathBuf>> {
     let m: serde_json::Value = serde_json::from_slice(&out.stdout)?;
     let mut dirs = BTreeSet::new();
     if let Some(ws) = m["workspace_root"].as_str() {
-        dirs.insert(repo_root(Path::new(ws)));
+        let ws = Path::new(ws);
+        dirs.insert(repo_root(ws));
+        dirs.extend(excluded_root(ws));
     }
     for p in m["packages"].as_array().into_iter().flatten() {
         if p["source"].is_null()
             && let Some(manifest) = p["manifest_path"].as_str()
             && let Some(d) = Path::new(manifest).parent()
         {
-            let root = repo_root(d);
-            // Outside git (a tarball, a benchmark snapshot) the crate dir
-            // alone misses its workspace's root manifest and lockfile, which
-            // build scripts and cargo read: mirror the whole workspace.
-            dirs.insert(if root.join(".git").exists() {
-                root
-            } else {
-                workspace_dir(d)
-            });
+            dirs.extend(roots_of(d));
         }
     }
     let roots = outermost(dirs);
@@ -366,19 +360,50 @@ fn cargo_missing(e: &anyhow::Error) -> bool {
 fn manifest_roots(cwd: &Path) -> Vec<PathBuf> {
     let dirs = crate::buildd::source_roots(cwd)
         .into_iter()
-        .map(|d| {
-            let root = repo_root(&d);
-            if root.join(".git").exists() {
-                root
-            } else {
-                workspace_dir(&d)
-            }
-        })
+        .flat_map(|d| roots_of(&d))
         .collect();
     outermost(dirs)
 }
 
+/// The roots to mirror so that the machine has the local package in `d`.
+fn roots_of(d: &Path) -> Vec<PathBuf> {
+    let root = repo_root(d);
+    // Outside git (a tarball, a benchmark snapshot) the crate dir alone
+    // misses its workspace's root manifest and lockfile, which build scripts
+    // and cargo read: mirror the whole workspace.
+    if !root.join(".git").exists() {
+        return vec![workspace_dir(d)];
+    }
+    let mut roots = vec![root];
+    roots.extend(excluded_root(d));
+    roots
+}
+
+/// A root of its own for `d` when its repository's `.justrustignore` keeps it
+/// out of the repository's mirror.
+///
+/// The ignore file names trees a build of the repository does not read
+/// (here: `/toolchain/`, 95k files). A build started inside one does read
+/// it, and without a root of its own the machine compiled whatever an older
+/// mirror had left there: `justrust check` in `toolchain/cargo` reported
+/// success on three-day-old sources, with "0 files" to sync.
+fn excluded_root(d: &Path) -> Option<PathBuf> {
+    let repo = repo_root(d);
+    let excluded = |p: &Path| {
+        p.strip_prefix(&repo)
+            .is_ok_and(|rel| crate::remote_sync::excluded_from_mirror(&repo, rel))
+    };
+    if !excluded(d) {
+        return None;
+    }
+    // The package's workspace when that is excluded too, so its root manifest
+    // and lockfile travel. Never wider: the rest of the tree stays out.
+    let ws = workspace_dir(d);
+    Some(if excluded(&ws) { ws } else { d.to_path_buf() })
+}
+
 /// Lockfile path + mtime: path dependencies only change with the lockfile.
+/// `v2`: roots computed before excluded trees got their own are stale.
 fn roots_cache_key(cwd: &Path) -> Option<String> {
     let lock = lockfile(cwd)?;
     let mtime = std::fs::metadata(&lock)
@@ -388,7 +413,7 @@ fn roots_cache_key(cwd: &Path) -> Option<String> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_nanos();
-    Some(format!("{}@{mtime}", lock.display()))
+    Some(format!("v2:{}@{mtime}", lock.display()))
 }
 
 /// The outermost Cargo.lock at or above `cwd` (the workspace's).
@@ -431,12 +456,18 @@ fn repo_root(d: &Path) -> PathBuf {
     d.to_path_buf()
 }
 
-/// Drop roots nested inside another root.
+/// Drop roots nested inside another root, unless that root's mirror excludes
+/// them (`excluded_root`).
 fn outermost(dirs: BTreeSet<PathBuf>) -> Vec<PathBuf> {
+    let covers = |outer: &Path, inner: &Path| {
+        inner.strip_prefix(outer).is_ok_and(|rel| {
+            rel.as_os_str().is_empty() || !crate::remote_sync::excluded_from_mirror(outer, rel)
+        })
+    };
     let mut out: Vec<PathBuf> = Vec::new();
     for d in dirs {
-        if !out.iter().any(|o| d.starts_with(o)) {
-            out.retain(|o| !o.starts_with(&d));
+        if !out.iter().any(|o| covers(o, &d)) {
+            out.retain(|o| !covers(&d, o));
             out.push(d);
         }
     }
@@ -3619,6 +3650,75 @@ mod tests {
                 PathBuf::from("/c/e")
             ]
         );
+    }
+
+    /// A workspace inside a tree the repository's `.justrustignore` excludes
+    /// is mirrored as its own root, next to the repository.
+    #[test]
+    fn workspace_inside_an_ignored_tree_gets_its_own_root() {
+        let t = std::env::temp_dir().join(format!("jr-roots-ignored-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let repo = t.join("repo");
+        let inner = repo.join("vendor/tool");
+        for d in [
+            repo.join(".git"),
+            repo.join("src"),
+            inner.join("crates/a/src"),
+            repo.join("vendor/member/src"),
+            repo.join("vendorish/src"),
+        ] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(repo.join(".justrustignore"), "/vendor/\n").unwrap();
+        std::fs::write(
+            repo.join("Cargo.toml"),
+            "[package]\nname='repo'\nversion='0.1.0'\n[workspace]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            inner.join("Cargo.toml"),
+            "[package]\nname='tool'\nversion='0.1.0'\n[workspace]\nmembers=['crates/a']\n",
+        )
+        .unwrap();
+        std::fs::write(
+            inner.join("crates/a/Cargo.toml"),
+            "[package]\nname='a'\nversion='0.1.0'\n",
+        )
+        .unwrap();
+        // Excluded: its own workspace, not the repository's and not `vendor/`.
+        assert_eq!(excluded_root(&inner), Some(inner.clone()));
+        assert_eq!(excluded_root(&inner.join("crates/a")), Some(inner.clone()));
+        // A member of the repository's workspace under the excluded tree:
+        // itself, since its workspace is the repository.
+        let member = repo.join("vendor/member");
+        assert_eq!(excluded_root(&member), Some(member.clone()));
+        // Not excluded: no root of its own.
+        assert_eq!(excluded_root(&repo), None);
+        assert_eq!(excluded_root(&repo.join("src")), None);
+        assert_eq!(excluded_root(&repo.join("vendorish")), None);
+        let mut roots = roots_of(&inner.join("crates/a"));
+        roots.sort();
+        assert_eq!(roots, vec![repo.clone(), inner.clone()]);
+        // Nested, but the outer mirror does not hold it: both stay.
+        let d: BTreeSet<PathBuf> = [
+            repo.clone(),
+            inner.clone(),
+            inner.join("crates/a"),
+            repo.join("src"),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(outermost(d), vec![repo.clone(), inner.clone()]);
+        // The mirrors do not overlap: the repository's scan leaves the tree out.
+        std::fs::write(inner.join("crates/a/src/lib.rs"), "").unwrap();
+        std::fs::write(repo.join("src/lib.rs"), "").unwrap();
+        let outer = crate::remote_sync::scan(&repo).unwrap().files;
+        assert!(outer.contains_key(Path::new("src/lib.rs")));
+        assert!(!outer.keys().any(|p| p.starts_with("vendor")));
+        let nested = crate::remote_sync::scan(&inner).unwrap().files;
+        assert!(nested.contains_key(Path::new("crates/a/src/lib.rs")));
+        assert!(nested.contains_key(Path::new("Cargo.toml")));
+        let _ = std::fs::remove_dir_all(&t);
     }
 
     #[test]

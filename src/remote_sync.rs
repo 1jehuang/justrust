@@ -319,8 +319,14 @@ fn skip_listed(root: &Path, rel: &Path) -> bool {
 }
 
 #[derive(Debug, Default)]
-struct JustrustIgnore {
+pub(crate) struct JustrustIgnore {
     rules: Vec<IgnoreRule>,
+}
+
+/// Whether `root`'s `.justrustignore` keeps `rel` (a path under it) out of
+/// its mirror.
+pub fn excluded_from_mirror(root: &Path, rel: &Path) -> bool {
+    JustrustIgnore::load(root).matches(rel)
 }
 
 #[derive(Debug)]
@@ -331,7 +337,7 @@ struct IgnoreRule {
 }
 
 impl JustrustIgnore {
-    fn load(root: &Path) -> Self {
+    pub(crate) fn load(root: &Path) -> Self {
         let Ok(text) = std::fs::read_to_string(root.join(".justrustignore")) else {
             return Self::default();
         };
@@ -363,7 +369,7 @@ impl JustrustIgnore {
         Self { rules }
     }
 
-    fn matches(&self, rel: &Path) -> bool {
+    pub(crate) fn matches(&self, rel: &Path) -> bool {
         if self.rules.is_empty() {
             return false;
         }
