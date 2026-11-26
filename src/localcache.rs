@@ -480,12 +480,8 @@ pub fn finish_main(dir: PathBuf) -> ! {
 }
 
 fn finisher_admission(root: &Path) -> Option<std::fs::File> {
-    let slots: usize = if portable_enabled() { 8 } else { 1 };
-    let wait = if slots > 1 {
-        Some(std::time::Duration::from_secs(5))
-    } else {
-        None
-    };
+    let slots: usize = if portable_enabled() { 8 } else { 4 };
+    let wait = Some(std::time::Duration::from_secs(5));
     finisher_admission_with(root, slots, wait)
 }
 
