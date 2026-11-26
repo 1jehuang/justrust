@@ -272,14 +272,14 @@ mod tests {
             ] {
                 let path = &env[&format!("{tool}_{target}")];
                 assert_eq!(path, &env[&format!("{tool}_{}", target.replace('-', "_"))]);
-                let result = crate::test_fork::exec_fresh(|| {
+                let result = crate::test_fork::output_fresh(|| {
                     Command::new(path).arg("input with spaces.c").output()
                 })
                 .unwrap();
                 assert!(result.status.success());
                 assert_eq!(String::from_utf8(result.stdout).unwrap(), expected);
             }
-            let result = crate::test_fork::exec_fresh(|| {
+            let result = crate::test_fork::output_fresh(|| {
                 Command::new(&env[&format!("CC_{target}")])
                     .args([
                         format!("--target={target}"),

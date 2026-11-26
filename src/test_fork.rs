@@ -17,6 +17,22 @@ pub(crate) fn exec_fresh<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::i
     retry(std::io::ErrorKind::ExecutableFileBusy, &mut f)
 }
 
+/// Run `f`, a command that is, or is a shell script that execs, a file this
+/// test just wrote. The shell reports the busy file itself, as exit code 126
+/// (found but not executable), so that is retried too.
+pub(crate) fn output_fresh(
+    mut f: impl FnMut() -> std::io::Result<std::process::Output>,
+) -> std::io::Result<std::process::Output> {
+    let deadline = Instant::now() + WINDOW;
+    loop {
+        let out = exec_fresh(&mut f)?;
+        if out.status.code() != Some(126) || Instant::now() >= deadline {
+            return Ok(out);
+        }
+        std::thread::sleep(STEP);
+    }
+}
+
 /// Run `f`, which takes a non-blocking lock this test released a moment ago.
 /// Only a held lock (EWOULDBLOCK) is retried.
 pub(crate) fn relock<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {

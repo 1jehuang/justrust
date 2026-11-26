@@ -244,7 +244,19 @@ fn version(prefix: &Path, bin: &str, flag: &str) -> Result<String> {
     if !is_executable(&path) {
         bail!("toolchain bundle missing executable {bin}");
     }
-    let out = Command::new(path).arg(flag).output()?;
+    // The binary was written a moment ago. A child another thread is forking
+    // shares the descriptor it was written through until that child execs,
+    // and the kernel refuses to run a file open for writing (ETXTBSY).
+    let mut busy = 0;
+    let out = loop {
+        match Command::new(&path).arg(flag).output() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && busy < 100 => {
+                busy += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            out => break out?,
+        }
+    };
     if !out.status.success() {
         bail!(
             "toolchain bundle {bin} does not run: {}",

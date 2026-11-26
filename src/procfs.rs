@@ -1139,6 +1139,8 @@ mod tests {
         }
         // A copy was just written: a child another test is forking can hold
         // it open for writing until it execs.
+        // Captured: the nested harness would otherwise write its own result
+        // lines into this process's stdout, between this harness's lines.
         let result = crate::test_fork::exec_fresh(|| {
             std::process::Command::new(&copy)
                 .args([
@@ -1146,11 +1148,17 @@ mod tests {
                     "procfs::tests::child_hashes_running_image_after_unlink",
                 ])
                 .env(KEY, &dir)
-                .status()
+                .output()
         });
         let replaced = std::fs::metadata(&copy).unwrap().len() < 100;
         std::fs::remove_dir_all(dir).unwrap();
-        assert!(result.unwrap().success() && replaced);
+        let result = result.unwrap();
+        assert!(
+            result.status.success() && replaced,
+            "replaced {replaced}\n{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 
     #[cfg(target_os = "linux")]

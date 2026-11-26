@@ -996,7 +996,14 @@ mod tests {
 
         let (gen1, dirty_a) = dirty_when_synced(&w, &root_a, gen0)
             .expect("root_a must remain clean despite root_b churn");
-        assert!(dirty_a.is_empty());
+        // Nothing of root_b's, and nothing new in root_a. The one event that
+        // can still arrive is the close of the fixture file written before
+        // the watch: a child another test is forking holds a copy of that
+        // descriptor until it execs, and the kernel reports the close then.
+        assert!(
+            dirty_a.iter().all(|p| *p == root_a.join("src/lib.rs")),
+            "{dirty_a:?}"
+        );
         assert!(gen1 > gen0);
         // root_b had a directory deletion, so it must fail closed to a full scan.
         assert!(w.dirty_since(&root_b, gen0).is_none());
@@ -1004,8 +1011,17 @@ mod tests {
         // Single-file edit inside root_a reports only that exact path.
         std::fs::write(root_a.join("src/lib.rs"), "v2").unwrap();
         recv_until(&rx, &root_a.join("src"));
-        let (gen2, dirty_a2) = dirty_when_synced(&w, &root_a, gen1)
-            .expect("single file edit under root_a should be incremental");
+        // That notification can be the fixture's late close (see above), so
+        // wait for the edit itself to be recorded.
+        let t = std::time::Instant::now();
+        let (gen2, dirty_a2) = loop {
+            let got = dirty_when_synced(&w, &root_a, gen1)
+                .expect("single file edit under root_a should be incremental");
+            if !got.1.is_empty() || t.elapsed() >= Duration::from_secs(5) {
+                break got;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
         assert_eq!(dirty_a2, vec![root_a.join("src/lib.rs")]);
         assert!(gen2 > gen1);
 

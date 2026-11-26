@@ -1317,37 +1317,20 @@ mod tests {
         std::fs::remove_file(&real).unwrap();
         wrap_with(&dir, "build_script_build", "-abc", &jr).unwrap();
         std::fs::write(&real, "#!/bin/sh\necho \"$1 $2\"\nexit 3\n").unwrap();
-        // The wrapper execs `real`, which was written a moment ago: a child
-        // another test is forking can still hold it open for writing, and
-        // the shell then reports 126 (cannot execute) itself.
-        let mut out = retry_busy(|| Command::new(&bin).args(["a b", "c"]).output());
-        for _ in 0..50 {
-            if out.status.code() != Some(126) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            out = retry_busy(|| Command::new(&bin).args(["a b", "c"]).output());
-        }
+        let out = retry_busy(|| Command::new(&bin).args(["a b", "c"]).output());
         assert_eq!(out.status.code(), Some(3));
         assert_eq!(out.stdout, b"a b c\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Exec a file this test just wrote. A test forking concurrently can
-    /// briefly inherit our write fd, which makes exec fail with ETXTBSY.
+    /// Run a wrapper this test just wrote, which execs a script it also just
+    /// wrote. A test forking concurrently can briefly inherit our write fd,
+    /// which makes either exec fail with ETXTBSY.
     #[cfg(unix)]
     fn retry_busy(
-        mut f: impl FnMut() -> std::io::Result<std::process::Output>,
+        f: impl FnMut() -> std::io::Result<std::process::Output>,
     ) -> std::process::Output {
-        for _ in 0..50 {
-            match f() {
-                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
-                    std::thread::sleep(std::time::Duration::from_millis(20))
-                }
-                r => return r.unwrap(),
-            }
-        }
-        f().unwrap()
+        crate::test_fork::output_fresh(f).unwrap()
     }
 
     #[test]

@@ -1752,16 +1752,21 @@ mod tests {
         }
         let dir = std::env::temp_dir().join(format!("jr-owner-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let status = Command::new(std::env::current_exe().unwrap())
+        let nested = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "remote_agent::tests::detached_run_dies_with_its_agent",
                 "--nocapture",
             ])
             .env(FLAG, &dir)
-            .status()
+            .output()
             .unwrap();
-        assert!(status.success());
+        assert!(
+            nested.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&nested.stdout),
+            String::from_utf8_lossy(&nested.stderr)
+        );
         for _ in 0..250 {
             if dir.join("stopped").exists() {
                 break;

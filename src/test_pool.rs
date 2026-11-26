@@ -1853,16 +1853,21 @@ mod tests {
         assert!(!should_confirm(101, true, libc::SIGTERM));
         assert!(!should_confirm(101, true, libc::SIGINT));
         assert!(!should_confirm(0, true, 0));
-        let status = Command::new(std::env::current_exe().unwrap())
+        let nested = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "test_pool::tests::cancellation_does_not_spawn_or_confirm_tests",
                 "--nocapture",
             ])
             .env(FLAG, "1")
-            .status()
+            .output()
             .unwrap();
-        assert!(status.success());
+        assert!(
+            nested.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&nested.stdout),
+            String::from_utf8_lossy(&nested.stderr)
+        );
     }
 
     /// A child waits for the sink to acknowledge its warning. Buffering until

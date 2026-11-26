@@ -411,6 +411,19 @@ impl Registry {
 /// never starts on a half-deleted `target/`.
 pub struct RootLock(#[allow(dead_code)] std::fs::File);
 
+/// Unlock explicitly instead of on close. A process this one is forking shares
+/// the open file until it execs and would keep the lock that long: an
+/// eviction pass that locks a root twice in a row (outputs, then the target)
+/// then skipped the root as held by a build.
+#[cfg(unix)]
+impl Drop for RootLock {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: owned open descriptor.
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 #[cfg(unix)]
 fn validate_lock_dir(dir: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::MetadataExt;
