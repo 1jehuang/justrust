@@ -445,6 +445,7 @@ fn cargo_sets(k: &str) -> bool {
             k,
             "CARGO"
                 | "CARGO_CRATE_NAME"
+                | "CARGO_RUSTC_CURRENT_DIR"
                 | "CARGO_MANIFEST_DIR"
                 | "CARGO_MANIFEST_PATH"
                 | "CARGO_MANIFEST_LINKS"
@@ -2276,16 +2277,14 @@ mod tests {
         let mut env2 = env.clone();
         env2.extend([
             e("LIBRARY_PATH"),
-            // Cargo no longer sets this, but callers such as rustc bootstrap can.
+            // Neither cargo nor rustc read this; rustc bootstrap sets it only
+            // for file! determinism, so keying it splits ordinary builds.
             ("CARGO_RUSTC_CURRENT_DIR".into(), "/private/cwd".into()),
             e("CARGO_PROFILE_DEV_DEBUG"),
             e("RUSTC_ICE"),
             e("LIBRARY_PATH"),
         ]);
-        assert_eq!(
-            user_keyed_env(&env2),
-            ["CARGO_RUSTC_CURRENT_DIR", "LIBRARY_PATH", "RUSTC_ICE"]
-        );
+        assert_eq!(user_keyed_env(&env2), ["LIBRARY_PATH", "RUSTC_ICE"]);
     }
 
     fn s(v: &[&str]) -> Vec<String> {
