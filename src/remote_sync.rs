@@ -2724,6 +2724,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    // A local "machine" mirrors under a prefix, and a Windows drive path
+    // under a local prefix is not a valid file name there.
+    #[cfg_attr(windows, ignore)]
     #[test]
     fn justrustignore_excludes_tracked_and_untracked_trees_from_scan_and_rsync() {
         let d = std::env::temp_dir().join(format!("jr-ignore-{}", std::process::id()));

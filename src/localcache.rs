@@ -1321,7 +1321,11 @@ mod tests {
 
     #[test]
     fn portable_local_unit_round_trip_across_worktrees() {
-        let base = std::env::temp_dir().join(format!(
+        // Cargo runs rustc in the canonical workspace path. macOS reaches its
+        // temp dir through a symlink (/var -> /private/var), where the
+        // workspace remap would not cover the path rustc itself reports.
+        let tmp = std::env::temp_dir();
+        let base = std::fs::canonicalize(&tmp).unwrap_or(tmp).join(format!(
             "justrust-localcache-portable-{}",
             std::process::id()
         ));
@@ -1376,7 +1380,13 @@ mod tests {
             .status()
             .unwrap();
         assert!(st.success());
-        assert!(stage_with(&p1, start, 2.5, &[], true, false).is_some());
+        let refused = std::cell::RefCell::new(None);
+        let staged = stage_commit(&p1, start, 2.5, &[], false, &|dir| {
+            let done = finish_why(dir);
+            *refused.borrow_mut() = done.err();
+            done.is_ok()
+        });
+        assert!(staged.is_some(), "stage refused: {:?}", refused.borrow());
 
         let mut err = Vec::new();
         let hit = restore(&p2, &mut err).expect("portable localcache hit in second worktree");
