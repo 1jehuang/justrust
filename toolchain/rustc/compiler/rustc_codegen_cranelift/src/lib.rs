@@ -376,6 +376,16 @@ fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
     }
 }
 
+/// justrust: capability marker read by the client shim. The exported symbol
+/// name lands in this library's dynamic string table only when the backend
+/// was built with landing-pad support, so the shim can tell whether it may
+/// select this backend for `-Cpanic=unwind` units (see `src/shim.rs`,
+/// `cranelift_backend_unwinds`). Keep the name in sync with the client.
+#[cfg(feature = "unwinding")]
+#[unsafe(no_mangle)]
+#[used]
+pub static JUSTRUST_CG_CLIF_UNWINDING_V1: u8 = 1;
+
 /// This is the entrypoint for a hot plugged rustc_codegen_cranelift
 #[unsafe(no_mangle)]
 pub fn __rustc_codegen_backend() -> Box<dyn CodegenBackend> {

@@ -42,11 +42,17 @@ smallvec = "1.8.1"
 #gimli = { path = "../" }
 
 [features]
+# justrust: unwinding is part of the external contract. Without it a
+# `-Cpanic=unwind` crate gets no landing pads: `catch_unwind` does not catch,
+# a panicking thread aborts the process ("failed to initiate panic, error 5")
+# and destructors do not run while unwinding. The shim selects this backend
+# for every local debug unit, so it must honor panic=unwind by default.
+default = ["unwinding"]
 # Enable features not ready to be enabled when compiling as part of rustc
 unstable-features = ["jit", "inline_asm_sym"]
 jit = ["cranelift-jit", "libloading"]
 inline_asm_sym = []
-unwinding = [] # Not yet included in unstable-features for performance reasons
+unwinding = [] # On by default here (see `default`); upstream leaves it off for build speed
 
 [package.metadata.rust-analyzer]
 rustc_private = true
