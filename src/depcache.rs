@@ -2725,18 +2725,21 @@ mod tests {
             plan_with(Path::new("rustc"), &args, &env(e), key).unwrap()
         };
         let none = plan(&[], false);
+        // Absolute on every platform: `/checkouts/a` has no drive on Windows.
+        let (checkout_a, checkout_b) = (dir.join("checkouts/a"), dir.join("checkouts/b"));
+        let (checkout_a, checkout_b) = (checkout_a.to_str().unwrap(), checkout_b.to_str().unwrap());
         for name in ["CARGO_RUSTC_CURRENT_DIR", "CARGO_WORKSPACE_DIR"] {
             assert!(workspace_config_env(name) && keyed_env(name) && !dep_keyed_env(name));
-            let a = plan(&[(name, "/checkouts/a")], false);
-            let b = plan(&[(name, "/checkouts/b")], false);
+            let a = plan(&[(name, checkout_a)], false);
+            let b = plan(&[(name, checkout_b)], false);
             assert_eq!(a.base, b.base, "{name}");
             assert_eq!(a.base, none.base, "{name}");
             // The value is kept for the store-time output check.
-            assert_eq!(a.unkeyed_env, env(&[(name, "/checkouts/a")]));
+            assert_eq!(a.unkeyed_env, env(&[(name, checkout_a)]));
             // Local units key it, and need no check.
             let (la, lb) = (
-                plan(&[(name, "/checkouts/a")], true),
-                plan(&[(name, "/checkouts/b")], true),
+                plan(&[(name, checkout_a)], true),
+                plan(&[(name, checkout_b)], true),
             );
             assert_ne!(la.base, lb.base, "{name}");
             assert!(la.unkeyed_env.is_empty());
