@@ -54,6 +54,12 @@ const POLL: Duration = Duration::from_secs(2);
 fn connect_timeout(windows: bool) -> Duration {
     Duration::from_secs(if windows { 12 * 60 } else { 6 * 60 })
 }
+/// A host caught in its idle stop cannot be started until the stop finishes,
+/// which takes minutes on a large machine. That wait is not part of the start,
+/// so it gets its own bound instead of using up [`connect_timeout`]. Giving up
+/// during the stop also leaves the host stopped, because only a connect poll
+/// starts it again.
+const STOP_WAIT: Duration = Duration::from_secs(10 * 60);
 /// A ready this recent counts as up for routing even before the master check.
 const RECENT_READY_S: u64 = 60;
 
@@ -1943,8 +1949,16 @@ fn connect_with_mode(
     };
     let mut last = String::new();
     let mut retried_unavailable = false;
+    // Time spent waiting for a stop to finish, which the start budget excludes.
+    let mut stopping = Duration::ZERO;
+    let mut polled = start;
     loop {
         let r = request(c, "POST", "build/host/connect", Some(&body))?;
+        let since = polled.elapsed();
+        polled = Instant::now();
+        if (200..=299).contains(&r.code) && r.body["state"] == "stopping" {
+            stopping = (stopping + since).min(STOP_WAIT);
+        }
         if !windows
             && native_mode != Some(true)
             && !native_only_requested(native_mode)
@@ -2006,7 +2020,8 @@ fn connect_with_mode(
             }
             _ => return Err(api_error(&r)),
         }
-        if start.elapsed() >= timeout {
+        let spent = start.elapsed().saturating_sub(stopping);
+        if spent >= timeout {
             bail!(
                 "{}",
                 platform_guidance(
@@ -2018,11 +2033,7 @@ fn connect_with_mode(
                 )
             );
         }
-        std::thread::sleep(poll_wait(
-            &r.body,
-            poll,
-            timeout.saturating_sub(start.elapsed()),
-        ));
+        std::thread::sleep(poll_wait(&r.body, poll, timeout.saturating_sub(spent)));
     }
 }
 
@@ -3162,6 +3173,46 @@ mod tests {
         let e = connect_with(&c, "k", Duration::from_millis(5), Duration::ZERO, |_| {})
             .unwrap_err()
             .to_string();
+        assert!(e.contains("did not become ready"), "{e}");
+    }
+
+    /// Run 45776680900: a release test connected two minutes after the host's
+    /// idle stop was issued, was told "Starting your workspace host..." for the
+    /// whole six minute start budget while the stop was still in progress, and
+    /// gave up. Nothing polled after that, so the host stayed down four hours.
+    #[test]
+    fn waiting_out_a_host_stop_does_not_use_the_start_budget() {
+        let stopping = r#"{"state":"stopping","ready":false,"message":"finishing an idle stop","retry_after_ms":100}"#;
+        let booting = r#"{"state":"booting","ready":false,"message":"booting","retry_after_ms":1}"#;
+        let mut replies = vec![(202, stopping); 4];
+        replies.push((202, booting));
+        replies.push((200, READY));
+        let (c, seen) = mock(replies);
+        let mut msgs = Vec::new();
+        // The stop outlasts the budget: 300 ms of stopping polls against
+        // 250 ms, of which only the last 100 ms wait counts as starting.
+        connect_with(
+            &c,
+            "k",
+            Duration::from_millis(1),
+            Duration::from_millis(250),
+            |m| msgs.push(m.to_string()),
+        )
+        .unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 6);
+        assert_eq!(msgs, ["finishing an idle stop", "booting"]);
+
+        // A start that is slow on its own still times out.
+        let (c, _) = mock(vec![(202, booting); 400]);
+        let e = connect_with(
+            &c,
+            "k",
+            Duration::from_millis(1),
+            Duration::from_millis(20),
+            |_| {},
+        )
+        .unwrap_err()
+        .to_string();
         assert!(e.contains("did not become ready"), "{e}");
     }
 
