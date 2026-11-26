@@ -2519,7 +2519,16 @@ mod tests {
         assert_eq!(resolve_live_exe(&deleted), bin);
 
         // Atomic replacement changes inode on disk even if current_exe isn't suffixed.
+        // Without an inode (Windows) only the write time tells them apart: the
+        // size is the same and NTFS hands the renamed file the old creation time.
         std::fs::write(&next, b"v2").unwrap();
+        let written = std::fs::metadata(&bin).unwrap().modified().unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&next)
+            .unwrap()
+            .set_modified(written + Duration::from_secs(2))
+            .unwrap();
         std::fs::rename(&next, &bin).unwrap();
         assert!(exe_is_replaced(Some(&initial), Some(&bin)));
 

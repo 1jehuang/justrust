@@ -790,6 +790,12 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         assert!(finisher_admission_with(&other, 1, None).is_some());
         drop(first);
+        // A child another test is forking can hold the lock until it execs.
+        #[cfg(unix)]
+        assert!(crate::test_fork::eventually(|| {
+            finisher_admission_with(&root, 1, None).is_some()
+        }));
+        #[cfg(not(unix))]
         assert!(finisher_admission_with(&root, 1, None).is_some());
         std::fs::remove_dir_all(root).unwrap();
     }

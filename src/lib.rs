@@ -121,6 +121,8 @@ mod summary;
 mod sys;
 mod telemetry;
 mod test_bundle;
+#[cfg(all(test, unix))]
+mod test_fork;
 mod test_pool;
 mod test_runner;
 mod toolchain;

@@ -556,7 +556,9 @@ mod tests {
         assert_eq!(plan(&dirs, 0, ORPHAN_IDLE, &later), vec![]);
         // A build touching it between plan and delete wins.
         assert!(evict(&p[0], ORPHAN_IDLE, &fresh).is_err());
-        evict(&p[0], ORPHAN_IDLE, &later).unwrap();
+        // The refused attempt released the parent's lock, but a child another
+        // test is forking can hold its copy until it execs.
+        crate::test_fork::relock(|| evict(&p[0], ORPHAN_IDLE, &later)).unwrap();
         assert!(!old.exists());
         assert!(base.join("old/src.rs").exists());
         assert!(busy.exists());

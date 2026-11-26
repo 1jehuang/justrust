@@ -104,11 +104,13 @@ fn running_generated_executable_without_output_cwd_or_fd_is_live_use() {
     let executable = output.join("generated-sleeper");
     std::fs::copy("/bin/sleep", &executable).unwrap();
     let mut child = Child(
-        std::process::Command::new(&executable)
-            .arg("30")
-            .current_dir("/")
-            .spawn()
-            .unwrap(),
+        crate::test_fork::exec_fresh(|| {
+            std::process::Command::new(&executable)
+                .arg("30")
+                .current_dir("/")
+                .spawn()
+        })
+        .unwrap(),
     );
     let base = PathBuf::from(format!("/proc/{}", child.0.id()));
     // Hosted subprocess launch may return while its trampoline still runs.

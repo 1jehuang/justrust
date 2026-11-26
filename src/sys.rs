@@ -297,8 +297,10 @@ pub fn mtime_f64(m: &Metadata) -> f64 {
 }
 
 /// Identity of the file a path names now: (device, inode) on Unix. Windows
-/// has no stable equivalent in std; creation time and size stand in, which
-/// still tells a replaced file from the original.
+/// has no stable equivalent in std, so size, last write and creation time
+/// stand in. Creation time alone does not tell a replaced file from the
+/// original: NTFS gives a file renamed over a name the creation time of the
+/// file that held the name just before (tunneling).
 pub fn file_id(m: &Metadata) -> (u64, u64) {
     #[cfg(unix)]
     {
@@ -312,8 +314,21 @@ pub fn file_id(m: &Metadata) -> (u64, u64) {
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map_or(0, |d| d.as_nanos() as u64);
-        (m.len(), created)
+        fallback_file_id(m.len(), mtime(m), created)
     }
+}
+
+/// `file_id` without an inode. The second field stays the creation time:
+/// file stamps hash it next to the size and write time they already carry.
+#[cfg(any(not(unix), test))]
+fn fallback_file_id(len: u64, written: (i64, i64), created: u64) -> (u64, u64) {
+    let written = (written.0 as u64)
+        .wrapping_mul(1_000_000_000)
+        .wrapping_add(written.1 as u64);
+    (
+        len ^ written.wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(17),
+        created,
+    )
 }
 
 /// Bytes the file occupies on disk (allocated blocks on Unix, the length
@@ -740,6 +755,20 @@ fn process_cpu(child: &std::process::Child) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fallback_file_id_tells_a_same_size_replacement_with_tunneled_creation_time() {
+        let created = 1_795_000_000_000_000_000;
+        let original = fallback_file_id(2, (1_795_000_000, 100), created);
+        assert_eq!(original, fallback_file_id(2, (1_795_000_000, 100), created));
+        // Same name, size and (tunneled) creation time, written later.
+        let replaced = fallback_file_id(2, (1_795_000_000, 200), created);
+        assert_ne!(original, replaced);
+        assert_ne!(original, fallback_file_id(3, (1_795_000_000, 100), created));
+        // File stamps keep hashing the creation time.
+        assert_eq!(original.1, created);
+        assert_eq!(replaced.1, created);
+    }
 
     #[test]
     fn only_discharging_system_batteries_defer_eager_transfers() {

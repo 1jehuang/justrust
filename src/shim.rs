@@ -152,6 +152,12 @@ fn share_slot_incremental(args: &mut [OsString]) {
     if std::env::var_os("JUSTRUST_SHARED_INCREMENTAL").is_some_and(|v| v == "0") {
         return;
     }
+    let base = std::env::var_os("JUSTRUST_SHARED_INCREMENTAL_DIR");
+    share_slot_incremental_in(args, base.as_deref());
+}
+
+/// `share_slot_incremental` with the hosted shared base passed in.
+fn share_slot_incremental_in(args: &mut [OsString], base: Option<&std::ffi::OsStr>) {
     for i in 0..args.len() {
         let a = args[i].to_string_lossy().into_owned();
         let (prefix, path) = if let Some(p) = a.strip_prefix("-Cincremental=") {
@@ -160,7 +166,7 @@ fn share_slot_incremental(args: &mut [OsString]) {
             && let Some(next) = args.get(i + 1).map(|n| n.to_string_lossy().into_owned())
             && let Some(p) = next.strip_prefix("incremental=")
         {
-            let Some(shared) = shared_incremental_dir(std::path::Path::new(p)) else {
+            let Some(shared) = shared_incremental_dir(std::path::Path::new(p), base) else {
                 return;
             };
             args[i + 1] = format!("incremental={}", shared.display()).into();
@@ -168,7 +174,7 @@ fn share_slot_incremental(args: &mut [OsString]) {
         } else {
             continue;
         };
-        if let Some(shared) = shared_incremental_dir(std::path::Path::new(&path)) {
+        if let Some(shared) = shared_incremental_dir(std::path::Path::new(&path), base) {
             args[i] = format!("{prefix}{}", shared.display()).into();
         }
         return;
@@ -176,18 +182,18 @@ fn share_slot_incremental(args: &mut [OsString]) {
 }
 
 /// Redirect `-C incremental=...` to a shared incremental directory:
-/// 1. If `JUSTRUST_SHARED_INCREMENTAL_DIR` is set (e.g. hosted canonical repo
-///    guard), map `<anything>/<profile>/incremental` to
-///    `<JUSTRUST_SHARED_INCREMENTAL_DIR>/<profile>/incremental` so all
-///    worktrees of the same repo share one warm incremental cache.
+/// 1. If `base` (`JUSTRUST_SHARED_INCREMENTAL_DIR`, e.g. hosted canonical repo
+///    guard) is set, map `<anything>/<profile>/incremental` to
+///    `<base>/<profile>/incremental` so all worktrees of the same repo share
+///    one warm incremental cache.
 /// 2. Otherwise map `<root>/justrust-slots/<n>/<rest...>/incremental` ->
 ///    `<root>/<rest...>/incremental`.
-fn shared_incremental_dir(p: &std::path::Path) -> Option<PathBuf> {
+fn shared_incremental_dir(p: &std::path::Path, base: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
     let comps: Vec<_> = p.components().collect();
     if comps.last()?.as_os_str() != "incremental" {
         return None;
     }
-    if let Some(base) = std::env::var_os("JUSTRUST_SHARED_INCREMENTAL_DIR")
+    if let Some(base) = base
         && !base.is_empty()
         && comps.len() >= 2
     {
@@ -1389,7 +1395,9 @@ mod tests {
 
     #[test]
     fn slot_incremental_maps_to_shared_dir() {
-        let m = |p: &str| shared_incremental_dir(std::path::Path::new(p));
+        // The base is passed in: a hosted test run inherits the agent's
+        // `JUSTRUST_SHARED_INCREMENTAL_DIR`.
+        let m = |p: &str| shared_incremental_dir(std::path::Path::new(p), None);
         assert_eq!(
             m("/w/target/justrust-slots/2/debug/incremental"),
             Some(PathBuf::from("/w/target/debug/incremental"))
@@ -1412,7 +1420,7 @@ mod tests {
         .iter()
         .map(OsString::from)
         .collect();
-        share_slot_incremental(&mut a);
+        share_slot_incremental_in(&mut a, None);
         let expected: PathBuf = PathBuf::from("/t/debug/incremental").components().collect();
         assert_eq!(
             a[1],
@@ -1421,11 +1429,24 @@ mod tests {
         let mut b = vec![OsString::from(
             "-Cincremental=/t/justrust-slots/1/debug/incremental",
         )];
-        share_slot_incremental(&mut b);
+        share_slot_incremental_in(&mut b, None);
         assert_eq!(
             b[0],
             OsString::from(format!("-Cincremental={}", expected.display()))
         );
+        // A hosted base wins for any worktree and keeps only the profile.
+        let base = std::env::temp_dir().join(format!("jr-shared-incr-{}", std::process::id()));
+        let mut c = vec![OsString::from(
+            "-Cincremental=/t/justrust-slots/1/debug/incremental",
+        )];
+        share_slot_incremental_in(&mut c, Some(base.as_os_str()));
+        let shared = base.join("debug").join("incremental");
+        assert_eq!(
+            c[0],
+            OsString::from(format!("-Cincremental={}", shared.display()))
+        );
+        assert!(shared.is_dir());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -1973,7 +1973,9 @@ mod tests {
             gate.drain(Duration::from_millis(40), DRAIN_GENERATION)
                 .is_err()
         );
-        assert!(start.elapsed() < Duration::from_secs(2));
+        // The drain syncs its denial marker before the 40ms lock wait. Under
+        // a loaded disk that alone has taken seconds, so this bounds a hang.
+        assert!(start.elapsed() < Duration::from_secs(30));
         // Timeout preserves denial without terminating existing admissions.
         assert!(gate.admit().unwrap().is_none());
         release.wait();

@@ -1265,7 +1265,10 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(rsync_supports_secluded_args(executable.as_os_str()));
+        // The probe reports a script that is still busy as unsupported.
+        assert!(crate::test_fork::eventually(|| {
+            rsync_supports_secluded_args(executable.as_os_str())
+        }));
         std::fs::write(
             &executable,
             "#!/bin/sh\nprintf 'rsync version 99.0\\n'\nexit 1\n",

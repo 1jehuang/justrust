@@ -272,23 +272,25 @@ mod tests {
             ] {
                 let path = &env[&format!("{tool}_{target}")];
                 assert_eq!(path, &env[&format!("{tool}_{}", target.replace('-', "_"))]);
-                let result = Command::new(path)
-                    .arg("input with spaces.c")
-                    .output()
-                    .unwrap();
+                let result = crate::test_fork::exec_fresh(|| {
+                    Command::new(path).arg("input with spaces.c").output()
+                })
+                .unwrap();
                 assert!(result.status.success());
                 assert_eq!(String::from_utf8(result.stdout).unwrap(), expected);
             }
-            let result = Command::new(&env[&format!("CC_{target}")])
-                .args([
-                    format!("--target={target}"),
-                    "-c".into(),
-                    "file name.c".into(),
-                    "-target".into(),
-                    target.into(),
-                ])
-                .output()
-                .unwrap();
+            let result = crate::test_fork::exec_fresh(|| {
+                Command::new(&env[&format!("CC_{target}")])
+                    .args([
+                        format!("--target={target}"),
+                        "-c".into(),
+                        "file name.c".into(),
+                        "-target".into(),
+                        target.into(),
+                    ])
+                    .output()
+            })
+            .unwrap();
             assert!(result.status.success());
             assert_eq!(
                 String::from_utf8(result.stdout).unwrap(),
