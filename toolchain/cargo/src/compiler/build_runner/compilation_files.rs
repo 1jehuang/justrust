@@ -771,6 +771,15 @@ fn metadata_of<'a>(
 /// its id. The unit hash (`unit_id`: file names, fingerprints, the session
 /// lineage passed to jr-rustc) still covers the dependencies.
 ///
+/// The id leaves out the package's own version for the same reason: a release
+/// bump (`version = "0.1.65"` in every workspace member) changes one
+/// `CARGO_PKG_VERSION` string, which jr-rustc tracks like any other input,
+/// and stock ids start every local crate cold for it. A path package is
+/// already identified by its name and where it lives, and one path holds one
+/// version, so no two units of a build come to share an id this way. Only
+/// incremental units get these ids, so a default release build, the kind
+/// whose symbols meet other builds' in one link, keeps stock ids.
+///
 /// Two units of one build may differ in nothing but their dependencies (a
 /// crate used by a build script and by the program, resolved separately).
 /// They can meet in one link or one compiler session, where a crate id must
@@ -808,7 +817,7 @@ fn stable_id_units(build_runner: &BuildRunner<'_, '_>) -> HashSet<Unit> {
             && !unit.mode.is_doc_test()
             && !unit.mode.is_doc_scrape();
         if candidate {
-            let identity = Hasher::finish(&shared_metadata_hasher(&unit, build_runner));
+            let identity = Hasher::finish(&shared_metadata_hasher(&unit, build_runner, false));
             by_identity.entry(identity).or_default().push(unit);
         }
     }
@@ -835,14 +844,16 @@ fn compute_metadata(
     let c_extra_filename = use_extra_filename(bcx, unit);
     let pkg_dir = use_pkg_dir(bcx, unit);
 
-    let shared_hasher = shared_metadata_hasher(unit, build_runner);
+    let shared_hasher = shared_metadata_hasher(unit, build_runner, true);
 
-    let mut c_metadata_hasher = shared_hasher.clone();
+    let mut c_metadata_hasher;
     if stable_ids.contains(unit) {
+        c_metadata_hasher = shared_metadata_hasher(unit, build_runner, false);
         // justrust: see `stable_id_units`. Never the id stock hashing gives a
         // unit without dependencies.
         "justrust-stable-local-id".hash(&mut c_metadata_hasher);
     } else {
+        c_metadata_hasher = shared_hasher.clone();
         // Mix in the target-metadata of all the dependencies of this target.
         let mut dep_c_metadata_hashes = deps_metadata
             .iter()
@@ -889,7 +900,14 @@ fn compute_metadata(
 
 /// The part of a unit's metadata that does not come from its dependencies or
 /// its flags: what the unit itself is.
-fn shared_metadata_hasher(unit: &Unit, build_runner: &BuildRunner<'_, '_>) -> StableHasher {
+///
+/// justrust: without `versioned`, the package is its name and source alone
+/// (see `stable_id_units`).
+fn shared_metadata_hasher(
+    unit: &Unit,
+    build_runner: &BuildRunner<'_, '_>,
+    versioned: bool,
+) -> StableHasher {
     let bcx = &build_runner.bcx;
     let mut shared_hasher = StableHasher::new();
 
@@ -906,10 +924,16 @@ fn shared_metadata_hasher(unit: &Unit, build_runner: &BuildRunner<'_, '_>) -> St
 
     // Unique metadata per (name, source, version) triple. This'll allow us
     // to pull crates from anywhere without worrying about conflicts.
-    unit.pkg
-        .package_id()
-        .stable_hash(ws_root)
-        .hash(&mut shared_hasher);
+    if versioned {
+        unit.pkg
+            .package_id()
+            .stable_hash(ws_root)
+            .hash(&mut shared_hasher);
+    } else {
+        let id = unit.pkg.package_id();
+        id.name().hash(&mut shared_hasher);
+        id.source_id().stable_hash(ws_root, &mut shared_hasher);
+    }
 
     // Also mix in enabled features to our metadata. This'll ensure that
     // when changing feature sets each lib is separately cached.

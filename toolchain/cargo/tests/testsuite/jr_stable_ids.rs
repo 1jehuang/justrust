@@ -147,6 +147,45 @@ fn units_that_differ_only_in_dependencies_keep_distinct_ids_in_one_build() {
 }
 
 #[cargo_test]
+fn local_crate_keeps_its_id_across_a_version_bump() {
+    let manifest = |version: &str| {
+        format!("[package]\nname='mid'\nversion='{version}'\nedition='2021'\n")
+    };
+    let p = project()
+        .file("Cargo.toml", "[workspace]\nmembers=['a','mid']\n")
+        .file("mid/Cargo.toml", &manifest("0.1.0"))
+        .file(
+            "mid/src/lib.rs",
+            "pub fn version() -> &'static str { env!(\"CARGO_PKG_VERSION\") }",
+        )
+        .file(
+            "a/Cargo.toml",
+            "[package]\nname='a'\nversion='0.1.0'\nedition='2021'\n[dependencies]\nmid={path='../mid'}\n",
+        )
+        .file("a/src/main.rs", "fn main() { print!(\"{}\", mid::version()) }")
+        .build();
+    let rustc = lineage_rustc(&p);
+
+    let before = mid_ids(&build(&p, Some(&rustc), "-p a", &[]));
+    assert_eq!(run(&p, "a"), "0.1.0");
+    p.change_file("mid/Cargo.toml", &manifest("0.2.0"));
+    let after = mid_ids(&build(&p, Some(&rustc), "-p a", &[]));
+    assert_eq!(run(&p, "a"), "0.2.0");
+    assert_eq!((before.len(), after.len()), (1, 1), "{before:?} {after:?}");
+    assert_eq!(before[0].0, after[0].0, "one crate id");
+    assert_ne!(before[0].1, after[0].1, "two units, two sets of files");
+
+    // Stock ids tell the versions apart.
+    let stock = |version: &str| {
+        p.change_file("mid/Cargo.toml", &manifest(version));
+        mid_ids(&build(&p, None, "-p a", &[]))
+    };
+    let (old, new) = (stock("0.1.0"), stock("0.2.0"));
+    assert_eq!((old.len(), new.len()), (1, 1), "{old:?} {new:?}");
+    assert_ne!(old[0].0, new[0].0);
+}
+
+#[cargo_test]
 fn stock_ids_without_the_capability_or_when_disabled() {
     for (advertise, env) in [
         (false, &[][..]),
