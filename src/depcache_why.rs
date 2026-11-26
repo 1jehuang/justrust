@@ -145,7 +145,7 @@ fn parts(plan: &Plan, real: &Path, args: &[OsString]) -> Option<Parts> {
     }
     p.native = native.hex()[..12].to_owned();
     p.env = std::env::vars()
-        .filter(|(k, _)| depcache::keyed_env(k))
+        .filter(|(k, _)| depcache::dep_keyed_env(k))
         .map(|(k, v)| {
             let v = h12(plan.norm.norm(&v).as_bytes());
             (k, v)

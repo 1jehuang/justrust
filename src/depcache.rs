@@ -290,6 +290,9 @@ pub struct Plan {
     /// crates that `include!` generated `OUT_DIR` files are the same in
     /// every target dir and on every machine.
     pub extra_args: Vec<String>,
+    /// Workspace-valued `[env]` variables left out of a dependency's key
+    /// (`workspace_config_env`), with this build's values.
+    pub(crate) unkeyed_env: Vec<(String, String)>,
 }
 
 /// Fixed path the target dir is remapped to in dependency outputs.
@@ -494,6 +497,27 @@ pub(crate) fn keyed_env(name: &str) -> bool {
             name,
             "OUT_DIR" | "SOURCE_DATE_EPOCH" | "LIBRARY_PATH" | "SDKROOT" | "RUST_TARGET_PATH"
         )
+}
+
+/// Variables a project's `[env]` configuration points at its own checkout
+/// (`NAME = { value = "", relative = true }`): the `CARGO_WORKSPACE_DIR`
+/// idiom, and `CARGO_RUSTC_CURRENT_DIR` as Cargo's own repository and rustc's
+/// bootstrap set it. Cargo passes `[env]` to every rustc it runs, so keying
+/// them gave every registry dependency a new key in each checkout: 755 units
+/// and 334s of dependency compiles in 24h of hosted runs (2026-11-25), 29% of
+/// all dependency miss time, had `depcache_why` name `CARGO_RUSTC_CURRENT_DIR`.
+/// A dependency that reads one through `env!`/`option_env!` has it in
+/// dep-info, and restore checks that value (`Entry::env`). One that carries
+/// the path without declaring it is not stored (`Plan::store`).
+pub(crate) fn workspace_config_env(name: &str) -> bool {
+    matches!(name, "CARGO_RUSTC_CURRENT_DIR" | "CARGO_WORKSPACE_DIR")
+}
+
+/// Env vars in a dependency unit's base key. Local units key the
+/// workspace-valued ones too (as a placeholder when portable): their macros
+/// do read them.
+pub(crate) fn dep_keyed_env(name: &str) -> bool {
+    keyed_env(name) && !workspace_config_env(name)
 }
 
 /// Cargo configuration in the environment (`CARGO_PROFILE_*`,
@@ -794,7 +818,29 @@ pub(crate) fn plan_with(
     }) {
         h.field(libc_family().as_bytes());
     }
-    let mut env: Vec<&(String, String)> = env.iter().filter(|(k, _)| keyed_env(k)).collect();
+    let dependency = local.is_none();
+    // Checked against outputs when stored, unless the key names the checkout
+    // anyway (a vendored source's working dir is inside it).
+    let unkeyed_env: Vec<(String, String)> = env
+        .iter()
+        .filter(|(k, v)| {
+            dependency
+                && workspace_config_env(k)
+                && Path::new(v).is_absolute()
+                && !cwd.starts_with(v)
+        })
+        .cloned()
+        .collect();
+    let mut env: Vec<&(String, String)> = env
+        .iter()
+        .filter(|(k, _)| {
+            if dependency {
+                dep_keyed_env(k)
+            } else {
+                keyed_env(k)
+            }
+        })
+        .collect();
     env.sort();
     for (k, v) in &env {
         h.field(k.as_bytes());
@@ -819,6 +865,7 @@ pub(crate) fn plan_with(
         norm,
         root,
         extra_args,
+        unkeyed_env,
     })
 }
 
@@ -1703,10 +1750,24 @@ impl Plan {
             .map(|(p, _)| self.norm.denorm(p))
             .filter(|p| p.starts_with(&self.norm.target))
             .collect();
+        // An unkeyed workspace path the unit did not declare reading
+        // (dep-info) must not be in its outputs either.
+        let undeclared: Vec<&(String, String)> = self
+            .unkeyed_env
+            .iter()
+            .filter(|(k, _)| entry.env.iter().all(|(n, _)| n != k))
+            .collect();
         for name in files.iter().filter(|n| !n.ends_with(".d")) {
             let bytes = std::fs::read(self.out_dir.join(name)).ok()?;
             if !target_refs_are_inputs(&bytes, &self.norm.target, &input_paths) {
                 self.explain_refusal(&format!("{name} names the target dir"));
+                return None;
+            }
+            if let Some((k, _)) = undeclared
+                .iter()
+                .find(|(_, v)| names_path_outside(&bytes, v, &self.norm.target))
+            {
+                self.explain_refusal(&format!("{name} names the unkeyed {k}"));
                 return None;
             }
         }
@@ -1814,6 +1875,31 @@ pub(crate) fn target_refs_are_inputs(bytes: &[u8], target: &str, inputs: &[Strin
         i = at + 1;
     }
     true
+}
+
+/// True when `bytes` contain the path `dir` other than as the start of
+/// `within` (the target dir, which usually lies under a workspace root and
+/// has its own check) or of a longer file name (`/w/app` in `/w/app2`).
+pub(crate) fn names_path_outside(bytes: &[u8], dir: &str, within: &str) -> bool {
+    let d = dir.trim_end_matches('/').as_bytes();
+    if d.len() < 2 {
+        return false;
+    }
+    let mut i = 0;
+    while let Some(off) = bytes[i..].iter().position(|&b| b == d[0]) {
+        let at = i + off;
+        let rest = &bytes[at..];
+        if rest.starts_with(d)
+            && !rest.starts_with(within.as_bytes())
+            && !rest
+                .get(d.len())
+                .is_some_and(|c| c.is_ascii_alphanumeric() || b"._-+".contains(c))
+        {
+            return true;
+        }
+        i = at + 1;
+    }
+    false
 }
 
 /// Set a file's mtime to now: the LRU clock for eviction (`depcache_gc`).
@@ -2601,6 +2687,69 @@ mod tests {
         plan
     }
 
+    /// `[env]` variables a project points at its own checkout do not split
+    /// dependency keys between checkouts. Local units still key them.
+    #[test]
+    fn workspace_config_env_does_not_split_dependency_keys() {
+        let dir = std::env::temp_dir().join("jr-depcache-wsenv-plan");
+        let args: Vec<OsString> = s(&[
+            "--crate-name",
+            "x",
+            "src/lib.rs",
+            "--crate-type=lib",
+            "--emit=dep-info,metadata,link",
+            "-Cextra-filename=-abcd",
+            "--out-dir",
+            dir.join("target/debug/deps").to_str().unwrap(),
+        ])
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        let env = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let plan = |e: &[(&str, &str)], local: bool| {
+            let key = local.then(|| LocalKey {
+                root: dir.join("localcache"),
+                salt: Vec::new(),
+                cwd: None,
+                portable: false,
+            });
+            plan_with(Path::new("rustc"), &args, &env(e), key).unwrap()
+        };
+        let none = plan(&[], false);
+        for name in ["CARGO_RUSTC_CURRENT_DIR", "CARGO_WORKSPACE_DIR"] {
+            assert!(workspace_config_env(name) && keyed_env(name) && !dep_keyed_env(name));
+            let a = plan(&[(name, "/checkouts/a")], false);
+            let b = plan(&[(name, "/checkouts/b")], false);
+            assert_eq!(a.base, b.base, "{name}");
+            assert_eq!(a.base, none.base, "{name}");
+            // The value is kept for the store-time output check.
+            assert_eq!(a.unkeyed_env, env(&[(name, "/checkouts/a")]));
+            // Local units key it, and need no check.
+            let (la, lb) = (
+                plan(&[(name, "/checkouts/a")], true),
+                plan(&[(name, "/checkouts/b")], true),
+            );
+            assert_ne!(la.base, lb.base, "{name}");
+            assert!(la.unkeyed_env.is_empty());
+        }
+        assert!(none.unkeyed_env.is_empty());
+        // Other variables still split dependency keys.
+        assert_ne!(plan(&[("CARGO_PKG_NAME", "y")], false).base, none.base);
+        assert!(dep_keyed_env("CARGO_MANIFEST_DIR") && !dep_keyed_env("CARGO_BUILD_JOBS"));
+        // No check where the key already names the checkout (a vendored
+        // source's working dir is inside it), or for a relative value.
+        let cwd = std::env::current_dir().unwrap();
+        let inside = plan(&[("CARGO_WORKSPACE_DIR", cwd.to_str().unwrap())], false);
+        assert!(inside.unkeyed_env.is_empty());
+        let relative = plan(&[("CARGO_WORKSPACE_DIR", "")], false);
+        assert!(relative.unkeyed_env.is_empty());
+    }
+
     #[test]
     fn native_cpu_bypasses_dependency_and_local_plans() {
         // rustc supports both option-name spellings and all four flag forms.
@@ -2904,6 +3053,75 @@ mod tests {
         assert!(!target_refs_are_inputs(b"/t/debug/deps", "/t", &[]));
     }
 
+    /// A dependency output carrying an unkeyed workspace path it did not
+    /// declare reading is not stored. A declared read is, with its value.
+    #[test]
+    fn undeclared_unkeyed_workspace_path_is_not_stored() {
+        let dir = std::env::temp_dir().join(format!("jr-depcache-ws-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ws = dir.join("app");
+        let deps = dir.join("app/target/debug/deps");
+        std::fs::create_dir_all(&deps).unwrap();
+        std::fs::write(dir.join("src.rs"), "pub fn f() {}").unwrap();
+        let plan = |cache: &str| Plan {
+            base: "b".repeat(32),
+            out_dir: deps.clone(),
+            extra: "-abc".into(),
+            crate_name: "x".into(),
+            cwd: dir.clone(),
+            norm: Norm::new(deps.parent().unwrap()).unwrap(),
+            root: dir.join(cache),
+            extra_args: Vec::new(),
+            unkeyed_env: vec![("JR_TEST_WS_DIR".into(), ws.display().to_string())],
+        };
+        let write = |rmeta: String, declared: &str| {
+            std::fs::write(
+                deps.join("x-abc.d"),
+                format!(
+                    "{0}/x-abc.d: {1}\n\n{1}:\n{declared}",
+                    deps.display(),
+                    dir.join("src.rs").display()
+                ),
+            )
+            .unwrap();
+            std::fs::write(deps.join("libx-abc.rmeta"), rmeta).unwrap();
+        };
+        // Not named at all, or only as a longer sibling name.
+        write(format!("{0}2/x {0}-old/y", ws.display()), "");
+        assert!(plan("c1").store(0.0, 1.0, &[]).is_some());
+        // Named, undeclared.
+        write(format!("{}/fixtures", ws.display()), "");
+        assert!(plan("c2").store(0.0, 1.0, &[]).is_none());
+        write(ws.display().to_string(), "");
+        assert!(plan("c2").store(0.0, 1.0, &[]).is_none());
+        assert!(!dir.join("c2/m").exists());
+        // Named and declared (`env!`): the entry records the dependence.
+        write(
+            format!("{}/fixtures", ws.display()),
+            "# env-dep:JR_TEST_WS_DIR\n",
+        );
+        let line = plan("c3").store(0.0, 1.0, &[]).unwrap();
+        let e: Entry = serde_json::from_str(&line).unwrap();
+        assert_eq!(e.env, [("JR_TEST_WS_DIR".to_owned(), None)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn names_path_outside_ignores_the_target_dir_and_longer_names() {
+        let t = "/w/app/target";
+        assert!(names_path_outside(b"x /w/app/src/a.rs", "/w/app", t));
+        assert!(names_path_outside(b"/w/app\0", "/w/app/", t));
+        assert!(names_path_outside(b"/w/app", "/w/app", t));
+        assert!(!names_path_outside(b"/w/app/target/debug", "/w/app", t));
+        assert!(!names_path_outside(
+            b"/w/app2/src /w/app-old /w/ap",
+            "/w/app",
+            t
+        ));
+        assert!(!names_path_outside(b"anything /", "/", t));
+        assert!(names_path_outside(b"/w/app/target/x /w/app/y", "/w/app", t));
+    }
+
     /// Store a fake compile from one target dir, restore into another, and
     /// check that a changed source, a corrupt manifest, or missing cached
     /// files all miss instead of restoring something wrong.
@@ -2926,6 +3144,7 @@ mod tests {
                 norm: Norm::new(out_dir.parent().unwrap()).unwrap(),
                 root: dir.join("cache"),
                 extra_args: Vec::new(),
+                unkeyed_env: Vec::new(),
             }
         };
         let p1 = mk("t1");

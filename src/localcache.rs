@@ -868,6 +868,7 @@ mod tests {
                 norm: depcache::Norm::with_cargo_home(&profile, &ws.join("cargo-home")).unwrap(),
                 root: ws.join("cache"),
                 extra_args: vec![],
+                unkeyed_env: vec![],
             };
             assert_eq!(
                 stage_with(&plan, 1500.0, 1.0, &[], true, true).is_some(),
@@ -943,6 +944,7 @@ mod tests {
                 norm: depcache::Norm::with_cargo_home(&profile, &ws.join("cargo-home")).unwrap(),
                 root: ws.join("cache"),
                 extra_args: vec![],
+                unkeyed_env: vec![],
             };
             let held = std::cell::RefCell::new(None);
             assert!(
@@ -1513,6 +1515,7 @@ mod tests {
             norm: depcache::Norm::with_cargo_home(&profile, &ws.join("cargo-home")).unwrap(),
             root: cache.clone(),
             extra_args: vec![],
+            unkeyed_env: vec![],
         };
         let staged = stage_with(&plan, 1500.0, 0.25, &[], true, false);
         assert!(

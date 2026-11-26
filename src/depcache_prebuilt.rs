@@ -1027,6 +1027,7 @@ mod tests {
                 norm: Norm::new(out_dir.parent().unwrap()).unwrap(),
                 root: dir.join(cache),
                 extra_args: Vec::new(),
+                unkeyed_env: Vec::new(),
             }
         };
         // Publisher: a compile stored in its own cache, then published.
