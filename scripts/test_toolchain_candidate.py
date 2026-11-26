@@ -26,6 +26,7 @@ class CandidateTests(unittest.TestCase):
         self.git("config", "user.email", "test@example.invalid")
         self.git("config", "user.name", "Test")
         for path in ("toolchain/rustc/build-jr.sh", "toolchain/cargo/build-jr.sh",
+                     "toolchain/shared/query_binding.rs",
                      "toolchain/rustc/git-commit-info", "docs/note.md"):
             file = self.root / path
             file.parent.mkdir(parents=True, exist_ok=True)
@@ -74,6 +75,14 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(plan["version"], "0.1.1")
         self.assertEqual(plan["release_tag"], "toolchain-v0.1.1")
         self.assertEqual(plan["commands"][0]["argv"], ["bash", "toolchain/rustc/build-jr.sh", "release"])
+        cargo = plan["commands"][-1]
+        # Routing is the user's (`justrust local off` sends it to hosted): the
+        # release build never forces a local compile.
+        self.assertNotIn("JUSTRUST_REMOTE", cargo["env"])
+        self.assertNotIn("JUSTRUST_LOCAL", cargo["env"])
+        self.assertEqual(cargo["cwd"], plan["cargo_build_root"])
+        self.assertEqual(cargo["produces"], plan["artifacts"]["jr_cargo"])
+        self.assertTrue(plan["artifacts"]["jr_cargo"].startswith(plan["cargo_build_root"] + "/"))
         self.assertFalse(self.output.exists())
 
     def test_invalid_committed_version_refused(self):
@@ -120,7 +129,7 @@ class CandidateTests(unittest.TestCase):
         (self.root / "toolchain/untracked").write_text("not committed\n")
         self.assertEqual(self.plan()["source_revision"], self.revision)
 
-    def run_mock_build(self, plan, fail=False, mismatch=False):
+    def run_mock_build(self, plan, fail=False, mismatch=False, no_cargo_binary=False):
         real_run = subprocess.run
 
         def run(argv, **kwargs):
@@ -130,6 +139,17 @@ class CandidateTests(unittest.TestCase):
             self.assertEqual(kwargs["env"]["CI"], "1")
             snapshot = Path(plan["build_root"])
             self.assertFalse((snapshot / ".git").exists())
+            # jr-cargo's tree: a git root holding toolchain/ without the compiler.
+            cargo_root = Path(plan["cargo_build_root"])
+            self.assertTrue((cargo_root / ".git").is_dir())
+            self.assertTrue((cargo_root / "toolchain/cargo/build-jr.sh").is_file())
+            self.assertTrue((cargo_root / "toolchain/shared/query_binding.rs").is_file())
+            self.assertFalse((cargo_root / "toolchain/rustc").exists())
+            self.assertFalse((cargo_root / "docs").exists())
+            if "cargo" in argv[1]:
+                self.assertEqual(kwargs["cwd"], str(cargo_root))
+                if no_cargo_binary:
+                    return subprocess.CompletedProcess(argv, 0)
             self.assertEqual((snapshot / "toolchain/rustc/git-commit-info").read_text().splitlines()[0], self.revision)
             if fail:
                 raise subprocess.CalledProcessError(7, argv)
@@ -164,6 +184,13 @@ class CandidateTests(unittest.TestCase):
     def test_actual_compiler_identity_required(self):
         with self.assertRaisesRegex(ValueError, "identity"):
             self.run_mock_build(self.plan(), mismatch=True)
+
+    def test_cargo_helper_without_binary_fails(self):
+        plan = self.plan()
+        with self.assertRaisesRegex(ValueError, "did not produce executable artifact"):
+            self.run_mock_build(plan, no_cargo_binary=True)
+        record = Path(plan["provenance_directory"]) / "provenance.json"
+        self.assertEqual(json.loads(record.read_text())["state"], "failed")
 
     def test_dirty_after_plan_refused_before_build(self):
         plan = self.plan()

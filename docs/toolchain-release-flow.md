@@ -68,16 +68,23 @@ The first compiler bootstrap and the pinned Cargo helper start concurrently from
 
 1. `bash toolchain/rustc/build-jr.sh release`, with `JR_STAGE=1 JR_TOOLS=1`.
 2. `bash toolchain/cargo/build-jr.sh nightly-2026-10-08`, with
-   `JUSTRUST_REMOTE=off JR_CARGO_FEATURES=all-static` and a pinned absolute
-   `CARGO_TARGET_DIR` inside the candidate snapshot.
+   `JR_CARGO_FEATURES=all-static` and a pinned absolute `CARGO_TARGET_DIR`
+   inside the candidate's `cargo-source/` snapshot.
 
-Local Cargo execution is intentional here: the helper warns that hosted builds
-may leave no installable local binary, whereas packaging requires that binary.
+The Cargo helper runs wherever justrust routes builds on this machine: hosted
+by default, and always when local compiles are off (`justrust local off`). A
+hosted build fetches the release binary back, and the stage fails right away
+if no executable arrives. It never forces a local compile.
 Both helpers run with `CI=1`, `GIT_TERMINAL_PROMPT=0`, and closed stdin.
 
 The candidate directory must not already exist, even after a failed attempt.
 The script exports `git archive <full commit>` into a non-Git `source/` snapshot,
 not a worktree. It builds there, never in the concurrently edited checkout.
+jr-cargo builds from `cargo-source/`: the same commit's `toolchain/` without
+`toolchain/rustc`, under an empty `git init`. The hosted mirror root is the
+nearest `.git` ancestor, and jr-cargo reads `toolchain/shared` and
+`toolchain/resident-inputs` outside its own workspace, so that root keeps them
+in the mirror without uploading the compiler tree.
 Before building, only the snapshot's rustc `git-commit-info` is set to the
 integrated repository commit, short hash and commit date. This is explicit
 archive version metadata, not a claim that the old vendored upstream identity

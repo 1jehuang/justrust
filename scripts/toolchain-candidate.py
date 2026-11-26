@@ -16,6 +16,10 @@ RELEVANT = ["toolchain", "scripts/toolchain-candidate.py", "scripts/toolchain-so
             "Cargo.toml", "Cargo.lock", "build.rs", ".cargo"]
 
 
+def cargo_archive_argv(root, revision):
+    return ["git", "-C", str(root), "archive", revision, "--", "toolchain", ":(exclude)toolchain/rustc"]
+
+
 def git(root, *args):
     return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
 
@@ -72,7 +76,13 @@ def make_plan(root, revision, output, optimize="none"):
     candidate = "jr-" + revision
     directory = Path(output).resolve() / candidate
     snapshot = directory / "source"
-    target = snapshot / "toolchain/cargo/target"
+    # jr-cargo builds wherever justrust routes builds (hosted when local
+    # compiles are off) and the binary is fetched back. The hosted mirror root
+    # is the nearest `.git` ancestor, and jr-cargo reads toolchain/shared and
+    # toolchain/resident-inputs outside its own workspace, so it gets a small
+    # frozen tree with a git root: everything under toolchain/ but the compiler.
+    cargo_root = directory / "cargo-source"
+    target = cargo_root / "toolchain/cargo/target"
     return {
         "schema_version": 1,
         "candidate_id": candidate,
@@ -83,14 +93,16 @@ def make_plan(root, revision, output, optimize="none"):
         "state": "planned",
         "provenance_directory": str(directory),
         "build_root": str(snapshot),
+        "cargo_build_root": str(cargo_root),
         "source_metadata": git(root, "show", "-s", "--format=%H%n%h%n%cs", "--abbrev=9", revision),
         "compiler_identity": "Archive metadata identifies integrated repository source; verify actual rustc -vV before packaging",
         "optimize": optimize,
         "commands": compiler_commands(snapshot, optimize) + [
             {"argv": ["bash", "toolchain/cargo/build-jr.sh", "nightly-2026-10-08"],
-             "cwd": str(snapshot), "env": {"JUSTRUST_REMOTE": "off", "CARGO_TARGET_DIR": str(target),
-                                       "JR_CARGO_FEATURES": "all-static",
-                                       "JUSTRUST_LOCAL_REASON": "release packaging needs the installable local jr-cargo binary"}},
+             "cwd": str(cargo_root), "env": {"CARGO_TARGET_DIR": str(target),
+                                         "JR_CARGO_FEATURES": "all-static"},
+             # The helper exits 0 when a remote build brings no binary back.
+             "produces": str(target / "release/cargo")},
         ],
         "artifacts": {"compiler_sysroot": str(snapshot / "toolchain/rustc/build/jr" / ("pgo-bolt" if optimize == "pgo-bolt" else "release")),
                       "jr_cargo": str(target / "release/cargo")},
@@ -128,6 +140,16 @@ def execute(plan):
         with tarfile.open(archive) as source:
             source.extractall(snapshot, filter="data")
         archive.unlink()
+        cargo_root = Path(plan["cargo_build_root"])
+        cargo_root.mkdir()
+        cargo_archive = directory / "cargo-source.tar"
+        with cargo_archive.open("wb") as output:
+            subprocess.run(cargo_archive_argv(root, plan["source_revision"]),
+                           stdout=output, check=True, stdin=subprocess.DEVNULL)
+        with tarfile.open(cargo_archive) as source:
+            source.extractall(cargo_root, filter="data")
+        cargo_archive.unlink()
+        subprocess.run(["git", "init", "-q", str(cargo_root)], check=True, stdin=subprocess.DEVNULL)
         # Only the private snapshot changes. Never rewrite live tracked metadata.
         (snapshot / "toolchain/rustc/git-commit-info").write_text(plan["source_metadata"] + "\n")
         # Tells bootstrap to report that revision instead of a source content hash.
@@ -137,6 +159,9 @@ def execute(plan):
             env = dict(os.environ, **command["env"], CI="1", GIT_TERMINAL_PROMPT="0")
             subprocess.run(command["argv"], cwd=command["cwd"], env=env,
                            stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr, check=True)
+            produced = command.get("produces")
+            if produced and not os.access(produced, os.X_OK):
+                raise ValueError(f"build helper did not produce executable artifact: {produced}")
         build_stages(plan["commands"], run)
         validate_snapshot_source(root, plan["source_revision"])
         for artifact in (Path(plan["artifacts"]["compiler_sysroot"]) / "bin/rustc",
