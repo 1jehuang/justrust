@@ -11,6 +11,16 @@
 //! and caches verified read-only responses from the public prebuilt store on
 //! local NVMe. It is strictly read-only (only `GET /v1/<validated-path>`):
 //! tenant builds can never write to it or poison it.
+//!
+//! The store can be read from several places (`Source`): the CDN, the bucket
+//! behind it, and read replicas of that bucket in other regions. Each request
+//! goes to the one that has been answering fastest from this machine. A key a
+//! machine has never fetched is almost never in the CDN edge next to it, and
+//! the edge then fetches it across the country: measured from a us-west-2
+//! build host, 0.27 s per manifest and 0.49 s per bundle through the CDN
+//! against 0.10 s and 0.13 s straight from the us-east-1 bucket. That is per
+//! dependency and serial along the dependency chain, so it set the wall time
+//! of every first build after a toolchain change (674 units, 51 s).
 
 use crate::depcache_prebuilt::{self, fresh_file};
 use crate::depcache_remote::PUBLIC_MAX_BUNDLE;
@@ -31,6 +41,123 @@ const NEGATIVE_TTL: Duration = Duration::from_secs(60);
 const MAX_NEGATIVE_ENTRIES: usize = 16_384;
 const MAX_INDEX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+/// Failures or stale answers in a row before an upstream is set aside.
+const UPSTREAM_STRIKES: u64 = 3;
+const UPSTREAM_BENCH: Duration = Duration::from_secs(300);
+/// One request in this many goes to the runner-up, so its latency estimate
+/// stays current (an edge that has warmed up, a replica that caught up).
+const EXPLORE_EVERY: u64 = 64;
+
+/// One place the store can be read from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Source {
+    /// Base URL, the part before `/v1/`.
+    pub base: String,
+    /// Whether a missing key here is final. A replica can lag the bucket it
+    /// copies, so its "missing" is asked again from an authoritative source.
+    pub authoritative: bool,
+}
+
+struct Upstream {
+    source: Source,
+    /// EWMA of the time to response headers of successful requests, in
+    /// microseconds. 0 until measured.
+    ttfb_us: AtomicU64,
+    strikes: AtomicU64,
+    benched: Mutex<Option<Instant>>,
+    hits: AtomicU64,
+    misses: AtomicU64,
+    errors: AtomicU64,
+    /// Answered "missing" for a key an authoritative source had.
+    stale: AtomicU64,
+}
+
+impl Upstream {
+    fn new(source: Source) -> Self {
+        Self {
+            source: Source {
+                base: source.base.trim_end_matches('/').to_owned(),
+                authoritative: source.authoritative,
+            },
+            ttfb_us: AtomicU64::new(0),
+            strikes: AtomicU64::new(0),
+            benched: Mutex::new(None),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            stale: AtomicU64::new(0),
+        }
+    }
+
+    fn note_ok(&self, ttfb: Duration) {
+        let sample = (ttfb.as_micros() as u64).max(1);
+        let prev = self.ttfb_us.load(Ordering::Relaxed);
+        let next = if prev == 0 {
+            sample
+        } else {
+            (prev * 3 + sample) / 4
+        };
+        self.ttfb_us.store(next, Ordering::Relaxed);
+        self.strikes.store(0, Ordering::Relaxed);
+        self.hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn strike(&self) {
+        if self.strikes.fetch_add(1, Ordering::Relaxed) + 1 >= UPSTREAM_STRIKES
+            && let Ok(mut b) = self.benched.lock()
+        {
+            *b = Some(Instant::now() + UPSTREAM_BENCH);
+            self.strikes.store(0, Ordering::Relaxed);
+        }
+    }
+
+    fn is_benched(&self) -> bool {
+        let Ok(mut b) = self.benched.lock() else {
+            return false;
+        };
+        match *b {
+            Some(until) if Instant::now() < until => true,
+            Some(_) => {
+                *b = None;
+                false
+            }
+            None => false,
+        }
+    }
+}
+
+/// The order to try the upstreams in for request number `n`: unmeasured ones
+/// first (rotated by `n`, so a burst of first requests measures all of them
+/// at once), then by measured latency. Benched ones last: they are still
+/// tried when everything else fails.
+fn upstream_order(ups: &[Upstream], n: u64) -> Vec<usize> {
+    let mut fresh = Vec::new();
+    let mut measured = Vec::new();
+    let mut benched = Vec::new();
+    for (i, u) in ups.iter().enumerate() {
+        if u.is_benched() {
+            benched.push(i);
+        } else {
+            match u.ttfb_us.load(Ordering::Relaxed) {
+                0 => fresh.push(i),
+                t => measured.push((t, i)),
+            }
+        }
+    }
+    if !fresh.is_empty() {
+        let by = (n % fresh.len() as u64) as usize;
+        fresh.rotate_left(by);
+    }
+    measured.sort();
+    if fresh.is_empty() && measured.len() > 1 && (n + 1).is_multiple_of(EXPLORE_EVERY) {
+        measured.swap(0, 1);
+    }
+    fresh
+        .into_iter()
+        .chain(measured.into_iter().map(|(_, i)| i))
+        .chain(benched)
+        .collect()
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -78,7 +205,7 @@ fn validate_rel(rel: &str) -> Option<Kind> {
 type InflightGate = Arc<(Mutex<bool>, Condvar)>;
 
 struct State {
-    upstream: String,
+    upstreams: Vec<Upstream>,
     cache_dir: PathBuf,
     agent: ureq::Agent,
     inflight: Mutex<HashMap<String, InflightGate>>,
@@ -86,11 +213,30 @@ struct State {
     refreshing: Mutex<HashSet<String>>,
     refresh_tx: mpsc::SyncSender<(String, Kind, PathBuf)>,
     seq: AtomicU64,
+    /// Upstream fetches started, for the order they try the upstreams in.
+    requests: AtomicU64,
 }
 
-/// Start the loopback read-only prebuilt proxy. Returns its base URL
-/// (`http://127.0.0.1:<port>`) or `None` if binding fails.
+/// Start the loopback read-only prebuilt proxy in front of one store URL.
+/// Returns its base URL (`http://127.0.0.1:<port>`) or `None` if binding
+/// fails.
+#[cfg(test)]
 pub fn start(upstream: String, cache_dir: PathBuf) -> Option<String> {
+    start_with(
+        vec![Source {
+            base: upstream,
+            authoritative: true,
+        }],
+        cache_dir,
+    )
+}
+
+/// Start the proxy in front of every place the store can be read from. At
+/// least one source must be authoritative.
+pub fn start_with(sources: Vec<Source>, cache_dir: PathBuf) -> Option<String> {
+    if !sources.iter().any(|s| s.authoritative) {
+        return None;
+    }
     let listener = TcpListener::bind("127.0.0.1:0").ok()?;
     let addr = listener.local_addr().ok()?;
     let _ = std::fs::create_dir_all(cache_dir.join("v1/m"));
@@ -108,7 +254,7 @@ pub fn start(upstream: String, cache_dir: PathBuf) -> Option<String> {
 
     let (refresh_tx, refresh_rx) = mpsc::sync_channel::<(String, Kind, PathBuf)>(REFRESH_QUEUE_CAP);
     let state = Arc::new(State {
-        upstream: upstream.trim_end_matches('/').to_owned(),
+        upstreams: sources.into_iter().map(Upstream::new).collect(),
         cache_dir,
         agent,
         inflight: Mutex::new(HashMap::new()),
@@ -116,6 +262,7 @@ pub fn start(upstream: String, cache_dir: PathBuf) -> Option<String> {
         refreshing: Mutex::new(HashSet::new()),
         refresh_tx,
         seq: AtomicU64::new(0),
+        requests: AtomicU64::new(0),
     });
 
     let refresh_rx = Arc::new(Mutex::new(refresh_rx));
@@ -335,22 +482,70 @@ fn fetch_cached(state: &State, rel: &str, kind: Kind) -> FetchResult {
     result
 }
 
+enum One {
+    Hit,
+    Missing,
+    Error,
+}
+
+/// Fetch from the upstreams in latency order until one has the object.
 fn fetch_upstream(state: &State, rel: &str, kind: Kind, dst: &Path) -> FetchResult {
     let max_bytes = match kind {
         Kind::Mutable { max_bytes, .. } | Kind::Immutable { max_bytes } => max_bytes,
     };
-    let url = format!("{}/v1/{rel}", state.upstream);
+    let n = state.requests.fetch_add(1, Ordering::Relaxed);
+    let result = fetch_ranked(state, rel, max_bytes, dst, n);
+    // Often enough to describe a short build, rarely enough to cost nothing.
+    if (n + 1).is_power_of_two() || (n + 1).is_multiple_of(EXPLORE_EVERY) {
+        write_stats(state);
+    }
+    result
+}
+
+fn fetch_ranked(state: &State, rel: &str, max_bytes: u64, dst: &Path, n: u64) -> FetchResult {
+    // Replicas that said "missing" before another source had the object.
+    let mut said_missing: Vec<&Upstream> = Vec::new();
+    for i in upstream_order(&state.upstreams, n) {
+        let up = &state.upstreams[i];
+        match fetch_one(state, up, rel, max_bytes, dst) {
+            One::Hit => {
+                for stale in said_missing {
+                    stale.stale.fetch_add(1, Ordering::Relaxed);
+                    stale.strike();
+                }
+                return FetchResult::Hit(dst.to_path_buf());
+            }
+            One::Missing if up.source.authoritative => {
+                note_missing(state, rel);
+                return FetchResult::Missing;
+            }
+            One::Missing => said_missing.push(up),
+            One::Error => up.strike(),
+        }
+    }
+    // No authoritative source answered: not known to be missing.
+    FetchResult::Error
+}
+
+fn fetch_one(state: &State, up: &Upstream, rel: &str, max_bytes: u64, dst: &Path) -> One {
+    let url = format!("{}/v1/{rel}", up.source.base);
+    let t0 = Instant::now();
     let resp = match state.agent.get(&url).call() {
         Ok(r) => r,
-        Err(_) => return FetchResult::Error,
+        Err(_) => {
+            up.errors.fetch_add(1, Ordering::Relaxed);
+            return One::Error;
+        }
     };
+    let ttfb = t0.elapsed();
     let status = resp.status().as_u16();
     if status == 404 || status == 403 {
-        note_missing(state, rel);
-        return FetchResult::Missing;
+        up.misses.fetch_add(1, Ordering::Relaxed);
+        return One::Missing;
     }
     if status != 200 {
-        return FetchResult::Error;
+        up.errors.fetch_add(1, Ordering::Relaxed);
+        return One::Error;
     }
 
     if let Some(parent) = dst.parent() {
@@ -370,15 +565,42 @@ fn fetch_upstream(state: &State, rel: &str, kind: Kind, dst: &Path) -> FetchResu
     })();
     if write_ok.is_err() {
         let _ = std::fs::remove_file(&tmp);
-        return FetchResult::Error;
+        up.errors.fetch_add(1, Ordering::Relaxed);
+        return One::Error;
     }
     if std::fs::rename(&tmp, dst).is_err() {
         let _ = std::fs::remove_file(&tmp);
         if !dst.is_file() {
-            return FetchResult::Error;
+            return One::Error;
         }
     }
-    FetchResult::Hit(dst.to_path_buf())
+    up.note_ok(ttfb);
+    One::Hit
+}
+
+/// What each upstream has been doing, for `cat <mirror>/upstreams`: one line
+/// per source with its latency estimate and counts. Diagnosis only.
+fn write_stats(state: &State) {
+    let mut text = String::new();
+    for u in &state.upstreams {
+        text.push_str(&format!(
+            "{} ttfb_ms={:.1} hits={} misses={} errors={} stale={} benched={}\n",
+            u.source.base,
+            u.ttfb_us.load(Ordering::Relaxed) as f64 / 1000.0,
+            u.hits.load(Ordering::Relaxed),
+            u.misses.load(Ordering::Relaxed),
+            u.errors.load(Ordering::Relaxed),
+            u.stale.load(Ordering::Relaxed),
+            u.is_benched(),
+        ));
+    }
+    let dst = state.cache_dir.join("upstreams");
+    let tmp = state
+        .cache_dir
+        .join(format!("upstreams.tmp.{}", std::process::id()));
+    if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &dst).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
 }
 
 fn write_status(stream: &mut TcpStream, code: u16, reason: &str) -> std::io::Result<()> {
@@ -416,6 +638,235 @@ mod tests {
         assert!(validate_rel("m/not-hex.jsonl").is_none());
         assert!(validate_rel(&format!("o/{k}.jrdc?x=1")).is_none());
         assert!(validate_rel("acct/123/o/foo").is_none());
+    }
+
+    /// A store on loopback that has `have` (path suffix, body) and answers
+    /// 404 for everything else, each request after `delay`.
+    fn fake_store(have: Vec<(String, Vec<u8>)>, delay: Duration) -> (String, Arc<AtomicU64>) {
+        let hits = Arc::new(AtomicU64::new(0));
+        let counter = Arc::clone(&hits);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for conn in listener.incoming().flatten() {
+                let mut stream = conn;
+                let mut r = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                let _ = r.read_line(&mut line);
+                loop {
+                    let mut h = String::new();
+                    if r.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" || h == "\n" {
+                        break;
+                    }
+                }
+                std::thread::sleep(delay);
+                counter.fetch_add(1, Ordering::Relaxed);
+                match have.iter().find(|(path, _)| line.contains(path.as_str())) {
+                    Some((_, body)) => {
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(body);
+                    }
+                    None => {
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        );
+                    }
+                }
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://{addr}"), hits)
+    }
+
+    fn test_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "justrust-prebuilt-proxy-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    fn key(i: usize) -> String {
+        format!("{i:032x}")
+    }
+
+    #[test]
+    fn order_measures_every_upstream_then_prefers_the_fastest() {
+        let ups: Vec<Upstream> = ["http://a", "http://b", "http://c"]
+            .iter()
+            .map(|b| {
+                Upstream::new(Source {
+                    base: (*b).to_owned(),
+                    authoritative: true,
+                })
+            })
+            .collect();
+        // Nothing measured: a burst of first requests is spread over all.
+        assert_eq!(upstream_order(&ups, 0), [0, 1, 2]);
+        assert_eq!(upstream_order(&ups, 1), [1, 2, 0]);
+        assert_eq!(upstream_order(&ups, 2), [2, 0, 1]);
+        ups[0].note_ok(Duration::from_millis(270));
+        // An unmeasured upstream is tried before a measured one.
+        assert_eq!(upstream_order(&ups, 0)[2], 0);
+        ups[1].note_ok(Duration::from_millis(100));
+        ups[2].note_ok(Duration::from_millis(4));
+        assert_eq!(upstream_order(&ups, 0), [2, 1, 0]);
+        // Now and then the runner-up goes first, so its estimate stays current.
+        assert_eq!(upstream_order(&ups, EXPLORE_EVERY - 1), [1, 2, 0]);
+        // Three failures in a row set an upstream aside: last resort only.
+        for _ in 0..UPSTREAM_STRIKES {
+            ups[2].strike();
+        }
+        assert_eq!(upstream_order(&ups, 0), [1, 0, 2]);
+        // A success in between forgives earlier failures.
+        ups[1].strike();
+        ups[1].strike();
+        ups[1].note_ok(Duration::from_millis(100));
+        ups[1].strike();
+        assert!(!ups[1].is_benched());
+    }
+
+    #[test]
+    fn requests_move_to_the_faster_upstream() {
+        let objects: Vec<(String, Vec<u8>)> = (0..12)
+            .map(|i| (format!("/v1/o/{}.jrdc", key(i)), vec![i as u8; 8]))
+            .collect();
+        let (slow, slow_hits) = fake_store(objects.clone(), Duration::from_millis(60));
+        let (fast, fast_hits) = fake_store(objects, Duration::ZERO);
+        let tmp = test_dir("rank");
+        let base = start_with(
+            vec![
+                Source {
+                    base: slow,
+                    authoritative: true,
+                },
+                Source {
+                    base: fast,
+                    authoritative: true,
+                },
+            ],
+            tmp.clone(),
+        )
+        .unwrap();
+        for i in 0..12 {
+            let dst = tmp.join(format!("out{i}"));
+            assert!(matches!(
+                depcache_prebuilt::get(&base, &format!("o/{}.jrdc", key(i)), &dst, 5, 1024),
+                depcache_prebuilt::Got::Ok
+            ));
+            assert_eq!(std::fs::read(&dst).unwrap(), vec![i as u8; 8]);
+        }
+        // One request to measure the slow one, the rest to the fast one.
+        assert_eq!(slow_hits.load(Ordering::Relaxed), 1);
+        assert_eq!(fast_hits.load(Ordering::Relaxed), 11);
+        let stats = std::fs::read_to_string(tmp.join("upstreams")).unwrap();
+        assert_eq!(stats.lines().count(), 2, "{stats}");
+        assert!(stats.contains("hits=1 "), "{stats}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_lagging_replica_is_rechecked_then_set_aside() {
+        let objects: Vec<(String, Vec<u8>)> = (0..8)
+            .map(|i| (format!("/v1/m/{}.jsonl", key(i)), b"{}\n".to_vec()))
+            .collect();
+        // The store answers slowly, the replica at once but has nothing.
+        let (store, store_hits) = fake_store(objects, Duration::from_millis(30));
+        let (replica, replica_hits) = fake_store(Vec::new(), Duration::ZERO);
+        let tmp = test_dir("replica");
+        let base = start_with(
+            vec![
+                Source {
+                    base: store,
+                    authoritative: true,
+                },
+                Source {
+                    base: replica,
+                    authoritative: false,
+                },
+            ],
+            tmp.clone(),
+        )
+        .unwrap();
+        for i in 0..8 {
+            let dst = tmp.join(format!("out{i}"));
+            // The replica's "missing" never reaches the build.
+            assert!(matches!(
+                depcache_prebuilt::get(&base, &format!("m/{}.jsonl", key(i)), &dst, 5, 1024),
+                depcache_prebuilt::Got::Ok
+            ));
+        }
+        assert_eq!(store_hits.load(Ordering::Relaxed), 8);
+        // Asked until it was wrong three times in a row, then left alone.
+        assert_eq!(replica_hits.load(Ordering::Relaxed), UPSTREAM_STRIKES);
+
+        // Missing in the store is final, and is remembered.
+        let gone = format!("m/{}.jsonl", key(99));
+        let dst = tmp.join("gone");
+        assert!(matches!(
+            depcache_prebuilt::get(&base, &gone, &dst, 5, 1024),
+            depcache_prebuilt::Got::Missing
+        ));
+        assert!(matches!(
+            depcache_prebuilt::get(&base, &gone, &dst, 5, 1024),
+            depcache_prebuilt::Got::Missing
+        ));
+        assert_eq!(store_hits.load(Ordering::Relaxed), 9);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn an_unreachable_upstream_falls_back_to_the_next() {
+        let k = key(7);
+        let (store, _) = fake_store(
+            vec![(format!("/v1/o/{k}.jrdc"), b"bundle".to_vec())],
+            Duration::ZERO,
+        );
+        // A port nothing listens on.
+        let dead = {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("http://{}", l.local_addr().unwrap())
+        };
+        let tmp = test_dir("dead");
+        let base = start_with(
+            vec![
+                Source {
+                    base: dead,
+                    authoritative: true,
+                },
+                Source {
+                    base: store,
+                    authoritative: true,
+                },
+            ],
+            tmp.clone(),
+        )
+        .unwrap();
+        let dst = tmp.join("out");
+        assert!(matches!(
+            depcache_prebuilt::get(&base, &format!("o/{k}.jrdc"), &dst, 5, 1024),
+            depcache_prebuilt::Got::Ok
+        ));
+        assert_eq!(std::fs::read(&dst).unwrap(), b"bundle");
+        // No authoritative source: refuse to start rather than report
+        // replication lag as "not in the store".
+        assert!(
+            start_with(
+                vec![Source {
+                    base: "http://127.0.0.1:1".into(),
+                    authoritative: false,
+                }],
+                tmp.clone(),
+            )
+            .is_none()
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

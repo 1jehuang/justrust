@@ -81,6 +81,69 @@ pub(crate) fn note_success(root: &Path) {
 /// on a quiet laptop, fetching selectively 19-26 s vs 34-35 s (FINDINGS 43).
 pub const DEFAULT_STORE: &str = "https://d1j555vqgf2xkj.cloudfront.net";
 
+/// The bucket behind [`DEFAULT_STORE`] (us-east-1, `StoreUrl` of
+/// justrust-cloud `infra/prebuilt-store.yaml`): the same public, read-only
+/// objects without the CDN. A machine that keeps connections open (the
+/// remote agent's proxy) reads a key the CDN edge does not hold faster from
+/// here, because the edge has to come here first: 0.10 s against 0.27 s per
+/// manifest from a us-west-2 build host.
+pub const DEFAULT_STORE_ORIGIN: &str =
+    "https://jcode-justrust-prebuilt-production-280196252242.s3.us-east-1.amazonaws.com";
+
+/// Read replicas of that bucket in other regions (justrust-cloud
+/// `infra/prebuilt-store-replica.yaml`), filled by S3 replication, so they
+/// can lag it: a key missing in one is asked for again from the store. From
+/// a build host in the same region a request takes about 4 ms.
+pub const DEFAULT_STORE_REPLICAS: &[&str] = &[
+    "https://jcode-justrust-prebuilt-production-280196252242-us-west-2.s3.us-west-2.amazonaws.com",
+];
+
+/// Every place the remote agent's proxy can read the store at `base` from,
+/// which it ranks by measured latency (`prebuilt_proxy`). The public store
+/// adds its bucket and replicas. `JUSTRUST_PREBUILT_REPLICAS` (https URLs
+/// separated by spaces or commas) names replicas of any store.
+pub fn proxy_sources(base: &str) -> Vec<crate::prebuilt_proxy::Source> {
+    proxy_sources_with(
+        base,
+        std::env::var("JUSTRUST_PREBUILT_REPLICAS").ok().as_deref(),
+    )
+}
+
+fn proxy_sources_with(base: &str, replicas: Option<&str>) -> Vec<crate::prebuilt_proxy::Source> {
+    use crate::prebuilt_proxy::Source;
+    let base = base.trim_end_matches('/');
+    let mut v = vec![Source {
+        base: base.to_owned(),
+        authoritative: true,
+    }];
+    let replica = |url: &str, v: &mut Vec<Source>| {
+        let url = url.trim().trim_end_matches('/');
+        if url.starts_with("https://") && v.iter().all(|s| s.base != url) {
+            v.push(Source {
+                base: url.to_owned(),
+                authoritative: false,
+            });
+        }
+    };
+    if base == DEFAULT_STORE {
+        v.push(Source {
+            base: DEFAULT_STORE_ORIGIN.to_owned(),
+            authoritative: true,
+        });
+        for r in DEFAULT_STORE_REPLICAS {
+            replica(r, &mut v);
+        }
+    }
+    for r in replicas
+        .unwrap_or_default()
+        .split([' ', ',', '\n', '\t'])
+        .filter(|r| !r.is_empty())
+    {
+        replica(r, &mut v);
+    }
+    v
+}
+
 /// The toolchain the public store is compiled with (justrust-cloud
 /// `prebuild/run.sh` default). Keys include rustc `-vV`, so only builds
 /// with a toolchain the fleet compiles for can hit the store. Remote build
@@ -832,6 +895,37 @@ pub fn status_line(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_reads_the_public_store_from_its_bucket_and_replicas() {
+        let v = proxy_sources_with(DEFAULT_STORE, None);
+        assert_eq!(v[0].base, DEFAULT_STORE);
+        assert_eq!(v[1].base, DEFAULT_STORE_ORIGIN);
+        assert!(v[0].authoritative && v[1].authoritative);
+        assert_eq!(v.len(), 2 + DEFAULT_STORE_REPLICAS.len());
+        // A replica can lag: its "missing" is never final.
+        assert!(v[2..].iter().all(|s| !s.authoritative));
+        for s in &v {
+            assert!(s.base.starts_with("https://") && !s.base.ends_with('/'));
+        }
+
+        // A private store is read from where the user said, plus replicas
+        // they name. Nothing of the public store is mixed in.
+        let v = proxy_sources_with(
+            "https://store.example/",
+            Some("https://r1.example/, http://plain.example https://r1.example https://r2.example"),
+        );
+        let bases: Vec<&str> = v.iter().map(|s| s.base.as_str()).collect();
+        assert_eq!(
+            bases,
+            [
+                "https://store.example",
+                "https://r1.example",
+                "https://r2.example"
+            ]
+        );
+        assert!(v[0].authoritative && !v[1].authoritative && !v[2].authoritative);
+    }
 
     #[test]
     fn index_lookup_sorted_and_fallback() {

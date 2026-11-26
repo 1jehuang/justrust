@@ -1128,7 +1128,10 @@ fn prebuilt_proxy_url() -> Option<&'static str> {
             return None;
         }
         let cache_dir = crate::paths::cache_root()?.join("prebuilt-mirror");
-        crate::prebuilt_proxy::start(upstream, cache_dir)
+        crate::prebuilt_proxy::start_with(
+            crate::depcache_prebuilt::proxy_sources(&upstream),
+            cache_dir,
+        )
     })
     .as_deref()
 }
