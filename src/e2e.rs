@@ -183,6 +183,9 @@ fn split_owned(w: &mut Waterfall, until: Option<f64>, parts: &[(String, f64)], r
 pub fn local(m: &Marks, now: f64, phases: &crate::summary::Phases) -> E2e {
     let mut w = Waterfall::new();
     w.until("client.route", m.get("routed"));
+    // Selecting and leasing the compiler: waits for a toolchain lifecycle
+    // change on this machine, or installs the pinned compiler.
+    w.until("client.toolchain", m.get("toolchain"));
     w.until("client.setup", m.get("cargo_spawn"));
     split_owned(
         &mut w,
@@ -221,7 +224,44 @@ pub struct RemoteTimes {
     pub host_wall: f64,
     /// Identical-request wait inside slots::acquire, before record_baseline.
     pub slot_wait: f64,
+    /// What the host's own recorder measured around cargo.
+    pub host_own: HostOwn,
     pub host_phases: crate::summary::Phases,
+}
+
+/// The host recorder's time outside cargo, from the waterfall it wrote for
+/// its own process (`local`). All of it lies inside the agent's execute time
+/// and outside the host wall.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct HostOwn {
+    /// Selecting and leasing the compiler.
+    pub toolchain: f64,
+    /// Routing, shim, scope and slot, including any identical-build wait.
+    pub setup: f64,
+    /// After cargo: collecting and writing the run.
+    pub report: f64,
+}
+
+impl HostOwn {
+    /// From the summary the host wrote, before its waterfall is replaced by
+    /// the end-to-end one.
+    pub fn of(host: Option<&E2e>) -> Self {
+        let Some(e) = host.filter(|e| !e.derived) else {
+            return Self::default();
+        };
+        let seg = |k: &str| {
+            e.segments
+                .iter()
+                .filter(|s| s.key == k && s.secs.is_finite() && s.secs > 0.0)
+                .map(|s| s.secs)
+                .sum::<f64>()
+        };
+        Self {
+            toolchain: seg("client.toolchain"),
+            setup: seg("client.route") + seg("client.setup"),
+            report: seg("client.report"),
+        }
+    }
 }
 
 /// A hosted or remote build. Marks: `routed`, `remote_roots`, `admitted`,
@@ -263,9 +303,23 @@ pub fn remote(m: &Marks, now: f64, r: &RemoteTimes) -> E2e {
             0.0
         };
         host.insert(1, ("host.slot_wait".into(), wait));
+        // The host recorder measured its own time around cargo. It never
+        // exceeds what the agent saw: scale it into what is left.
+        let own = r.host_own;
+        let setup = (own.setup - wait).max(0.0);
+        let left = residual - wait;
+        let known = own.toolchain + setup + own.report;
+        let scale = if known > left && known > 0.0 {
+            left / known
+        } else {
+            1.0
+        };
+        host.insert(2, ("host.toolchain".into(), own.toolchain * scale));
+        host.insert(3, ("host.setup".into(), setup * scale));
+        host.push(("host.report".into(), own.report * scale));
         // This remainder has no start/end marks of its own. Keep the historical
         // key for saved profiles, but do not attribute it to recorder work.
-        host.push(("host.recorder".into(), residual - wait));
+        host.push(("host.recorder".into(), (left - known * scale).max(0.0)));
         host.push(("host.finalize".into(), t.finalize_ms / 1000.0));
         host.push(("host.records".into(), t.records_ms / 1000.0));
     }
@@ -347,7 +401,10 @@ pub fn label(key: &str) -> &str {
     match key {
         "client.route" => "justrust start, routing",
         "client.roots" => "find source roots",
-        "client.setup" => "toolchain, slot, setup",
+        "client.toolchain" | "host.toolchain" => "compiler selection or install",
+        "client.setup" => "slot, shim, setup",
+        "host.setup" => "host slot, shim, setup",
+        "host.report" => "host collect, report",
         "client.report" => "collect, report",
         "remote.admission" => "hosted admission",
         "remote.preflight" => "hosted maintenance check",
@@ -500,6 +557,7 @@ mod tests {
             }),
             host_wall: 6.0,
             slot_wait: 0.0,
+            host_own: HostOwn::default(),
             host_phases: Phases {
                 startup: 0.5,
                 compile: 5.0,
@@ -564,6 +622,77 @@ mod tests {
         ] {
             assert!((get(&e, key) - expected).abs() < 1e-9, "{key}: {e:?}");
         }
+    }
+
+    #[test]
+    fn host_recorder_time_around_cargo_is_named_not_left_unattributed() {
+        // Replay of 20261125-234725124-1994670-pre: the build waited 11.59s
+        // for a toolchain promotion on the host before selecting its compiler.
+        let marks = Marks(vec![("flushed", 0.2), ("exit", 11.85)]);
+        let host = local(
+            &Marks(vec![
+                ("routed", 0.004),
+                ("toolchain", 11.574),
+                ("record_baseline", 11.58),
+                ("cargo_spawn", 11.582),
+                ("cargo_done", 11.592),
+            ]),
+            11.598,
+            &Phases {
+                startup: 0.009,
+                ..Default::default()
+            },
+        );
+        assert!((get(&host, "client.toolchain") - 11.57).abs() < 1e-9);
+        assert!((get(&host, "client.setup") - 0.008).abs() < 1e-9);
+        assert!((sum(&host) - 11.598).abs() < 1e-9);
+        let mut times = RemoteTimes {
+            host_wall: 0.012,
+            host_own: HostOwn::of(Some(&host)),
+            run: Some(crate::remote_proto::RunTiming {
+                execute_ms: 11600.0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let e = remote(&marks, 11.86, &times);
+        assert!((get(&e, "host.toolchain") - 11.57).abs() < 1e-9, "{e:?}");
+        assert!((get(&e, "host.setup") - 0.012).abs() < 1e-9, "{e:?}");
+        assert!((get(&e, "host.report") - 0.006).abs() < 1e-9, "{e:?}");
+        assert!(get(&e, "host.recorder") < 0.001, "{e:?}");
+        assert!(render(&e).contains("compiler selection or install"));
+        let without = remote(
+            &marks,
+            11.86,
+            &RemoteTimes {
+                host_own: HostOwn::default(),
+                ..times.clone()
+            },
+        );
+        assert!((get(&without, "host.recorder") - 11.588).abs() < 1e-9);
+        assert!((sum(&e) - sum(&without)).abs() < 1e-9);
+
+        // The identical-build wait happens inside the host's setup: it is not
+        // counted twice.
+        times.slot_wait = 0.005;
+        let e = remote(&marks, 11.86, &times);
+        assert!((get(&e, "host.slot_wait") - 0.005).abs() < 1e-9);
+        assert!((get(&e, "host.setup") - 0.007).abs() < 1e-9);
+
+        // A host that reports more than the agent measured is scaled down,
+        // never past the residual.
+        times.slot_wait = 0.0;
+        times.host_own.toolchain = 100.0;
+        let e = remote(&marks, 11.86, &times);
+        assert!((sum(&e) - sum(&without)).abs() < 1e-9);
+        assert!(get(&e, "host.recorder") < 1e-9);
+        assert!((get(&e, "host.toolchain") - 11.588 * 100.0 / 100.018).abs() < 1e-9);
+
+        // A reconstructed waterfall has no marks to trust.
+        let mut derived = host.clone();
+        derived.derived = true;
+        assert_eq!(HostOwn::of(Some(&derived)), HostOwn::default());
+        assert_eq!(HostOwn::of(None), HostOwn::default());
     }
 
     #[test]
@@ -695,6 +824,7 @@ mod tests {
                 barrier_ms: 60.0,
             }),
             slot_wait: 0.0,
+            host_own: HostOwn::default(),
             host_wall: 5.0,
             host_phases: Phases {
                 compile: 4.0,

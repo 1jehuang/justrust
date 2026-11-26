@@ -371,9 +371,13 @@ fn overall_v2(s: &crate::summary::Summary) -> [f64; 13] {
                 Some(("build" | "host", "other")) => CARGO_UNKNOWN,
                 Some(("build" | "host", "compile" | "tests" | "cargo_startup" | "lock_wait"))
                 | Some(("remote", "admission" | "preflight" | "daemon_connect" | "artifacts"))
-                | Some(("host", "prepare" | "slot_wait" | "finalize" | "records"))
+                | Some((
+                    "host",
+                    "prepare" | "slot_wait" | "toolchain" | "setup" | "report" | "finalize"
+                    | "records",
+                ))
                 | Some(("sync", "lock_wait" | "link" | "push" | "barrier" | "other" | "total"))
-                | Some(("client", "setup" | "route" | "roots" | "report")) => {
+                | Some(("client", "setup" | "toolchain" | "route" | "roots" | "report")) => {
                     Bucket::of(key) as usize
                 }
                 Some(("remote" | "host", _)) => REMOTE_UNKNOWN,
@@ -568,9 +572,11 @@ impl Bucket {
             ("remote", "artifacts") => Bucket::Artifacts,
             ("remote", "other") => Bucket::Other,
             ("remote", _) => Bucket::Hosted,
-            ("host", "prepare" | "slot_wait" | "recorder" | "finalize" | "records") => {
-                Bucket::Hosted
-            }
+            (
+                "host",
+                "prepare" | "slot_wait" | "toolchain" | "setup" | "report" | "recorder"
+                | "finalize" | "records",
+            ) => Bucket::Hosted,
             _ => Bucket::Other,
         }
     }

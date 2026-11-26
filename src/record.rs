@@ -748,6 +748,9 @@ fn record(
     let selection = crate::toolchain::slots::selection()?;
     let pinned = compatible_toolchain(crate::toolchain::for_build(), args)?;
     let _compiler_lease = crate::toolchain::slots::lease(pinned.as_ref())?;
+    // Up to here the run may have waited for a toolchain lifecycle change on
+    // this machine, or installed its pinned compiler.
+    crate::e2e::mark("toolchain");
     require_selected_toolchain(
         requested.as_deref(),
         pinned.as_ref().map(|tc| tc.id.as_str()),

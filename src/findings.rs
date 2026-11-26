@@ -102,6 +102,18 @@ pub fn e2e_findings(s: &Summary) -> Vec<Finding> {
             format!("{admission:.1}s waiting for the hosted build service to admit the run"),
         ));
     }
+    let toolchain = seg("host.toolchain") + seg("client.toolchain");
+    if notable(toolchain) {
+        out.push(Finding::new(
+            "toolchain_wait",
+            toolchain,
+            format!(
+                "{toolchain:.1}s before cargo started, selecting the compiler: the build machine was \
+                 installing or switching a toolchain (every build there waits for that), or this \
+                 run installed its pinned one. Once per toolchain change"
+            ),
+        ));
+    }
     out
 }
 
