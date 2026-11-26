@@ -287,7 +287,7 @@ pub fn source_roots(cwd: &Path) -> Result<Vec<PathBuf>> {
             .iter()
             .filter_map(|p| p.as_str().map(PathBuf::from))
             .collect();
-        if !roots.is_empty() && roots.iter().all(|r| r.is_dir()) {
+        if !roots.is_empty() && roots.iter().all(|r| r.is_dir()) && mirrors(&roots, cwd) {
             return Ok(roots);
         }
     }
@@ -339,6 +339,13 @@ pub fn source_roots(cwd: &Path) -> Result<Vec<PathBuf>> {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_else(|| serde_json::json!({}));
+        // Entries no build can ask for again: other key schemes, and this
+        // workspace under lockfiles that have changed since.
+        if let (Some(entries), Some((workspace, _))) = (v.as_object_mut(), key.split_once('|')) {
+            entries.retain(|k, _| {
+                k.starts_with("v3:") && k.split_once('|').is_none_or(|(w, _)| w != workspace)
+            });
+        }
         v[key] = serde_json::json!(roots);
         let _ = std::fs::write(&cache, v.to_string());
     }
@@ -402,32 +409,53 @@ fn excluded_root(d: &Path) -> Option<PathBuf> {
     Some(if excluded(&ws) { ws } else { d.to_path_buf() })
 }
 
-/// Lockfile path + mtime: path dependencies only change with the lockfile.
-/// `v2`: roots computed before excluded trees got their own are stale.
-fn roots_cache_key(cwd: &Path) -> Option<String> {
-    let lock = lockfile(cwd)?;
-    let mtime = std::fs::metadata(&lock)
-        .ok()?
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_nanos();
-    Some(format!("v2:{}@{mtime}", lock.display()))
+/// Whether one of `roots` holds `d` in its mirror: a root above it whose
+/// `.justrustignore` does not leave it out.
+fn mirrors(roots: &[PathBuf], d: &Path) -> bool {
+    roots.iter().any(|root| holds(root, d))
 }
 
-/// The outermost Cargo.lock at or above `cwd` (the workspace's).
-pub fn lockfile(cwd: &Path) -> Option<PathBuf> {
+fn holds(root: &Path, d: &Path) -> bool {
+    d.strip_prefix(root).is_ok_and(|rel| {
+        rel.as_os_str().is_empty() || !crate::remote_sync::excluded_from_mirror(root, rel)
+    })
+}
+
+/// The workspace of `cwd` and every lockfile at or above it with its mtime:
+/// path dependencies only change with a lockfile.
+///
+/// `v3`: the key was the outermost lockfile alone, which a workspace nested
+/// in a repository with a lockfile of its own (`toolchain/cargo` here) shares
+/// with the repository. Whichever built first after that lockfile changed
+/// cached its roots for both, so after a build in the repository a build in
+/// `toolchain/cargo` mirrored the repository only, which excludes
+/// `/toolchain/`, and the machine compiled the sources an older mirror had
+/// left: `justrust test` reported 3 tests passing with "0 files" to sync
+/// while a fourth, new one was never sent.
+fn roots_cache_key(cwd: &Path) -> Option<String> {
+    let mut locks = Vec::new();
     let mut d = Some(cwd);
-    let mut lock = None;
     while let Some(dir) = d {
-        let l = dir.join("Cargo.lock");
-        if l.exists() {
-            lock = Some(l);
+        let lock = dir.join("Cargo.lock");
+        if let Ok(md) = std::fs::metadata(&lock) {
+            let mtime = md
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_nanos();
+            locks.push(format!("{}@{mtime}", lock.display()));
         }
         d = dir.parent();
     }
-    lock
+    if locks.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "v3:{}|{}",
+        workspace_dir(cwd).display(),
+        locks.join("|")
+    ))
 }
 
 /// The nearest ancestor of `d` (itself included) whose Cargo.toml declares
@@ -459,11 +487,7 @@ fn repo_root(d: &Path) -> PathBuf {
 /// Drop roots nested inside another root, unless that root's mirror excludes
 /// them (`excluded_root`).
 fn outermost(dirs: BTreeSet<PathBuf>) -> Vec<PathBuf> {
-    let covers = |outer: &Path, inner: &Path| {
-        inner.strip_prefix(outer).is_ok_and(|rel| {
-            rel.as_os_str().is_empty() || !crate::remote_sync::excluded_from_mirror(outer, rel)
-        })
-    };
+    let covers = holds;
     let mut out: Vec<PathBuf> = Vec::new();
     for d in dirs {
         if !out.iter().any(|o| covers(o, &d)) {
@@ -3718,6 +3742,41 @@ mod tests {
         let nested = crate::remote_sync::scan(&inner).unwrap().files;
         assert!(nested.contains_key(Path::new("crates/a/src/lib.rs")));
         assert!(nested.contains_key(Path::new("Cargo.toml")));
+
+        // Cached roots are per workspace: the nested one has a lockfile of
+        // its own below the repository's, and the repository's roots do not
+        // mirror it.
+        std::fs::write(repo.join("Cargo.lock"), "").unwrap();
+        std::fs::write(inner.join("Cargo.lock"), "").unwrap();
+        let key = |d: &Path| roots_cache_key(d).unwrap();
+        assert_ne!(key(&repo), key(&inner));
+        assert_eq!(key(&inner), key(&inner.join("crates/a")));
+        assert!(key(&inner).starts_with(&format!("v3:{}|", inner.display())));
+        // Before the nested workspace has a lockfile, and for a member of the
+        // repository's workspace under the excluded tree, the key is the
+        // repository's: a cached set that leaves the directory out is not
+        // used.
+        assert_eq!(key(&repo), key(&member));
+        let cached = vec![repo.clone()];
+        assert!(mirrors(&cached, &repo));
+        assert!(mirrors(&cached, &repo.join("src")));
+        assert!(!mirrors(&cached, &inner));
+        assert!(!mirrors(&cached, &inner.join("crates/a")));
+        assert!(!mirrors(&cached, &member));
+        assert!(mirrors(
+            &[repo.clone(), inner.clone()],
+            &inner.join("crates/a")
+        ));
+        // Another lockfile state of the same workspace is another key.
+        let before = key(&inner);
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(inner.join("Cargo.lock"))
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert_ne!(before, key(&inner));
         let _ = std::fs::remove_dir_all(&t);
     }
 
