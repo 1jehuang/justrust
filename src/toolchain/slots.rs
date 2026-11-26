@@ -719,11 +719,15 @@ mod tests {
                 .is_err()
             );
             drop(held);
-            f.run(Command::Discard {
-                failed: "jr-bbbbbbb".into(),
-            })
-            .unwrap();
-            assert!(!f.0.join("managed/staged/jr-bbbbbbb").exists());
+            // A child another test is forking can hold the use lock until it
+            // execs, and a discard leaves a toolchain that is still in use.
+            assert!(crate::test_fork::eventually(|| {
+                f.run(Command::Discard {
+                    failed: "jr-bbbbbbb".into(),
+                })
+                .unwrap();
+                !f.0.join("managed/staged/jr-bbbbbbb").exists()
+            }));
             assert!(f.0.join("managed/staged/jr-aaaaaaa").exists());
             let state = read(&f.0).unwrap().unwrap();
             assert_eq!(state.discarded.as_deref(), Some("jr-bbbbbbb"));

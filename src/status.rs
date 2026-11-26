@@ -1089,7 +1089,14 @@ mod tests {
         assert!(wake.drain().unwrap());
         std::fs::remove_dir_all(&dir).unwrap();
         // Losing either directory switches permanently to timed fallback.
-        assert!(!wake.wait(Some(0.01)));
+        // The kernel reports the loss once the last descriptor on the
+        // directory closes, and a child another test is forking can hold the
+        // one the removal used until it execs. Until then the deletions inside
+        // it are ordinary wakes.
+        let lost = std::time::Instant::now();
+        while wake.wait(Some(0.01)) {
+            assert!(lost.elapsed() < std::time::Duration::from_secs(5));
+        }
         assert!(wake.fd.is_none());
         assert!(!wake.wait(Some(0.01)));
     }

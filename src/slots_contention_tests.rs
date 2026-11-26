@@ -194,8 +194,20 @@ fn real_acquire_without_reflinks_is_isolated_and_reuses_warm_state() {
 
     // A busy slot with busy shared Cargo allocates a different isolated
     // target. With shared idle, acquisition defers to the warm shared tree.
-    let _shared_busy = try_lock(&shared.join(".cargo-build-lock")).unwrap();
-    let _lease = try_lock(&root.0.join("target/justrust-slots/0.lock")).unwrap();
+    // The fixture child that just exited took both locks, and a process it
+    // or another test forked can share those open files until it execs.
+    let lock_released = |path: &Path| {
+        let waited = std::time::Instant::now();
+        loop {
+            match try_lock(path) {
+                Some(lock) => return lock,
+                None => assert!(waited.elapsed() < std::time::Duration::from_secs(5)),
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
+    let _shared_busy = lock_released(&shared.join(".cargo-build-lock"));
+    let _lease = lock_released(&root.0.join("target/justrust-slots/0.lock"));
     let parallel = run_acquisition_mode(&root.0, true, 2, true);
     assert_eq!(parallel["info"]["slot"], 1);
     assert_eq!(parallel["info"]["how"], "new");

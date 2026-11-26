@@ -1053,6 +1053,11 @@ mod tests {
 
         let upstream_hits = Arc::new(AtomicU64::new(0));
         let hits = Arc::clone(&upstream_hits);
+        // Upstream answers only once the test opens this gate, so "served
+        // without waiting for upstream" is a fact here, not a time limit a
+        // loaded machine can miss.
+        let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let open = Arc::clone(&gate);
         let upstream_listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let upstream_addr = upstream_listener.local_addr().unwrap();
         let key = "11223344556677889900aabbccddeeff";
@@ -1070,8 +1075,10 @@ mod tests {
                         break;
                     }
                 }
-                // Delay upstream so a blocking fetch would fail the latency assertion.
-                std::thread::sleep(Duration::from_millis(120));
+                // A fetch that blocks on upstream cannot return before this.
+                while !open.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
                 hits.fetch_add(1, Ordering::Relaxed);
                 let _ = write!(
                     stream,
@@ -1101,20 +1108,17 @@ mod tests {
 
         let base = start(format!("http://{upstream_addr}"), tmp.clone()).unwrap();
         let dst1 = tmp.join("out1");
-        let t0 = Instant::now();
         assert!(matches!(
             depcache_prebuilt::get(&base, &format!("m/{key}.jsonl"), &dst1, 5, 1024),
             depcache_prebuilt::Got::Ok
         ));
-        let elapsed = t0.elapsed();
-        assert!(
-            elapsed < Duration::from_millis(80),
-            "expected immediate stale serve, took {elapsed:?}"
-        );
+        // Upstream has not answered: the stale copy was served without it.
+        assert_eq!(upstream_hits.load(Ordering::Relaxed), 0);
         assert_eq!(std::fs::read(&dst1).unwrap(), b"{\"out\":\"stale\"}\n");
+        gate.store(true, Ordering::Relaxed);
 
         // Wait for the background refresh to atomically replace the cached manifest.
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             if std::fs::read(&manifest_path).ok().as_deref() == Some(fresh_body.as_slice()) {
                 break;

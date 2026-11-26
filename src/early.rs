@@ -230,7 +230,17 @@ fn daemon_alive(dir: &Path) -> bool {
         .write(true)
         .open(dir.join("lock"))
     {
-        Ok(f) => f.try_lock().is_err(),
+        Ok(f) => {
+            let held = f.try_lock().is_err();
+            if !held {
+                // Unlock explicitly instead of on close: a child another
+                // thread is forking shares this open file until it execs and
+                // would keep the probe's lock, so the next probe (or the
+                // daemon being started) would find the lock taken.
+                let _ = f.unlock();
+            }
+            held
+        }
         Err(_) => false,
     }
 }
@@ -1858,10 +1868,16 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         assert!(!daemon_alive(&d));
         let f = std::fs::File::create(d.join("lock")).unwrap();
+        // The probe releases its own lock at once, even while another test
+        // thread is forking a child that shares the probe's open file.
         assert!(!daemon_alive(&d));
         f.try_lock().unwrap();
         assert!(daemon_alive(&d));
         drop(f);
+        // A child another test is forking can hold the lock until it execs.
+        #[cfg(unix)]
+        assert!(crate::test_fork::eventually(|| !daemon_alive(&d)));
+        #[cfg(not(unix))]
         assert!(!daemon_alive(&d));
         std::fs::remove_dir_all(&d).unwrap();
     }

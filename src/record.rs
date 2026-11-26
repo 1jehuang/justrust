@@ -2287,7 +2287,12 @@ mod tests {
         let target = OsString::from("wasm32-unknown-unknown");
         assert!(!super::target_has_core(&rustc, &target));
         std::fs::write(lib.join("libcore-abc.rmeta"), b"").unwrap();
-        assert!(super::target_has_core(&rustc, &target));
+        // The probe reports a script it cannot run as "no". The script was
+        // just written, and a child another test is forking can hold it open
+        // for writing until it execs, so wait that window out.
+        assert!(crate::test_fork::eventually(|| super::target_has_core(
+            &rustc, &target
+        )));
         std::fs::write(
             &rustc,
             format!(
@@ -2296,10 +2301,10 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(super::target_has_core(
+        assert!(crate::test_fork::eventually(|| super::target_has_core(
             &rustc,
             &OsString::from(crate::remote_artifacts::GLIBC_217_TARGET)
-        ));
+        )));
         assert!(!super::target_has_core(
             &rustc,
             &OsString::from("x86_64-unknown-linux-gnu.2.18")

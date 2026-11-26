@@ -628,14 +628,19 @@ mod tests {
         std::fs::write(dir.join("status.json"), b"cached").unwrap();
         assert_eq!(files.drain(), 0);
         std::fs::write(dir.join("daemon-status"), b"1\n").unwrap();
-        assert_eq!(files.drain() & LOCAL, LOCAL);
+        // The close-after-write event is sent when the last copy of the
+        // descriptor closes, and a child another test is forking can hold
+        // one until it execs.
+        assert!(crate::test_fork::eventually(
+            || files.drain() & LOCAL == LOCAL
+        ));
         let listener = UnixListener::bind(dir.join("daemon.sock")).unwrap();
         assert_eq!(files.drain() & LOCAL, LOCAL);
         drop(listener);
         std::fs::remove_file(dir.join("daemon.sock")).unwrap();
         assert_eq!(files.drain() & LOCAL, LOCAL);
         std::fs::write(dir.join("jcode-subscription.env"), b"changed").unwrap();
-        assert_eq!(files.drain() & AUTH, AUTH);
+        assert!(crate::test_fork::eventually(|| files.drain() & AUTH == AUTH));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

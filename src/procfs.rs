@@ -1137,13 +1137,17 @@ mod tests {
         if std::fs::hard_link(&exe, &copy).is_err() {
             std::fs::copy(exe, &copy).unwrap();
         }
-        let result = std::process::Command::new(&copy)
-            .args([
-                "--exact",
-                "procfs::tests::child_hashes_running_image_after_unlink",
-            ])
-            .env(KEY, &dir)
-            .status();
+        // A copy was just written: a child another test is forking can hold
+        // it open for writing until it execs.
+        let result = crate::test_fork::exec_fresh(|| {
+            std::process::Command::new(&copy)
+                .args([
+                    "--exact",
+                    "procfs::tests::child_hashes_running_image_after_unlink",
+                ])
+                .env(KEY, &dir)
+                .status()
+        });
         let replaced = std::fs::metadata(&copy).unwrap().len() < 100;
         std::fs::remove_dir_all(dir).unwrap();
         assert!(result.unwrap().success() && replaced);

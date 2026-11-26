@@ -810,6 +810,12 @@ mod tests {
             .collect();
         assert!(finisher_admission_with(&root, 4, None).is_none());
         drop(held);
+        // A child another test is forking can hold the locks until it execs.
+        #[cfg(unix)]
+        assert!(crate::test_fork::eventually(|| {
+            finisher_admission_with(&root, 4, None).is_some()
+        }));
+        #[cfg(not(unix))]
         assert!(finisher_admission_with(&root, 4, None).is_some());
         std::fs::remove_dir_all(root).unwrap();
     }

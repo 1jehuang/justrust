@@ -946,6 +946,22 @@ mod tests {
         assert!(f());
     }
 
+    /// `dirty_since` fails closed when the reader thread has not caught up
+    /// within a few milliseconds, which a loaded machine does not promise.
+    /// A root that must fail closed for good stays `None` however long this
+    /// waits.
+    #[cfg(target_os = "linux")]
+    fn dirty_when_synced(w: &Watcher, root: &Path, event_gen: u64) -> Option<(u64, Vec<PathBuf>)> {
+        let t = std::time::Instant::now();
+        loop {
+            let got = w.dirty_since(root, event_gen);
+            if got.is_some() || t.elapsed() >= Duration::from_secs(2) {
+                return got;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn dirty_since_isolates_roots_and_tracks_exact_file_edits() {
@@ -978,8 +994,7 @@ mod tests {
         std::fs::remove_dir_all(root_b.join("sub")).unwrap();
         wait(|| !w.is_watched(&root_b.join("sub")));
 
-        let (gen1, dirty_a) = w
-            .dirty_since(&root_a, gen0)
+        let (gen1, dirty_a) = dirty_when_synced(&w, &root_a, gen0)
             .expect("root_a must remain clean despite root_b churn");
         assert!(dirty_a.is_empty());
         assert!(gen1 > gen0);
@@ -989,8 +1004,7 @@ mod tests {
         // Single-file edit inside root_a reports only that exact path.
         std::fs::write(root_a.join("src/lib.rs"), "v2").unwrap();
         recv_until(&rx, &root_a.join("src"));
-        let (gen2, dirty_a2) = w
-            .dirty_since(&root_a, gen1)
+        let (gen2, dirty_a2) = dirty_when_synced(&w, &root_a, gen1)
             .expect("single file edit under root_a should be incremental");
         assert_eq!(dirty_a2, vec![root_a.join("src/lib.rs")]);
         assert!(gen2 > gen1);
