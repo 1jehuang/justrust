@@ -1,6 +1,6 @@
 //! See [`CompilationFiles`].
 
-use crate::util::data_structures::HashMap;
+use crate::util::data_structures::{HashMap, HashSet};
 use std::cell::OnceCell;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -169,8 +169,9 @@ impl<'a, 'gctx: 'a> CompilationFiles<'a, 'gctx> {
         target: HashMap<CompileTarget, Layout>,
     ) -> CompilationFiles<'a, 'gctx> {
         let mut metas = HashMap::default();
+        let stable_ids = stable_id_units(build_runner);
         for unit in &build_runner.bcx.roots {
-            metadata_of(unit, build_runner, &mut metas);
+            metadata_of(unit, build_runner, &mut metas, &stable_ids);
         }
         let outputs = metas
             .keys()
@@ -745,15 +746,77 @@ fn metadata_of<'a>(
     unit: &Unit,
     build_runner: &BuildRunner<'_, '_>,
     metas: &'a mut HashMap<Unit, Metadata>,
+    stable_ids: &HashSet<Unit>,
 ) -> &'a Metadata {
     if !metas.contains_key(unit) {
-        let meta = compute_metadata(unit, build_runner, metas);
+        let meta = compute_metadata(unit, build_runner, metas, stable_ids);
         metas.insert(unit.clone(), meta);
         for dep in build_runner.unit_deps(unit) {
-            metadata_of(&dep.unit, build_runner, metas);
+            metadata_of(&dep.unit, build_runner, metas, stable_ids);
         }
     }
     &metas[unit]
+}
+
+/// justrust: the units whose crate id (`-C metadata`) does not depend on how
+/// their dependencies were resolved.
+///
+/// Stock Cargo mixes every dependency's `-C metadata` into a unit's own. For
+/// an incrementally compiled local crate that throws away its whole session
+/// state whenever anything below it gets another id: `test -p a` after
+/// `test -p b` unifies some dependency's features differently, a lockfile
+/// update bumps a version, and every local crate above it starts cold, though
+/// little of it depends on the change. jr-rustc tracks dependencies itself and
+/// recomputes only what read the changed crate, provided the local crate keeps
+/// its id. The unit hash (`unit_id`: file names, fingerprints, the session
+/// lineage passed to jr-rustc) still covers the dependencies.
+///
+/// Two units of one build may differ in nothing but their dependencies (a
+/// crate used by a build script and by the program, resolved separately).
+/// They can meet in one link or one compiler session, where a crate id must
+/// be unique, so those keep the dependency-inclusive id.
+///
+/// Only with a compiler that advertises the lineage protocol
+/// (`Rustc::jr_incr_lineage`): any other one would share a single session
+/// between the lineages and may not expect a crate it recorded to be gone.
+///
+/// `JUSTRUST_STABLE_LOCAL_IDS=0` restores stock ids.
+fn stable_id_units(build_runner: &BuildRunner<'_, '_>) -> HashSet<Unit> {
+    let bcx = &build_runner.bcx;
+    if !bcx.rustc().jr_incr_lineage()
+        || bcx
+            .gctx
+            .get_env("JUSTRUST_STABLE_LOCAL_IDS")
+            .is_ok_and(|v| v == "0")
+    {
+        return HashSet::default();
+    }
+    let mut reachable = HashSet::default();
+    let mut stack: Vec<Unit> = bcx.roots.clone();
+    while let Some(unit) = stack.pop() {
+        if reachable.insert(unit.clone()) {
+            stack.extend(build_runner.unit_deps(&unit).iter().map(|d| d.unit.clone()));
+        }
+    }
+    let mut by_identity: HashMap<u64, Vec<Unit>> = HashMap::default();
+    for unit in reachable {
+        let candidate = unit.profile.incremental
+            && !unit.is_std
+            && unit.pkg.package_id().source_id().is_path()
+            && !unit.mode.is_run_custom_build()
+            && !unit.mode.is_doc()
+            && !unit.mode.is_doc_test()
+            && !unit.mode.is_doc_scrape();
+        if candidate {
+            let identity = Hasher::finish(&shared_metadata_hasher(&unit, build_runner));
+            by_identity.entry(identity).or_default().push(unit);
+        }
+    }
+    by_identity
+        .into_values()
+        .filter(|units| units.len() == 1)
+        .flatten()
+        .collect()
 }
 
 /// Computes the metadata hash for the given [`Unit`].
@@ -761,16 +824,73 @@ fn compute_metadata(
     unit: &Unit,
     build_runner: &BuildRunner<'_, '_>,
     metas: &mut HashMap<Unit, Metadata>,
+    stable_ids: &HashSet<Unit>,
 ) -> Metadata {
     let bcx = &build_runner.bcx;
     let deps_metadata = build_runner
         .unit_deps(unit)
         .iter()
-        .map(|dep| *metadata_of(&dep.unit, build_runner, metas))
+        .map(|dep| *metadata_of(&dep.unit, build_runner, metas, stable_ids))
         .collect::<Vec<_>>();
     let c_extra_filename = use_extra_filename(bcx, unit);
     let pkg_dir = use_pkg_dir(bcx, unit);
 
+    let shared_hasher = shared_metadata_hasher(unit, build_runner);
+
+    let mut c_metadata_hasher = shared_hasher.clone();
+    if stable_ids.contains(unit) {
+        // justrust: see `stable_id_units`. Never the id stock hashing gives a
+        // unit without dependencies.
+        "justrust-stable-local-id".hash(&mut c_metadata_hasher);
+    } else {
+        // Mix in the target-metadata of all the dependencies of this target.
+        let mut dep_c_metadata_hashes = deps_metadata
+            .iter()
+            .map(|m| m.c_metadata)
+            .collect::<Vec<_>>();
+        dep_c_metadata_hashes.sort();
+        dep_c_metadata_hashes.hash(&mut c_metadata_hasher);
+    }
+
+    let mut unit_id_hasher = shared_hasher.clone();
+    // Mix in the target-metadata of all the dependencies of this target.
+    let mut dep_unit_id_hashes = deps_metadata.iter().map(|m| m.unit_id).collect::<Vec<_>>();
+    dep_unit_id_hashes.sort();
+    dep_unit_id_hashes.hash(&mut unit_id_hasher);
+    // Avoid trashing the caches on RUSTFLAGS changing via `unit_id`
+    //
+    // Limited to `unit_id` to help with reproducible build / PGO issues.
+    let default = Vec::new();
+    let extra_args = build_runner.bcx.extra_args_for(unit).unwrap_or(&default);
+    if !has_remap_path_prefix(&extra_args) {
+        extra_args.hash(&mut unit_id_hasher);
+    }
+    if unit.mode.is_doc() || unit.mode.is_doc_scrape() {
+        if !has_remap_path_prefix(&unit.rustdocflags) {
+            unit.rustdocflags.hash(&mut unit_id_hasher);
+        }
+    } else {
+        if !has_remap_path_prefix(&unit.rustflags) {
+            let filtered = filter_inert_rustflags_for_unit_hash(unit);
+            filtered.hash(&mut unit_id_hasher);
+        }
+    }
+
+    let c_metadata = UnitHash(Hasher::finish(&c_metadata_hasher));
+    let unit_id = UnitHash(Hasher::finish(&unit_id_hasher));
+
+    Metadata {
+        unit_id,
+        c_metadata,
+        c_extra_filename,
+        pkg_dir,
+    }
+}
+
+/// The part of a unit's metadata that does not come from its dependencies or
+/// its flags: what the unit itself is.
+fn shared_metadata_hasher(unit: &Unit, build_runner: &BuildRunner<'_, '_>) -> StableHasher {
+    let bcx = &build_runner.bcx;
     let mut shared_hasher = StableHasher::new();
 
     METADATA_VERSION.hash(&mut shared_hasher);
@@ -873,48 +993,7 @@ fn compute_metadata(
         target_configs_are_different.hash(&mut shared_hasher);
     }
 
-    let mut c_metadata_hasher = shared_hasher.clone();
-    // Mix in the target-metadata of all the dependencies of this target.
-    let mut dep_c_metadata_hashes = deps_metadata
-        .iter()
-        .map(|m| m.c_metadata)
-        .collect::<Vec<_>>();
-    dep_c_metadata_hashes.sort();
-    dep_c_metadata_hashes.hash(&mut c_metadata_hasher);
-
-    let mut unit_id_hasher = shared_hasher.clone();
-    // Mix in the target-metadata of all the dependencies of this target.
-    let mut dep_unit_id_hashes = deps_metadata.iter().map(|m| m.unit_id).collect::<Vec<_>>();
-    dep_unit_id_hashes.sort();
-    dep_unit_id_hashes.hash(&mut unit_id_hasher);
-    // Avoid trashing the caches on RUSTFLAGS changing via `unit_id`
-    //
-    // Limited to `unit_id` to help with reproducible build / PGO issues.
-    let default = Vec::new();
-    let extra_args = build_runner.bcx.extra_args_for(unit).unwrap_or(&default);
-    if !has_remap_path_prefix(&extra_args) {
-        extra_args.hash(&mut unit_id_hasher);
-    }
-    if unit.mode.is_doc() || unit.mode.is_doc_scrape() {
-        if !has_remap_path_prefix(&unit.rustdocflags) {
-            unit.rustdocflags.hash(&mut unit_id_hasher);
-        }
-    } else {
-        if !has_remap_path_prefix(&unit.rustflags) {
-            let filtered = filter_inert_rustflags_for_unit_hash(unit);
-            filtered.hash(&mut unit_id_hasher);
-        }
-    }
-
-    let c_metadata = UnitHash(Hasher::finish(&c_metadata_hasher));
-    let unit_id = UnitHash(Hasher::finish(&unit_id_hasher));
-
-    Metadata {
-        unit_id,
-        c_metadata,
-        c_extra_filename,
-        pkg_dir,
-    }
+    shared_hasher
 }
 
 /// justrust: filter out rustflags that are empirically bit-for-bit inert for

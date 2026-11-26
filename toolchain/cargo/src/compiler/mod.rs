@@ -2062,6 +2062,13 @@ fn add_codegen_incremental(
     let mut arg = OsString::from("incremental=");
     arg.push(dir.as_os_str());
     cmd.arg("-C").arg(arg);
+    // justrust: a local crate keeps one crate id however its dependencies
+    // resolved (`stable_id_units`). The unit hash tells jr-rustc which of that
+    // id's session lineages this compilation continues. Stock rustc ignores it.
+    cmd.env(
+        "JUSTRUST_INCR_LINEAGE",
+        build_runner.files().metadata(unit).unit_id().to_string(),
+    );
 }
 
 fn envify(s: &str) -> String {

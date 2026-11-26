@@ -49,6 +49,15 @@ pub struct Rustc {
 }
 
 impl Rustc {
+    /// Whether the compiler keeps one incremental session lineage per
+    /// `JUSTRUST_INCR_LINEAGE` and tolerates a dependency set that changed
+    /// under an unchanged crate id. Asked of the wrapped command, so a wrapper
+    /// that substitutes another compiler answers for itself.
+    pub(crate) fn jr_incr_lineage(&self) -> bool {
+        self.verbose_version
+            .lines()
+            .any(|line| line == "jr-incr-lineage: v1")
+    }
     /// Exact native capability only. Never infer support from a version or path.
     pub(crate) fn jr_query_binding_schema(&self) -> Option<u32> {
         if !cfg!(target_os = "linux")

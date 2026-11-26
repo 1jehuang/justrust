@@ -1102,6 +1102,13 @@ pub fn version_at_macro_invocation(
         if binary == "rustc" {
             safe_println!("jr-query-admission-binding: reserved-fd-v2,query-schema=4");
         }
+        // One incremental session lineage per `JUSTRUST_INCR_LINEAGE`, seeded
+        // from a sibling lineage, and a recorded crate may be absent from the
+        // session (`rustc_incremental::persist::fs`). jr-cargo keeps a local
+        // crate's id independent of its dependencies only when it sees this.
+        if binary == "rustc" {
+            safe_println!("jr-incr-lineage: v1");
+        }
         safe_println!("binary: {binary}");
         safe_println!("commit-hash: {commit_hash}");
         safe_println!("commit-date: {commit_date}");

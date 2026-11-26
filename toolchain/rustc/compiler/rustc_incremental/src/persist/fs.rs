@@ -262,7 +262,15 @@ pub(crate) fn prepare_session_directory(
 
     // Find a suitable source directory to copy from. Ignore those that we
     // have already tried before.
-    let old_source_directory = find_source_directory(sess, &crate_dir);
+    let old_source_directory = find_source_directory(sess, &crate_dir).or_else(|| {
+        // justrust: a lineage with no state of its own starts from the newest
+        // state of the same crate id.
+        let seed = jr_sibling_source(&crate_dir, &jr_crate_dir_base(crate_name, stable_crate_id));
+        if seed.is_some() {
+            rustc_data_structures::profiling::jr_session_seeded();
+        }
+        seed
+    });
 
     let old_session_directory = if let Some(old_source_directory) = old_source_directory {
         debug!("attempting to use: {}", old_source_directory.display());
@@ -369,6 +377,10 @@ pub fn finalize_session_directory(
 pub(crate) fn invalidate_old_session_dir(sess: &Session, incr_comp_session: &mut IncrCompSession) {
     incr_comp_session.paths.old_session_directory = None;
     if let Some(old_incr_comp_session_dir) = incr_comp_session.old_session_directory.take() {
+        // justrust: a seed belongs to another lineage, which can still load it.
+        if old_incr_comp_session_dir.parent() != incr_comp_session.new_session_directory.parent() {
+            return;
+        }
         let res = try {
             let sess_dir_iterator = old_incr_comp_session_dir.read_dir()?;
             for entry in sess_dir_iterator {
@@ -589,9 +601,66 @@ fn string_to_timestamp(s: &str) -> Result<SystemTime, &'static str> {
 fn crate_path(sess: &Session, crate_name: Symbol, stable_crate_id: StableCrateId) -> PathBuf {
     let incr_dir = sess.opts.incremental.as_ref().unwrap().clone();
 
-    let crate_name =
-        format!("{crate_name}-{}", stable_crate_id.as_u64().to_base_fixed_len(CASE_INSENSITIVE));
+    let mut crate_name = jr_crate_dir_base(crate_name, stable_crate_id);
+    if let Some(lineage) = jr_lineage() {
+        crate_name.push('-');
+        crate_name.push_str(&lineage);
+    }
     incr_dir.join(crate_name)
+}
+
+fn jr_crate_dir_base(crate_name: Symbol, stable_crate_id: StableCrateId) -> String {
+    format!("{crate_name}-{}", stable_crate_id.as_u64().to_base_fixed_len(CASE_INSENSITIVE))
+}
+
+/// justrust: the session lineage of this compilation within its crate id.
+///
+/// jr-cargo gives a local crate one id (`-C metadata`) however its
+/// dependencies were resolved, and names the resolution (its unit hash) in
+/// `JUSTRUST_INCR_LINEAGE`. Each lineage keeps its own session directory,
+/// `{crate}-{id}-{lineage}`, so that alternating between two resolutions
+/// (`test -p a`, `test -p b`) stays warm in both. A lineage with no state yet
+/// starts from the newest state of the same id ([`jr_sibling_source`]): the
+/// definitions hash the same, so everything that does not depend on what
+/// changed is reused. Without the variable there is one unnamed lineage, as
+/// before.
+fn jr_lineage() -> Option<String> {
+    let lineage = std::env::var("JUSTRUST_INCR_LINEAGE").ok()?;
+    (!lineage.is_empty()
+        && lineage.len() <= 32
+        && lineage.bytes().all(|b| b.is_ascii_alphanumeric()))
+    .then_some(lineage)
+}
+
+/// justrust: the newest finalized session of the same crate id (`base`,
+/// `{crate}-{id}`) in another lineage, locked for reading.
+fn jr_sibling_source(crate_dir: &Path, base: &str) -> Option<flock::LockedDir> {
+    let own = crate_dir.file_name()?;
+    let sessions = crate_dir
+        .parent()?
+        .read_dir()
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name() != own && jr_same_crate_id(base, &e.file_name()))
+        .filter_map(|e| e.path().read_dir().ok())
+        .flatten()
+        .filter_map(|e| e.ok().map(|e| e.path()));
+    let session_dir = find_source_directory_in_iter(sessions)?;
+    // A lineage that is being garbage collected is skipped, not waited for.
+    flock::LockedDir::try_lock(session_dir.clone(), &lock_file_path(&session_dir), false, false)
+        .ok()
+        .filter(|_| session_dir.is_dir())
+}
+
+/// Whether the crate directory `name` holds sessions of the crate id `base`
+/// (`{crate}-{id}`), in any lineage.
+fn jr_same_crate_id(base: &str, name: &std::ffi::OsStr) -> bool {
+    name.to_str().and_then(|n| n.strip_prefix(base)).is_some_and(|rest| {
+        rest.is_empty()
+            || rest
+                .strip_prefix('-')
+                .is_some_and(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric()))
+    })
 }
 
 /// justrust: finalized session directories in the incremental dir that
@@ -603,16 +672,22 @@ pub(crate) fn jr_sibling_states(
     stable_crate_id: StableCrateId,
 ) -> u64 {
     let own = crate_path(sess, crate_name, stable_crate_id);
-    let (Some(incr_dir), Some(own_name)) = (own.parent(), own.file_name()) else { return 0 };
+    let Some(incr_dir) = own.parent() else { return 0 };
+    let base = jr_crate_dir_base(crate_name, stable_crate_id);
     let prefix = format!("{crate_name}-");
     let Ok(entries) = incr_dir.read_dir() else { return 0 };
     entries
         .filter_map(|e| e.ok())
         .filter(|e| {
             let name = e.file_name();
-            name != own_name
+            // `{crate}-{id}` or `{crate}-{id}-{lineage}`, not `{crate}-{more}-…`
+            // of a crate whose name merely starts the same.
+            !jr_same_crate_id(&base, &name)
                 && name.to_str().is_some_and(|n| {
-                    n.strip_prefix(&prefix).is_some_and(|rest| !rest.contains('-'))
+                    n.strip_prefix(&prefix).is_some_and(|rest| {
+                        let id = rest.split('-').next().unwrap_or(rest);
+                        id.len() == base.len() - prefix.len() && rest.matches('-').count() <= 1
+                    })
                 })
         })
         .filter(|e| {

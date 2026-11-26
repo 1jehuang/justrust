@@ -1147,6 +1147,13 @@ pub fn jr_session_source(outcome: &'static str, siblings: u64) {
     }
 }
 
+/// This session had no state of its own lineage and started from the newest
+/// state of the same crate id in another one: row `<session_seed>` `sibling`.
+/// The `<session>` row says whether that state loaded.
+pub fn jr_session_seeded() {
+    jr_reuse_count("<session_seed>", "sibling", Duration::ZERO);
+}
+
 /// The linker ran for `cpu` (children CPU while it ran).
 pub fn jr_link_cpu(cpu: Duration) {
     jr_reuse_count("<link>", "linker", cpu);

@@ -21,7 +21,7 @@ use rustc_serialize::Decoder;
 use rustc_session::StableCrateId;
 use rustc_span::def_id::ModId;
 use rustc_span::hygiene::ExpnId;
-use rustc_span::{Span, Symbol, bug, kw};
+use rustc_span::{Span, Symbol, kw};
 
 use super::{Decodable, DecodeIterator};
 use crate::creader::{CStore, LoadedMacro};
@@ -772,12 +772,12 @@ fn provide_cstore_hooks(providers: &mut Providers) {
         // If this is a DefPathHash from an upstream crate, let the CrateStore map
         // it to a DefId.
         let cstore = CStore::from_tcx(tcx);
-        let cnum = *tcx
-            .untracked()
-            .stable_crate_ids
-            .read()
-            .get(&stable_crate_id)
-            .unwrap_or_else(|| bug!("uninterned StableCrateId: {stable_crate_id:?}"));
+        // justrust: a previous session's crate may be gone from this one. jr-cargo
+        // keeps a local crate's id when only its dependencies' ids change, so a
+        // loaded dep graph can name a dependency under an id that is no longer
+        // linked. Such a definition no longer exists: the node cannot be forced
+        // and is treated as changed.
+        let cnum = *tcx.untracked().stable_crate_ids.read().get(&stable_crate_id)?;
         assert_ne!(cnum, LOCAL_CRATE);
         let def_index = cstore.get_crate_data(cnum).def_path_hash_to_def_index(hash)?;
         Some(DefId { krate: cnum, index: def_index })

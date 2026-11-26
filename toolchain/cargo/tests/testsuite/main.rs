@@ -124,6 +124,7 @@ mod install_upgrade;
 mod jobserver;
 mod jr_critical_path;
 mod jr_frontend;
+mod jr_stable_ids;
 mod lints;
 mod lints_table;
 mod list_availables;
