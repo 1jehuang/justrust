@@ -427,11 +427,12 @@ fn is_unit_out_dir(out_dir: &Path) -> bool {
 
 /// Report inherited key names that can distinguish a unit from producers with
 /// a different environment. Presence alone does not establish why it missed.
+/// Only dependency units report it, so the names follow their key.
 pub(crate) fn user_keyed_env(env: &[(String, String)]) -> Vec<String> {
     let mut v: Vec<String> = env
         .iter()
         .map(|(k, _)| k.as_str())
-        .filter(|k| keyed_env(k) && !cargo_sets(k))
+        .filter(|k| dep_keyed_env(k) && !cargo_sets(k))
         .map(str::to_owned)
         .collect();
     v.sort();
@@ -2366,6 +2367,9 @@ mod tests {
             // Neither cargo nor rustc read this; rustc bootstrap sets it only
             // for file! determinism, so keying it splits ordinary builds.
             ("CARGO_RUSTC_CURRENT_DIR".into(), "/private/cwd".into()),
+            // A project's `[env]` pointing at its own checkout: not in a
+            // dependency's key, so it cannot have split it.
+            ("CARGO_WORKSPACE_DIR".into(), "/private/cwd/".into()),
             e("CARGO_PROFILE_DEV_DEBUG"),
             e("RUSTC_ICE"),
             e("LIBRARY_PATH"),
