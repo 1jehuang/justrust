@@ -40,9 +40,10 @@ use crate::paths;
 use crate::sys::net::{UnixListener, UnixStream};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -551,43 +552,40 @@ fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finishe
         "e",
         format!("justrust: test process started: {stem} (pid {pid})").into_bytes(),
     )]);
-    let read = |r: Box<dyn Read + Send>, s: &'static str| {
-        let sink = inner.sink.clone();
-        let stem = stem.to_owned();
-        std::thread::spawn(move || {
-            let mut out = Vec::new();
-            let mut r = BufReader::new(r);
-            let mut buf = Vec::new();
-            loop {
-                buf.clear();
-                match r.read_until(b'\n', &mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
-                let line = buf.strip_suffix(b"\n").unwrap_or(&buf).to_vec();
-                let now = paths::now();
-                if long_running_warning(&line) {
-                    // These are diagnostics, not outcomes. Send them while the
-                    // child is alive, including during confirmation retries.
-                    // Do not replay them in the final authoritative block.
-                    let mut diagnostic = format!("justrust: {stem} (pid {pid}): ").into_bytes();
-                    diagnostic.extend_from_slice(&line);
-                    sink.emit_block(&[(now, "e", diagnostic)]);
-                } else {
-                    out.push((now, s, line));
-                }
-            }
-            out
-        })
-    };
-    let to = read(Box::new(child.stdout.take().unwrap()), "o");
-    let te = read(Box::new(child.stderr.take().unwrap()), "e");
+    let exited = Arc::new(AtomicBool::new(false));
+    let label = format!("{stem} (pid {pid})");
+    let to = read_output(
+        child.stdout.take().unwrap(),
+        "o",
+        &exited,
+        &inner.sink,
+        &label,
+    );
+    let te = read_output(
+        child.stderr.take().unwrap(),
+        "e",
+        &exited,
+        &inner.sink,
+        &label,
+    );
     let u = crate::sys::wait_usage(&mut child, job.as_ref());
     let reaped = paths::now();
+    exited.store(true, Ordering::Release);
     let (exit, cpu) = (u.code, u.user + u.sys);
-    let mut lines = to.join().unwrap_or_default();
-    lines.extend(te.join().unwrap_or_default());
+    let (mut lines, out_held) = to.join().unwrap_or_default();
+    let (err_lines, err_held) = te.join().unwrap_or_default();
+    lines.extend(err_lines);
     lines.sort_by(|a, b| a.0.total_cmp(&b.0));
+    if out_held || err_held {
+        lines.push((
+            paths::now(),
+            "e",
+            format!(
+                "justrust: {stem}: exited with a process it started still holding its output open; not waiting for that process"
+            )
+            .into_bytes(),
+        ));
+    }
     LIVE_PIDS.lock().unwrap().retain(|&p| p != pid);
     track_signal_pid(pid, false);
     {
@@ -609,6 +607,69 @@ fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finishe
         outcomes,
         hide_filtered: None,
     }
+}
+
+type OutputLines = Vec<(f64, &'static str, Vec<u8>)>;
+
+/// Read one output stream (`s`: "o" or "e") of a test process on a thread:
+/// its lines, and whether the stream was still open when reading stopped.
+///
+/// Reading stops at end-of-file, or once the process has exited (`exited`)
+/// and everything it wrote has been read. The second case is a process the
+/// tests started (a daemon, a `sleep`) that outlives the test binary with
+/// the pipe inherited: a test binary that aborted left a `sleep 30` behind
+/// and was reported 30 seconds late, twice with its confirmation run. Cargo
+/// does not wait for such a process either; the test binary writes straight
+/// to cargo's own output there.
+fn read_output<R: crate::sys::OutputPipe>(
+    mut r: R,
+    s: &'static str,
+    exited: &Arc<AtomicBool>,
+    sink: &Arc<dyn Sink>,
+    label: &str,
+) -> std::thread::JoinHandle<(OutputLines, bool)> {
+    let (exited, sink, label) = (exited.clone(), sink.clone(), label.to_owned());
+    std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let mut partial = Vec::new();
+        let mut chunk = [0u8; 8192];
+        let mut held = false;
+        loop {
+            if !r.more(&exited) {
+                held = true;
+                break;
+            }
+            let n = match r.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            };
+            let now = paths::now();
+            partial.extend_from_slice(&chunk[..n]);
+            while let Some(i) = partial.iter().position(|&b| b == b'\n') {
+                let rest = partial.split_off(i + 1);
+                let mut line = std::mem::replace(&mut partial, rest);
+                line.pop();
+                if long_running_warning(&line) {
+                    // These are diagnostics, not outcomes. Send them while the
+                    // child is alive, including during confirmation retries.
+                    // Do not replay them in the final authoritative block.
+                    let mut diagnostic = format!("justrust: {label}: ").into_bytes();
+                    diagnostic.extend_from_slice(&line);
+                    sink.emit_block(&[(now, "e", diagnostic)]);
+                } else {
+                    out.push((now, s, line));
+                }
+            }
+        }
+        // Output that ends without a newline, such as libtest's `test x ... `
+        // before the test that killed the process.
+        if !partial.is_empty() {
+            out.push((paths::now(), s, partial));
+        }
+        (out, held)
+    })
 }
 
 /// Only libtest's standalone timeout warning is safe to publish before
@@ -1540,6 +1601,86 @@ mod tests {
         assert_eq!(result.exit, 134);
         let calls = std::fs::read_to_string(calls).unwrap();
         assert!(!calls.contains("--exact"), "{calls}");
+        pool.finish();
+    }
+
+    /// A test binary that dies and leaves a child holding its stdout is
+    /// reported when it exits, with everything it printed, not when the
+    /// child lets go of the pipe.
+    #[cfg(unix)]
+    #[test]
+    fn an_orphan_holding_the_output_does_not_delay_the_report() {
+        let dir = TmpDir(std::env::temp_dir().join(format!("jr-orphan-{}", std::process::id())));
+        std::fs::create_dir_all(dir.path()).unwrap();
+        let bin = dir.path().join("orphan");
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\nsleep 20 &\necho 'test t0 ... ok'\nprintf 'test t1 ... '\necho 'fatal runtime error: aborting' >&2\nexit 134\n",
+        )
+        .unwrap();
+        crate::sys::set_mode(&bin, 0o755).unwrap();
+        let sink = Arc::new(VecSink(Mutex::new(Vec::new())));
+        let pool = Pool::start(dir.path(), dir.path(), Path::new("jr"), sink, true).unwrap();
+        let req = Request {
+            bin: bin.to_string_lossy().into_owned(),
+            args: Vec::new(),
+            cwd: dir.path().to_string_lossy().into_owned(),
+            env: Vec::new(),
+        };
+        let started = std::time::Instant::now();
+        let f = execute(&pool.inner, &req, &req.args, "orphan");
+        let took = started.elapsed();
+        assert!(took < Duration::from_secs(10), "{took:?}");
+        assert_eq!(f.exit, 134);
+        let text: Vec<String> = f
+            .lines
+            .iter()
+            .map(|(_, _, l)| String::from_utf8_lossy(l).into_owned())
+            .collect();
+        assert!(text.iter().any(|l| l == "test t0 ... ok"), "{text:?}");
+        assert!(text.iter().any(|l| l == "test t1 ... "), "{text:?}");
+        assert!(
+            text.iter().any(|l| l.contains("fatal runtime error")),
+            "{text:?}"
+        );
+        assert!(
+            text.last()
+                .unwrap()
+                .contains("still holding its output open"),
+            "{text:?}"
+        );
+        assert_eq!(f.outcomes.len(), 1);
+        pool.finish();
+    }
+
+    /// Output is complete and unannotated when nothing outlives the process,
+    /// including a last line without a newline.
+    #[cfg(unix)]
+    #[test]
+    fn output_of_a_plain_process_is_captured_whole() {
+        let dir = TmpDir(std::env::temp_dir().join(format!("jr-plain-{}", std::process::id())));
+        std::fs::create_dir_all(dir.path()).unwrap();
+        let bin = dir.path().join("plain");
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\ni=0\nwhile [ $i -lt 3000 ]; do echo \"test t$i ... ok\"; i=$((i+1)); done\nprintf 'tail without newline'\n",
+        )
+        .unwrap();
+        crate::sys::set_mode(&bin, 0o755).unwrap();
+        let sink = Arc::new(VecSink(Mutex::new(Vec::new())));
+        let pool = Pool::start(dir.path(), dir.path(), Path::new("jr"), sink, true).unwrap();
+        let req = Request {
+            bin: bin.to_string_lossy().into_owned(),
+            args: Vec::new(),
+            cwd: dir.path().to_string_lossy().into_owned(),
+            env: Vec::new(),
+        };
+        let f = execute(&pool.inner, &req, &req.args, "plain");
+        assert_eq!(f.exit, 0);
+        assert_eq!(f.outcomes.len(), 3000);
+        assert_eq!(f.lines.len(), 3001);
+        assert_eq!(f.lines.last().unwrap().2, b"tail without newline");
+        assert_eq!(f.lines[2999].2, b"test t2999 ... ok");
         pool.finish();
     }
 

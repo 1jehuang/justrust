@@ -532,6 +532,74 @@ pub struct Usage {
     pub max_rss_mb: f64,
 }
 
+/// The output pipe of a child process, read to the end of what the child
+/// itself wrote.
+pub trait OutputPipe: io::Read + Send + 'static {
+    /// Whether to keep reading: `false` once `exited` was set (the child was
+    /// reaped) and the pipe is empty and still open. Everything the child
+    /// wrote is in the pipe before it is reaped, so what remains open then is
+    /// a process the child started that inherited the pipe, and may hold it
+    /// for as long as it lives. Blocks until there is something to read, the
+    /// pipe closes, or that is known.
+    fn more(&self, exited: &std::sync::atomic::AtomicBool) -> bool;
+}
+
+#[cfg(unix)]
+fn pipe_more(fd: std::os::fd::RawFd, exited: &std::sync::atomic::AtomicBool) -> bool {
+    loop {
+        // Read the flag first: an empty pipe only means "all read" when the
+        // child had already exited before the pipe was looked at.
+        let done = exited.load(std::sync::atomic::Ordering::Acquire);
+        let mut p = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd.
+        let r = unsafe { libc::poll(&mut p, 1, if done { 0 } else { 50 }) };
+        if r > 0 {
+            // Data, or every writer closed: `read` tells which.
+            return true;
+        }
+        if r < 0 && io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+            return true;
+        }
+        if r == 0 && done {
+            return false;
+        }
+    }
+}
+
+#[cfg(unix)]
+impl OutputPipe for std::process::ChildStdout {
+    fn more(&self, exited: &std::sync::atomic::AtomicBool) -> bool {
+        pipe_more(std::os::fd::AsRawFd::as_raw_fd(self), exited)
+    }
+}
+
+#[cfg(unix)]
+impl OutputPipe for std::process::ChildStderr {
+    fn more(&self, exited: &std::sync::atomic::AtomicBool) -> bool {
+        pipe_more(std::os::fd::AsRawFd::as_raw_fd(self), exited)
+    }
+}
+
+// On Windows the child's tree is in a job object and the pipe is read to its
+// end, as before.
+#[cfg(windows)]
+impl OutputPipe for std::process::ChildStdout {
+    fn more(&self, _exited: &std::sync::atomic::AtomicBool) -> bool {
+        true
+    }
+}
+
+#[cfg(windows)]
+impl OutputPipe for std::process::ChildStderr {
+    fn more(&self, _exited: &std::sync::atomic::AtomicBool) -> bool {
+        true
+    }
+}
+
 /// No job objects on Unix: `wait4` already counts the waited-for
 /// descendants (linker, `cc`) of the child.
 #[cfg(unix)]
