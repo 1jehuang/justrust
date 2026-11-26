@@ -156,6 +156,10 @@ pub fn compute(
 
     let release = is_release(args, units.opt_level.as_deref());
     let clippy = is_clippy(subcommand, args);
+    // An optimized crate built without incremental compilation is redone
+    // whole whatever the edit was: that is the estimate's work, while the
+    // floor above stays what an ideal compiler would need.
+    let est_release_lines = dirty_lines.max(units.full_rebuild_lines as usize);
     let local_scale = units.local.min(16) as f64 + (units.local.saturating_sub(16) as f64) * 0.25;
     let dep_miss_secs = if units.depcache_misses > 0 {
         let per_dep = if !needs_codegen(subcommand, args) {
@@ -188,12 +192,12 @@ pub fn compute(
     } else if release {
         if cold {
             1.20 + local_scale * 0.30
-                + (dirty_lines as f64 / 5_000.0)
+                + (est_release_lines as f64 / 5_000.0)
                 + EST_LINK_COLD_SECS
                 + dep_miss_secs
         } else {
             EST_RELEASE_BASE_SECS
-                + (dirty_lines as f64 / 5_000.0)
+                + (est_release_lines as f64 / 5_000.0)
                 + EST_LINK_COLD_SECS
                 + dep_miss_secs
         }
@@ -375,5 +379,51 @@ mod tests {
         // accounts for the 100 compiled depcache misses.
         assert!(rel_f.total_secs < 1.0);
         assert!(rel_f.optimistic_est_secs > 25.0);
+    }
+
+    /// CI release run 20261126-060749442-2620: a version bump rebuilt the
+    /// 115k-line `justrust` crate optimized and non-incremental in 26 s, and
+    /// the estimate said 1.28 s as if 50 edited lines were the work.
+    #[test]
+    fn a_non_incremental_optimized_crate_is_estimated_whole() {
+        let args = ["build".to_string(), "--release".into()];
+        let units = |full_rebuild_lines| UnitStats {
+            compiled: 2,
+            local: 2,
+            fresh: 200,
+            opt_level: Some("3".into()),
+            full_rebuild_lines,
+            ..Default::default()
+        };
+        let est = |u: &UnitStats| {
+            compute(
+                "build",
+                &args,
+                &GitInfo::default(),
+                u,
+                &Phases::default(),
+                &TestStats::default(),
+            )
+        };
+        let edited = est(&units(0));
+        let whole = est(&units(115_000));
+        assert!((edited.optimistic_est_secs - 1.28).abs() < 1e-6);
+        assert!((whole.optimistic_est_secs - (1.27 + 23.0)).abs() < 1e-6);
+        // The floor is first principles: it does not grow with how rustc works.
+        assert_eq!(edited.total_secs, whole.total_secs);
+
+        // A debug build of the same crate is incremental: nothing changes.
+        let debug = compute(
+            "build",
+            &["build".into()],
+            &GitInfo::default(),
+            &UnitStats {
+                opt_level: Some("0".into()),
+                ..units(115_000)
+            },
+            &Phases::default(),
+            &TestStats::default(),
+        );
+        assert!(debug.optimistic_est_secs < 1.0);
     }
 }

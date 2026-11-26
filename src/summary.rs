@@ -229,6 +229,12 @@ pub struct UnitStats {
     /// Compile time the local hits would have cost.
     #[serde(default)]
     pub localcache_saved_secs: f64,
+    /// Source lines of the local crates that were compiled optimized and
+    /// without incremental compilation (cargo's release default). Nothing of
+    /// an earlier compile of such a crate can be reused, so the whole crate
+    /// is the work, not the edited lines. Each package counted once.
+    #[serde(default)]
+    pub full_rebuild_lines: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -256,6 +262,30 @@ pub struct UnitBreakdown {
 
 /// Local units slower than this get their source lines counted.
 pub const GIANT_UNIT_SECS: f64 = 3.0;
+
+/// A non-incremental optimized unit shorter than this was restored or is
+/// tiny: its source is not worth counting for `UnitStats::full_rebuild_lines`.
+const FULL_REBUILD_UNIT_SECS: f64 = 1.0;
+
+/// See `UnitStats::full_rebuild_lines`.
+fn full_rebuild_lines(units: &[Unit]) -> u64 {
+    let mut dirs: Vec<&str> = units
+        .iter()
+        .filter(|u| {
+            u.local
+                && !u.build_script
+                && !u.incremental
+                && u.wall >= FULL_REBUILD_UNIT_SECS
+                && matches!(u.opt_level.as_str(), "2" | "3" | "s" | "z")
+        })
+        .map(|u| u.manifest_dir.as_str())
+        .collect();
+    dirs.sort_unstable();
+    dirs.dedup();
+    dirs.iter()
+        .filter_map(|d| count_rust_lines(&Path::new(d).join("src")))
+        .sum()
+}
 
 /// Count lines in every `.rs` file under `dir`. Skips hidden directories and
 /// `target`. Bounded so a pathological tree cannot stall the report.
@@ -1091,6 +1121,7 @@ pub fn build(
             .filter(|u| u.depcache == "local")
             .filter_map(|u| u.depcache_saved_secs)
             .sum(),
+        full_rebuild_lines: full_rebuild_lines(units),
         depcache_miss_secs: units
             .iter()
             .filter(|u| u.depcache == "miss")
@@ -2761,6 +2792,43 @@ mod tests {
             5.0
         );
         assert!(sum_splits(std::iter::empty()).is_none());
+    }
+
+    #[test]
+    fn full_rebuild_lines_count_each_optimized_non_incremental_package_once() {
+        let dir = std::env::temp_dir().join(format!("jr-full-rebuild-{}", std::process::id()));
+        for (pkg, body) in [("a", "fn a() {}\nfn b() {}\n"), ("b", "fn c() {}\n")] {
+            std::fs::create_dir_all(dir.join(pkg).join("src")).unwrap();
+            std::fs::write(dir.join(pkg).join("src/lib.rs"), body).unwrap();
+        }
+        let unit = |pkg: &str, opt: &str, incremental: bool, wall: f64| Unit {
+            local: true,
+            manifest_dir: dir.join(pkg).to_string_lossy().into_owned(),
+            opt_level: opt.into(),
+            incremental,
+            wall,
+            ..Default::default()
+        };
+        // The lib and the bin of one release package: its source counts once.
+        let release = [unit("a", "3", false, 16.0), unit("a", "3", false, 9.0)];
+        assert_eq!(full_rebuild_lines(&release), 2);
+        // Incremental, unoptimized, restored (instant), dependency and build
+        // script units are not whole-crate work.
+        let others = [
+            unit("b", "3", true, 16.0),
+            unit("b", "0", false, 16.0),
+            unit("b", "3", false, 0.02),
+            Unit {
+                local: false,
+                ..unit("b", "3", false, 16.0)
+            },
+            Unit {
+                build_script: true,
+                ..unit("b", "3", false, 16.0)
+            },
+        ];
+        assert_eq!(full_rebuild_lines(&others), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
