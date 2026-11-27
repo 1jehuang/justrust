@@ -1909,17 +1909,22 @@ fn peer_cache_relays_shim_requests_to_the_daemon() {
     use std::os::unix::net::UnixStream;
     let mut a = Agent::start("peer-relay");
     let sock = a.dir.join("home/peer.sock");
-    for _ in 0..200 {
-        if sock.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
     let base = "e".repeat(32);
     let out = "f".repeat(32);
     // Before the key set arrives, queries go to the daemon. Answer the
     // prefetch with our one key.
-    let s = UnixStream::connect(&sock).expect("peer.sock");
+    //
+    // Wait for the socket to accept, not for its file to exist: the file
+    // appears at bind(), and a connect between that and listen() is refused
+    // (seen as "peer.sock: ConnectionRefused" with the whole suite running).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let s = loop {
+        match UnixStream::connect(&sock) {
+            Ok(s) => break s,
+            Err(e) if Instant::now() >= deadline => panic!("peer.sock: {e:?}"),
+            Err(_) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    };
     let mut sw = BufWriter::new(s.try_clone().unwrap());
     let mut sr = BufReader::new(s);
     write_frame(
