@@ -2,27 +2,122 @@
 //! one owner of a mirror at a time, but optional watcher batches must yield
 //! between roots to builds already waiting for that owner.
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{LockResult, Mutex, MutexGuard, TryLockResult};
+use std::sync::{Arc, Condvar, LockResult, Mutex, MutexGuard, TryLockResult};
 use std::time::{Duration, Instant};
 
-/// A failed connect this long is handed to the builds that waited behind it
-/// instead of being repeated by each of them. A quick failure is cheap to
-/// retry and may have been a blip.
+/// A failed connect this long is the answer for the builds that waited for
+/// it too, instead of being repeated by each of them. A quick failure is
+/// cheap to retry and may have been a blip.
 const SHARE_FAILURE_AFTER: Duration = Duration::from_secs(10);
 
-/// The connect the lock holder is making, and how the last one ended.
-#[derive(Default)]
-struct Connect {
-    since: Option<Instant>,
-    /// When the last failed attempt ended, how long it took, and why.
-    failed: Option<(Instant, Duration, String)>,
+/// One connect to the machine, made without the mirror lock. Whoever finds
+/// no link while one is being made waits for this instead of the lock.
+pub(super) struct Attempt {
+    began: Instant,
+    /// Whether this attempt may start a stopped machine.
+    start: bool,
+    /// `Ok` once the link is published, with how long the attempt took.
+    done: Mutex<Option<(Duration, Result<(), String>)>>,
+    ended: Condvar,
+}
+
+/// How a connect someone else made ended for a build that waited for it.
+#[derive(Debug, PartialEq)]
+pub(super) enum Followed {
+    /// A link was published: look for it under the lock.
+    Connected,
+    /// It failed after long enough that this build should not repeat it.
+    Failed(String),
+    /// It failed quickly, or could not do what this build may (start the
+    /// machine): make another attempt.
+    Retry,
+    /// Still not finished at the bound, after this many seconds.
+    Overdue(u64),
+}
+
+impl Attempt {
+    /// Wait for the attempt to end, at most until it is `bound` old.
+    pub(super) fn follow(&self, start: bool, bound: Option<Duration>) -> Followed {
+        self.follow_sharing(start, bound, SHARE_FAILURE_AFTER)
+    }
+
+    fn follow_sharing(&self, start: bool, bound: Option<Duration>, slow: Duration) -> Followed {
+        let Ok(mut done) = self.done.lock() else {
+            return Followed::Retry;
+        };
+        loop {
+            if let Some((took, outcome)) = done.as_ref() {
+                return match outcome {
+                    Ok(()) => Followed::Connected,
+                    Err(why) if *took >= slow && (self.start || !start) => {
+                        Followed::Failed(why.clone())
+                    }
+                    Err(_) => Followed::Retry,
+                };
+            }
+            let age = self.began.elapsed();
+            let left = match bound {
+                Some(bound) if age >= bound => return Followed::Overdue(age.as_secs()),
+                Some(bound) => bound - age,
+                None => Duration::from_secs(3600),
+            };
+            done = match self.ended.wait_timeout(done, left) {
+                Ok((done, _)) => done,
+                Err(_) => return Followed::Retry,
+            };
+        }
+    }
+}
+
+/// The one connect in flight, held by whoever makes it. Dropped without an
+/// outcome (a panic in the connect) it ends as a failure: nobody waits for
+/// an attempt that no longer exists.
+pub(super) struct Lead<'a> {
+    slot: &'a Mutex<Option<Arc<Attempt>>>,
+    attempt: Arc<Attempt>,
+    finished: bool,
+}
+
+impl Lead<'_> {
+    pub(super) fn finish(mut self, outcome: Result<(), String>) {
+        self.end(outcome);
+    }
+
+    fn end(&mut self, outcome: Result<(), String>) {
+        if std::mem::replace(&mut self.finished, true) {
+            return;
+        }
+        // Out of the slot first: whoever wakes up must be able to lead.
+        if let Ok(mut slot) = self.slot.lock()
+            && slot.as_ref().is_some_and(|a| Arc::ptr_eq(a, &self.attempt))
+        {
+            *slot = None;
+        }
+        if let Ok(mut done) = self.attempt.done.lock() {
+            *done = Some((self.attempt.began.elapsed(), outcome));
+        }
+        self.attempt.ended.notify_all();
+    }
+}
+
+impl Drop for Lead<'_> {
+    fn drop(&mut self) {
+        self.end(Err("the connect was abandoned".into()));
+    }
+}
+
+pub(super) enum Turn<'a> {
+    /// Nobody is connecting: this caller does, and must `finish`.
+    Lead(Lead<'a>),
+    /// Someone is: wait for theirs.
+    Follow(Arc<Attempt>),
 }
 
 pub(super) struct SyncQueue<T> {
     inner: Mutex<T>,
     foreground_epoch: AtomicUsize,
     foreground_waiters: AtomicUsize,
-    connect: Mutex<Connect>,
+    connect: Mutex<Option<Arc<Attempt>>>,
 }
 
 impl<T> SyncQueue<T> {
@@ -35,64 +130,27 @@ impl<T> SyncQueue<T> {
         }
     }
 
-    /// The lock holder starts a network connect.
-    pub(super) fn connect_began(&self) -> Instant {
-        let now = Instant::now();
-        if let Ok(mut c) = self.connect.lock() {
-            c.since = Some(now);
+    /// Whose turn it is to connect. Call it holding the mirror lock, having
+    /// found no live link, and release that lock before connecting or
+    /// following: a link is only ever published under the lock, so no
+    /// attempt can end unseen between the look and the turn.
+    pub(super) fn connect_turn(&self, start: bool) -> Turn<'_> {
+        let mut slot = self.connect.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(attempt) = slot.as_ref() {
+            return Turn::Follow(attempt.clone());
         }
-        now
-    }
-
-    /// The lock holder's connect ended, with `error` when it failed.
-    pub(super) fn connect_ended(&self, began: Instant, error: Option<String>) {
-        if let Ok(mut c) = self.connect.lock() {
-            c.since = None;
-            c.failed = error.map(|why| (Instant::now(), began.elapsed(), why));
-        }
-    }
-
-    /// How long the lock holder has been connecting.
-    pub(super) fn connecting_for(&self) -> Option<Duration> {
-        self.connect
-            .lock()
-            .ok()
-            .and_then(|c| c.since.map(|t| t.elapsed()))
-    }
-
-    /// The failure of a slow connect that ended while a build waiting since
-    /// `waiting_since` was queued behind it: that build's answer too.
-    pub(super) fn shared_failure(&self, waiting_since: Instant) -> Option<String> {
-        self.shared_failure_after(waiting_since, SHARE_FAILURE_AFTER)
-    }
-
-    fn shared_failure_after(&self, waiting_since: Instant, slow: Duration) -> Option<String> {
-        let c = self.connect.lock().ok()?;
-        let (ended, took, why) = c.failed.as_ref()?;
-        (*ended >= waiting_since && *took >= slow).then(|| why.clone())
-    }
-
-    /// `foreground_lock` that asks `keep_waiting` while the lock is held by
-    /// someone else, and returns `None` once it says no.
-    pub(super) fn foreground_lock_while(
-        &self,
-        mut keep_waiting: impl FnMut() -> bool,
-    ) -> Option<LockResult<MutexGuard<'_, T>>> {
-        use std::sync::TryLockError;
-        self.foreground_waiters.fetch_add(1, Ordering::SeqCst);
-        let got = loop {
-            match self.inner.try_lock() {
-                Ok(guard) => break Some(Ok(guard)),
-                Err(TryLockError::Poisoned(e)) => break Some(Err(e)),
-                Err(TryLockError::WouldBlock) if !keep_waiting() => break None,
-                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(2)),
-            }
-        };
-        if got.is_some() {
-            self.foreground_epoch.fetch_add(1, Ordering::SeqCst);
-        }
-        self.foreground_waiters.fetch_sub(1, Ordering::SeqCst);
-        got
+        let attempt = Arc::new(Attempt {
+            began: Instant::now(),
+            start,
+            done: Mutex::new(None),
+            ended: Condvar::new(),
+        });
+        *slot = Some(attempt.clone());
+        Turn::Lead(Lead {
+            slot: &self.connect,
+            attempt,
+            finished: false,
+        })
     }
 
     #[cfg(test)]
@@ -154,74 +212,101 @@ mod tests {
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
 
-    /// 2026-11-27: one connect held the lock for 427 s and eleven builds
-    /// queued behind it for up to 482 s, each then free to try it again.
+    /// 2026-11-27: one connect held the mirror lock for 427 s and eleven
+    /// builds queued behind it for up to 482 s, each then free to try again.
+    /// The connect is now made without that lock, by one caller at a time.
     #[test]
-    fn builds_behind_a_stuck_connect_share_its_end_instead_of_queueing_for_their_own() {
+    fn one_connect_is_made_without_the_lock_and_everyone_waiting_gets_its_end() {
         let queue = Arc::new(SyncQueue::new(0u32));
-        let holder = queue.foreground_lock().unwrap();
-        let began = queue.connect_began();
-        let bound = Duration::from_millis(150);
         let slow = Duration::from_millis(50);
-        // Eleven builds arrive while the connect is stuck. Five outlive the
-        // bound and are given back, six are still waiting when it fails.
+        // The first build finds no link, takes the turn and lets the lock go.
+        let guard = queue.foreground_lock().unwrap();
+        let Turn::Lead(lead) = queue.connect_turn(false) else {
+            panic!("nobody else is connecting");
+        };
+        drop(guard);
+        // Eleven builds arrive while it is stuck. None of them waits for the
+        // lock, and none starts a second connect.
         let waiters: Vec<_> = (0..11)
             .map(|i| {
                 let queue = queue.clone();
                 std::thread::spawn(move || {
                     let asked = Instant::now();
-                    let patient = i >= 5;
-                    let got = queue.foreground_lock_while(|| {
-                        patient || queue.connecting_for().is_none_or(|age| age < bound)
-                    });
-                    match got {
-                        None => ("gave up", asked.elapsed()),
-                        Some(guard) => {
-                            let mut guard = guard.unwrap();
-                            match queue.shared_failure_after(asked, slow) {
-                                Some(_) => ("shared", asked.elapsed()),
-                                None => {
-                                    *guard += 1;
-                                    ("connected itself", asked.elapsed())
-                                }
-                            }
-                        }
-                    }
+                    let guard = queue.foreground_lock().unwrap();
+                    let locked = asked.elapsed();
+                    let Turn::Follow(attempt) = queue.connect_turn(false) else {
+                        panic!("a second connect was started");
+                    };
+                    drop(guard);
+                    // Five have a bound the stuck connect outlives.
+                    let bound = (i < 5).then(|| Duration::from_millis(150));
+                    (attempt.follow_sharing(false, bound, slow), locked)
                 })
             })
             .collect();
         std::thread::sleep(Duration::from_millis(400));
-        queue.connect_ended(began, Some("handshake timed out".into()));
-        drop(holder);
+        // Work that needs only the lock is not held up by the connect.
+        *queue.foreground_lock().unwrap() += 1;
+        lead.finish(Err("handshake timed out".into()));
         let ends: Vec<_> = waiters.into_iter().map(|w| w.join().unwrap()).collect();
-        let count = |what| ends.iter().filter(|(w, _)| *w == what).count();
+        let count = |f: fn(&Followed) -> bool| ends.iter().filter(|(e, _)| f(e)).count();
         assert_eq!(
-            (count("gave up"), count("shared"), count("connected itself")),
-            (5, 6, 0),
+            (
+                count(|e| matches!(e, Followed::Overdue(_))),
+                count(|e| *e == Followed::Failed("handshake timed out".into())),
+            ),
+            (5, 6),
             "{ends:?}"
         );
-        // Nobody waited for a second attempt after the first one ended.
         assert!(
-            ends.iter().all(|(_, t)| *t < Duration::from_secs(5)),
-            "{ends:?}"
+            ends.iter()
+                .all(|(_, locked)| *locked < Duration::from_millis(300)),
+            "the lock was free during the connect: {ends:?}"
         );
-        assert_eq!(queue.foreground_waiters.load(Ordering::SeqCst), 0);
-        // A build that asks after the failure makes its own attempt, and a
-        // quick failure or a success is nobody else's answer.
-        assert_eq!(queue.shared_failure_after(Instant::now(), slow), None);
-        let asked = Instant::now();
-        let began = queue.connect_began();
-        queue.connect_ended(began, Some("blip".into()));
-        assert_eq!(queue.shared_failure_after(asked, slow), None);
+        assert_eq!(*queue.lock().unwrap(), 1);
+
+        // The turn is free again. A quick failure is retried by whoever
+        // followed it, and so is one that could not start the machine when
+        // the follower may.
+        let Turn::Lead(lead) = queue.connect_turn(false) else {
+            panic!("the failed attempt left the turn taken");
+        };
+        let Turn::Follow(attempt) = queue.connect_turn(true) else {
+            panic!("a second connect was started");
+        };
+        lead.finish(Err("remote machine is not running".into()));
+        assert_eq!(attempt.follow_sharing(false, None, slow), Followed::Retry);
         assert_eq!(
-            queue.shared_failure_after(asked, Duration::ZERO),
-            Some("blip".into())
+            attempt.follow_sharing(false, None, Duration::ZERO),
+            Followed::Failed("remote machine is not running".into())
         );
-        let began = queue.connect_began();
-        assert!(queue.connecting_for().is_some());
-        queue.connect_ended(began, None);
-        assert_eq!(queue.connecting_for(), None);
-        assert_eq!(queue.shared_failure_after(asked, Duration::ZERO), None);
+        assert_eq!(
+            attempt.follow_sharing(true, None, Duration::ZERO),
+            Followed::Retry
+        );
+        // A published link is everyone's.
+        let Turn::Lead(lead) = queue.connect_turn(true) else {
+            panic!("the turn is free");
+        };
+        let Turn::Follow(attempt) = queue.connect_turn(true) else {
+            panic!("a second connect was started");
+        };
+        lead.finish(Ok(()));
+        assert_eq!(attempt.follow(true, None), Followed::Connected);
+        // A connect that dies without an outcome frees the turn and wakes
+        // its followers.
+        let Turn::Lead(lead) = queue.connect_turn(true) else {
+            panic!("the turn is free");
+        };
+        let Turn::Follow(attempt) = queue.connect_turn(true) else {
+            panic!("a second connect was started");
+        };
+        drop(lead);
+        assert_eq!(
+            attempt.follow_sharing(true, None, Duration::ZERO),
+            Followed::Failed("the connect was abandoned".into())
+        );
+        assert!(matches!(queue.connect_turn(true), Turn::Lead(_)));
     }
 
     #[test]

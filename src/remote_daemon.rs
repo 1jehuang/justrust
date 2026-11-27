@@ -1203,14 +1203,15 @@ fn relink_loop(d: &Daemon, rx: Receiver<()>) {
                 break;
             }
             // A build holding or waiting for the lock connects by itself.
-            let Ok(mut st) = d.sync.try_background_lock() else {
+            let Ok(st) = d.sync.try_background_lock() else {
                 continue;
             };
             if st.link.as_ref().is_some_and(|l| l.alive()) {
                 break;
             }
             let t = Instant::now();
-            let link = match ensure_link(d, &mut st, false) {
+            let (mut st, link) = ensure_link(d, st, false, Relock::Background);
+            let link = match link {
                 Ok(link) => link,
                 Err(e) => {
                     log(&format!("relink: {e:#}"));
@@ -1435,8 +1436,8 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
                 let d = d.clone();
                 std::thread::spawn(move || {
                     peercache::CONNECTING.store(true, Ordering::SeqCst);
-                    if let Ok(mut st) = d.sync.try_background_lock()
-                        && let Err(e) = ensure_link(&d, &mut st, false)
+                    if let Ok(st) = d.sync.try_background_lock()
+                        && let (_, Err(e)) = ensure_link(&d, st, false, Relock::Background)
                     {
                         log(&format!("warm: {e:#}"));
                     }
@@ -2192,43 +2193,115 @@ fn stop_unless_greeted(pid: i32, greeted: &AtomicBool, timeout: Duration) -> boo
 /// Connect to the agent (starting the machine only when `start`) and begin
 /// reading frames. Invalidate known roots: only roots needed by a build are
 /// mirrored before that build, so an unrelated old workspace cannot delay it.
-fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
-    if let Some(l) = &st.link
-        && l.alive()
-    {
-        return Ok(l.clone());
+///
+/// Takes the mirror lock and gives it back, but does not hold it while the
+/// network is involved: on 2026-11-27 one connect took 427 s and eleven
+/// builds queued on the lock behind it for up to 482 s. One caller connects,
+/// the others wait for that attempt (no longer than a build may spend
+/// connecting) and find its link, or get its failure as theirs. The link is
+/// published under the lock.
+fn ensure_link<'a>(
+    d: &'a Daemon,
+    mut st: std::sync::MutexGuard<'a, Sync>,
+    start: bool,
+    relock: Relock,
+) -> (std::sync::MutexGuard<'a, Sync>, Result<Arc<Link>>) {
+    let lock = || match relock {
+        Relock::Foreground => d.sync.foreground_lock().unwrap(),
+        Relock::Background => d.sync.background_lock().unwrap(),
+    };
+    loop {
+        if let Some(l) = &st.link {
+            if l.alive() {
+                let l = l.clone();
+                return (st, Ok(l));
+            }
+            log("connection to the agent was lost, reconnecting");
+        }
+        let lead = match d.sync.connect_turn(start) {
+            sync_queue::Turn::Lead(lead) => lead,
+            sync_queue::Turn::Follow(attempt) => {
+                drop(st);
+                let followed = attempt.follow(start, crate::remote_build::connect_bound());
+                st = lock();
+                match followed {
+                    sync_queue::Followed::Connected | sync_queue::Followed::Retry => continue,
+                    sync_queue::Followed::Failed(why) => {
+                        return (
+                            st,
+                            Err(anyhow::anyhow!(
+                                "remote connect failed while this build waited for it: {why}"
+                            )),
+                        );
+                    }
+                    sync_queue::Followed::Overdue(secs) => {
+                        return (
+                            st,
+                            Err(anyhow::anyhow!(
+                                "remote connect made for another build has not finished after {secs}s"
+                            )),
+                        );
+                    }
+                }
+            }
+        };
+        drop_link(d, &mut st);
+        if !start && !st.backend.probably_up() {
+            let e = anyhow::anyhow!("remote machine is not running");
+            lead.finish(Err(format!("{e:#}")));
+            return (st, Err(e));
+        }
+        let backend = st.backend.clone();
+        let mut retry = std::mem::take(&mut st.install_retry);
+        drop(st);
+        let opened = open_link(d, &backend, &mut retry);
+        st = lock();
+        st.install_retry = retry;
+        let res = opened.and_then(|opened| {
+            // The lock was free meanwhile: this link may no longer be wanted.
+            if d.draining.load(Ordering::SeqCst) || st.backend != backend {
+                opened.link.peer.close();
+                opened.link.kill();
+                bail!("remote machine or transport changed during the connect");
+            }
+            Ok(publish_link(d, &mut st, opened))
+        });
+        // Still under the lock: whoever follows finds the link in place.
+        lead.finish(res.as_ref().map(|_| ()).map_err(|e| format!("{e:#}")));
+        return (st, res);
     }
-    // Builds queued on the sync lock watch this attempt: they stop waiting
-    // at its bound and take a slow failure as their own answer.
-    let began = d.sync.connect_began();
-    let res = connect_link(d, st, start);
-    d.sync
-        .connect_ended(began, res.as_ref().err().map(|e| format!("{e:#}")));
-    res
 }
 
-fn connect_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
-    if let Some(l) = &st.link {
-        if l.alive() {
-            return Ok(l.clone());
-        }
-        log("connection to the agent was lost, reconnecting");
-    }
-    drop_link(d, st);
-    if !start && !st.backend.probably_up() {
-        bail!("remote machine is not running");
-    }
+/// How a caller of [`ensure_link`] takes the mirror lock back.
+#[derive(Clone, Copy)]
+enum Relock {
+    /// A build: ahead of background work.
+    Foreground,
+    /// Warmup or relink: after any build that is waiting.
+    Background,
+}
+
+/// A connected agent that is not yet anyone's link.
+struct Opened {
+    link: Arc<Link>,
+    dest: String,
+    /// Machine ready, install, session.
+    parts: [Duration; 3],
+}
+
+/// The network part of a connect. Holds no lock.
+fn open_link(d: &Daemon, backend: &Backend, install_retry: &mut InstallRetry) -> Result<Opened> {
     let connecting = Instant::now();
-    let target = st.backend.ensure_ready()?;
+    let target = backend.ensure_ready()?;
     let ready = connecting.elapsed();
-    st.install_retry.run(&target.dest, Instant::now, || {
+    install_retry.run(&target.dest, Instant::now, || {
         crate::remote_build::ensure_remote_justrust(&target)
     })?;
-    let prefix = resolve_remote_prefix(&st.backend, &target)?;
+    let prefix = resolve_remote_prefix(backend, &target)?;
     save_active_prefix(&prefix);
     let installed = connecting.elapsed();
-    let mut command = if st.backend == Backend::Hosted && crate::remote_session::enabled() {
-        st.install_retry.run(&target.dest, Instant::now, || {
+    let mut command = if *backend == Backend::Hosted && crate::remote_session::enabled() {
+        install_retry.run(&target.dest, Instant::now, || {
             crate::remote_session::command(&target, &prefix)
         })?
     } else {
@@ -2365,19 +2438,29 @@ fn connect_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
             }
         });
     }
-    st.link_parts = Some([
-        ready,
-        installed.saturating_sub(ready),
-        connecting.elapsed().saturating_sub(installed),
-    ]);
+    Ok(Opened {
+        link,
+        dest: target.dest.clone(),
+        parts: [
+            ready,
+            installed.saturating_sub(ready),
+            connecting.elapsed().saturating_sub(installed),
+        ],
+    })
+}
+
+/// Make an opened agent the daemon's link. Under the mirror lock.
+fn publish_link(d: &Daemon, st: &mut Sync, opened: Opened) -> Arc<Link> {
+    let Opened { link, dest, parts } = opened;
+    st.link_parts = Some(parts);
     log(&format!(
-        "connected to {} in {:.2}s: ready {:.2}s, install {:.2}s, session {:.2}s",
-        target.dest,
-        connecting.elapsed().as_secs_f64(),
-        ready.as_secs_f64(),
-        installed.saturating_sub(ready).as_secs_f64(),
-        connecting.elapsed().saturating_sub(installed).as_secs_f64()
+        "connected to {dest} in {:.2}s: ready {:.2}s, install {:.2}s, session {:.2}s",
+        parts.iter().sum::<Duration>().as_secs_f64(),
+        parts[0].as_secs_f64(),
+        parts[1].as_secs_f64(),
+        parts[2].as_secs_f64()
     ));
+    let peer = link.peer.clone();
     peer.prefetch_keys();
     if let Ok(mut c) = d.peer.lock() {
         *c = Some(peer);
@@ -2393,7 +2476,7 @@ fn connect_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     // build local (FINDINGS 65).
     st.invalidate_sources();
     update_root_info(d, st);
-    Ok(link)
+    link
 }
 
 fn read_agent(
@@ -3559,44 +3642,17 @@ fn run(
             Ok(())
         };
         setup_phase(w, "waiting for sync lock")?;
-        // The holder may be connecting. One stuck connect once kept eleven
-        // builds here for up to 482 s: wait for it no longer than a build
-        // may spend connecting itself, and say that is what the wait is.
-        let bound = crate::remote_build::connect_bound();
-        let mut told = false;
-        let mut overdue = None;
-        let got = d.sync.foreground_lock_while(|| {
-            let Some(age) = d.sync.connecting_for() else {
-                return true;
-            };
-            if !told {
-                told = true;
-                let _ = setup_phase(w, "connecting");
-            }
-            if bound.is_some_and(|b| age >= b) {
-                overdue = Some(age);
-            }
-            overdue.is_none()
-        });
-        let Some(st) = got else {
-            bail!(
-                "remote connect made for another build has not finished after {}s",
-                overdue.unwrap_or_default().as_secs()
-            );
-        };
-        let mut st = st.unwrap();
+        let st = d.sync.foreground_lock().unwrap();
         let locked = t.elapsed();
-        if !st.link.as_ref().is_some_and(|l| l.alive())
-            && let Some(why) = d.sync.shared_failure(t)
-        {
-            bail!("remote connect failed while this build waited for it: {why}");
-        }
         if d.draining.load(Ordering::SeqCst) {
             bail!("sync daemon transport policy changed; reconnect before starting a build");
         }
+        // The connect lets the lock go while the network is involved.
+        let told = setup_phase(w, "connecting");
+        let (mut st, link) = ensure_link(d, st, start, Relock::Foreground);
         let res = (|| -> Result<_> {
-            setup_phase(w, "connecting")?;
-            let link = ensure_link(d, &mut st, start)?;
+            told?;
+            let link = link?;
             let linked = t.elapsed();
             // Only the run that waited for a connect reports its parts.
             let link_parts = st
