@@ -49,29 +49,78 @@ def context(event="push", ref="refs/heads/stable", run=100, pr=None, workflow="C
                 event={"pull_request": {"number": pr}}, **extra)
 
 
+def policy_fields(workflow):
+    """The one workflow-level concurrency group and cancel expression."""
+    blocks = re.findall(r"^concurrency:\n((?:[ \t]+[^\n]*\n)+)", workflow, re.MULTILINE)
+    if len(blocks) != 1:
+        raise AssertionError("expected one workflow-level concurrency block")
+    fields = {}
+    for line in blocks[0].splitlines():
+        match = re.fullmatch(r"  (group|cancel-in-progress): (.+)", line)
+        if not match or match[1] in fields:
+            raise AssertionError(f"unexpected concurrency field: {line}")
+        fields[match[1]] = match[2]
+    if set(fields) != {"group", "cancel-in-progress"}:
+        raise AssertionError("missing concurrency policy field")
+    match = re.fullmatch(r"\$\{\{(.*?)\}\}", fields["cancel-in-progress"])
+    if not match:
+        raise AssertionError("cancel-in-progress must be an explicit expression")
+    return fields["group"], match[1]
+
+
 class ClientCIConcurrencyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        blocks = re.findall(r"^concurrency:\n((?:[ \t]+[^\n]*\n)+)", cls.workflow, re.MULTILINE)
-        if len(blocks) != 1:
-            raise AssertionError("expected one workflow-level concurrency block")
-        fields = {}
-        for line in blocks[0].splitlines():
-            match = re.fullmatch(r"  (group|cancel-in-progress): (.+)", line)
-            if not match or match[1] in fields:
-                raise AssertionError(f"unexpected concurrency field: {line}")
-            fields[match[1]] = match[2]
-        if set(fields) != {"group", "cancel-in-progress"}:
-            raise AssertionError("missing concurrency policy field")
-        cls.group = fields["group"]
-        match = re.fullmatch(r"\$\{\{(.*?)\}\}", fields["cancel-in-progress"])
-        if not match:
-            raise AssertionError("cancel-in-progress must be an explicit expression")
-        cls.cancel = match[1]
+        cls.group, cls.cancel = policy_fields(cls.workflow)
+        cls.macos = (ROOT / ".github/workflows/ci-macos.yml").read_text()
+        cls.macos_group, cls.macos_cancel = policy_fields(cls.macos)
 
     def policy(self, ctx):
         return render(self.group, ctx).lower(), expression(self.cancel, ctx)
+
+    def macos_policy(self, ctx):
+        return render(self.macos_group, ctx).lower(), expression(self.macos_cancel, ctx)
+
+    def test_macos_stable_runs_finish_and_only_the_pending_one_is_replaced(self):
+        # macOS runners queue far longer than the gap between stable pushes. A
+        # shared group without cancellation lets the running one report and
+        # keeps a single pending run, which the next push replaces.
+        first, cancel = self.macos_policy(context(workflow="CI macOS"))
+        second, next_cancel = self.macos_policy(context(run=101, workflow="CI macOS"))
+        self.assertEqual(first, second)
+        self.assertIs(cancel, False)
+        self.assertIs(next_cancel, False)
+        self.assertNotEqual(first, self.policy(context())[0])
+        self.assertNotEqual(first, self.policy(context(workflow="CI macOS"))[0])
+
+    def test_macos_pr_updates_supersede_and_tags_stay_independent(self):
+        first, cancel = self.macos_policy(context("pull_request", "refs/pull/12/merge", pr=12, workflow="CI macOS"))
+        second, _ = self.macos_policy(context("pull_request", "refs/pull/12/merge", run=101, pr=12, workflow="CI macOS"))
+        other, _ = self.macos_policy(context("pull_request", "refs/pull/13/merge", pr=13, workflow="CI macOS"))
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, other)
+        self.assertIs(cancel, True)
+        groups = []
+        for ref, run in (("refs/tags/v1.0.0", 100), ("refs/tags/v1.0.0", 101), ("refs/tags/v1.0.1", 102)):
+            group, cancel = self.macos_policy(context(ref=ref, run=run, workflow="CI macOS"))
+            groups.append(group)
+            self.assertIs(cancel, False)
+        self.assertEqual(len(set(groups)), len(groups))
+
+    def test_macos_workflow_keeps_the_ci_triggers_environment_and_checks(self):
+        for trigger in ('    tags: ["v*"]', "    branches: [stable]", "  pull_request:\n"):
+            self.assertIn(trigger, self.macos)
+        self.assertRegex(self.macos, r"(?m)^  macos:$")
+        self.assertNotRegex(self.workflow, r"(?m)^  macos:$")
+        self.assertNotIn("macos-", self.workflow)
+        self.assertIn("os: [macos-latest, macos-15-intel]", self.macos)
+        env = re.search(r"^env:\n((?:[ \t]+[^\n]*\n)+)", self.workflow, re.MULTILINE)
+        self.assertIn(env[0], self.macos)
+        for check in ("cargo clippy --all-targets --locked", "cargo test --locked",
+                      "ci/check-test-bundle.sh", "Depcache across checkouts",
+                      "macOS integration paths", "Release build runs"):
+            self.assertIn(check, self.macos)
 
     def test_stable_pushes_supersede_each_other(self):
         first, cancel = self.policy(context())
@@ -135,7 +184,7 @@ class ClientCIConcurrencyTests(unittest.TestCase):
         self.assertIn('    tags: ["v*"]', self.workflow)
         self.assertIn("    branches: [stable]", self.workflow)
         self.assertIn("  pull_request:\n", self.workflow)
-        for job in ("linux", "macos", "windows", "msrv"):
+        for job in ("linux", "windows", "msrv"):
             self.assertRegex(self.workflow, rf"(?m)^  {job}:$")
         for check in ("cargo fmt --check", "cargo clippy --all-targets --locked",
                       "cargo test --locked", "cargo check --locked --all-targets",

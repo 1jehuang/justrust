@@ -1,0 +1,135 @@
+name: CI macOS
+
+# The macOS half of CI, in its own workflow. macOS runners queue for 45 to 60
+# minutes, and stable takes a push every few minutes. Inside the CI workflow
+# each push cancelled the macOS jobs still waiting for a runner, so they never
+# reported. Here a stable run that has started always finishes, and a newer
+# push only replaces the one run still waiting behind it: at most one running
+# and one pending, never a pile-up, and no result thrown away.
+on:
+  push:
+    branches: [stable]
+    tags: ["v*"]
+  pull_request:
+
+# Same keys as ci.yml. Only updates to the same PR cancel a run in progress.
+concurrency:
+  group: client-ci-macos-${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || (github.event_name == 'push' && github.ref == 'refs/heads/stable' && github.ref) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  # Test runs are not usage.
+  JUSTRUST_NO_TELEMETRY: "1"
+  JUSTRUST_NO_UPDATE: "1"
+  # CI runners are not signed in to hosted; every build here is local.
+  JUSTRUST_REQUIRE_LOCAL_REASON: "0"
+
+jobs:
+  macos:
+    name: ${{ matrix.os }} (clippy, test, smoke)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --locked
+      # Native rsync requires secluded arguments, which Apple's openrsync does
+      # not implement. Keep the other tests on the stock macOS implementation.
+      - run: cargo test --locked -- --skip remote_sync::tests::rsync_shell_parser_preserves_quoted_program_and_endpoint
+      - name: Native test bundle handoff
+        run: bash ci/check-test-bundle.sh "$PWD/target/debug/justrust"
+      # The recorder, sampler, and report on a real macOS build.
+      - name: Smoke test the binary
+        run: |
+          cargo build --locked
+          bin="$PWD/target/debug/justrust"
+          cargo new -q "$RUNNER_TEMP/smoke"
+          cd "$RUNNER_TEMP/smoke"
+          "$bin" check
+          "$bin" test
+          "$bin" show | tee show.txt
+          grep -q "not measured" show.txt
+          # Memory in MB, not bytes read as KiB (ru_maxrss units differ).
+          if grep -E "largest rustc [0-9]{5,} MB" show.txt; then exit 1; fi
+          echo 'fn main() { let _x: u32 = "a"; }' > src/main.rs
+          if "$bin" check; then echo "expected a compile error"; exit 1; fi
+      # Dependency cache across target dirs, including a proc-macro dylib
+      # (keyed by its Mach-O .rustc section) that must load after restore.
+      - name: Depcache across checkouts
+        run: |
+          bin="$PWD/target/debug/justrust"
+          for d in a b; do
+            cargo new -q "$RUNNER_TEMP/dc-$d"
+            cd "$RUNNER_TEMP/dc-$d"
+            printf 'serde = { version = "1", features = ["derive"] }\nserde_json = "1"\n' >> Cargo.toml
+            printf '#[derive(serde::Serialize)]\nstruct S { a: u8 }\n#[test]\nfn t() { assert_eq!(serde_json::to_string(&S { a: 1 }).unwrap(), "{\\"a\\":1}"); }\nfn main() {}\n' > src/main.rs
+            "$bin" test 2>&1 | tee out.txt
+            cd -
+          done
+          # Every dependency, proc macro included, restored in the second.
+          grep -E "depcache [0-9]+ hit/0 miss" "$RUNNER_TEMP/dc-b/out.txt"
+          grep -q "1 passed" "$RUNNER_TEMP/dc-b/out.txt"
+      # One check per macOS path the port changed (FINDINGS 45 maps them).
+      - name: macOS integration paths
+        run: |
+          set -x
+          bin="$PWD/target/debug/justrust"
+          cd "$RUNNER_TEMP/dc-b"
+          # Sampler: build CPU and per-process data are measured, not zero.
+          "$bin" show --json > show.json
+          python3 - <<'EOF'
+          import json
+          s = json.load(open("show.json"))
+          r = s["resources"]
+          assert r["psi_unavailable"] is True, r
+          assert r["avg_build_cores"] > 0, r
+          assert 0 < r["peak_unit_rss_mb"] < 4096, r
+          assert r["min_mem_available_mb"] > 0, r
+          assert s.get("ncpu", 1) > 0
+          print("sampler ok", r)
+          EOF
+          # status: a finished run is not reported as active (pid guard).
+          "$bin" status --json | tee status.json
+          python3 -c "import json; s=json.load(open('status.json')); assert s['active']==[], s"
+          # Routing: a signed-out Mac stays local and says why.
+          JUSTRUST_REMOTE_EXPLAIN=1 "$bin" check 2>&1 | tee route.txt
+          "$bin" show | grep -E "^where +local"
+          # Slots: a second session seeds its own slot by APFS clone.
+          touch src/main.rs
+          JCODE_SESSION_ID=other "$bin" test 2>&1 | tee slot.txt
+          grep -E "slot [0-9]+ \((new|sticky|reused)\)" slot.txt
+          grep -q "1 passed" slot.txt
+          # A seeded slot reuses every dependency: only the edited crate builds.
+          grep -E "units +1 compiled \(1 local, 0 deps" slot.txt
+          # Pinned toolchain for the host triple (download, sha256 via shasum).
+          printf '[toolchain]\nchannel = "1.98.1"\n' > justrust.toml
+          "$bin" toolchain install 2>&1 | tail -3
+          "$bin" test 2>&1 | tee pinned.txt
+          grep -q "1 passed" pinned.txt
+          grep -E "pinned toolchain 1\.98\.1" pinned.txt
+          ls ~/.justrust/toolchains/1.98.1/lib/rustlib | grep -E "apple-darwin"
+          rm justrust.toml
+      # The release binary (thin LTO, stripped), as the installer ships it.
+      - name: Release build runs
+        run: |
+          cargo build --release --locked --config profile.release.lto='"thin"' \
+            --config profile.release.strip=true
+          cd "$RUNNER_TEMP/dc-a" && "$GITHUB_WORKSPACE/target/release/justrust" test 2>&1 | tee rel.txt
+          grep -q "1 passed" rel.txt
+      # Run last: Homebrew may link rsync into a directory already on PATH.
+      # Earlier integration steps must keep exercising Apple's stock rsync.
+      - name: Native rsync shell parser
+        run: |
+          brew install rsync
+          rsync_prefix="$(brew --prefix rsync)"
+          export PATH="$rsync_prefix/bin:$PATH"
+          rsync --version
+          cargo test --locked --lib remote_sync::tests::rsync_shell_parser_preserves_quoted_program_and_endpoint -- --exact

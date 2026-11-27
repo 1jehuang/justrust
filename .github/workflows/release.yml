@@ -237,11 +237,29 @@ jobs:
           BOOTSTRAP_TAG: ${{ needs.preflight.outputs.bootstrap_tag }}
           BOOTSTRAP_SHA256: ${{ needs.preflight.outputs.bootstrap_sha256 }}
         run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
           # Stock bootstrap also supplies pinned C-only musl ABI objects.
           # It never supplies Rust rlibs to the service-selected compiler.
-          rustup toolchain install 1.99.0 --profile minimal --target "${{ matrix.target }}"
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends rsync zstd binutils qemu-user
+          rustup toolchain install 1.99.0 --profile minimal --target "$target" &
+          rustup_install=$!
+          # The runner image has most of these. While rustup downloads, install
+          # only what is missing (qemu only for a foreign architecture), and
+          # refresh the package index only when the image's copy is stale.
+          packages=()
+          command -v rsync >/dev/null || packages+=(rsync)
+          command -v zstd >/dev/null || packages+=(zstd)
+          command -v readelf >/dev/null || packages+=(binutils)
+          if [[ "${target%%-*}" != "$(uname -m)" ]] && ! command -v "qemu-${target%%-*}" >/dev/null; then
+            packages+=(qemu-user)
+          fi
+          if (( ${#packages[@]} )); then
+            sudo apt-get install -y --no-install-recommends "${packages[@]}" || {
+              sudo apt-get update -q
+              sudo apt-get install -y --no-install-recommends "${packages[@]}"
+            }
+          fi
+          wait "$rustup_install"
           python3 ci/install-published-client.py --tag "$BOOTSTRAP_TAG" --sha256 "$BOOTSTRAP_SHA256" --github-path
 
       - name: Build and verify hosted Linux release

@@ -66,10 +66,23 @@ jobs:
 
       - name: Install runner prerequisites
         run: |
-          rustup toolchain install 1.99.0 --profile minimal
-          rustup default 1.99.0
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends rsync zstd binutils qemu-user
+          set -euo pipefail
+          # Same shape as release.yml: rustup downloads while only the missing
+          # packages install, and the package index refreshes only if stale.
+          { rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0; } &
+          rustup_install=$!
+          packages=()
+          command -v rsync >/dev/null || packages+=(rsync)
+          command -v zstd >/dev/null || packages+=(zstd)
+          command -v readelf >/dev/null || packages+=(binutils)
+          command -v qemu-aarch64 >/dev/null || packages+=(qemu-user)
+          if (( ${#packages[@]} )); then
+            sudo apt-get install -y --no-install-recommends "${packages[@]}" || {
+              sudo apt-get update -q
+              sudo apt-get install -y --no-install-recommends "${packages[@]}"
+            }
+          fi
+          wait "$rustup_install"
 
       - name: Install published production client
         run: |
