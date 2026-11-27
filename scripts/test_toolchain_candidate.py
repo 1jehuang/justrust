@@ -68,6 +68,34 @@ class CandidateTests(unittest.TestCase):
                 candidate.build_stages(["bootstrap", "train", "cargo"], run)
             self.assertNotIn("train", seen)
 
+    def test_a_failed_cargo_build_is_repeated_before_training(self):
+        seen = []
+
+        def run(stage):
+            seen.append(stage)
+            if stage == "cargo" and seen.count("cargo") < 3:
+                raise subprocess.CalledProcessError(1, ["build-jr.sh"])
+
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            candidate.build_stages(["bootstrap", "train", "cargo"], run)
+        self.assertEqual(seen.count("cargo"), 3)
+        self.assertEqual(seen[-1], "train")
+        self.assertIn("attempt 2 of 3", err.getvalue())
+
+    def test_a_cargo_build_that_keeps_failing_stops_the_candidate(self):
+        seen = []
+
+        def run(stage):
+            seen.append(stage)
+            if stage == "cargo":
+                raise subprocess.CalledProcessError(1, ["build-jr.sh"])
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(subprocess.CalledProcessError):
+                candidate.build_stages(["bootstrap", "train", "cargo"], run)
+        self.assertEqual(seen.count("cargo"), candidate.CARGO_BUILD_ATTEMPTS)
+        self.assertNotIn("train", seen)
+
     def test_plan_identity_and_no_side_effects(self):
         plan = self.plan()
         self.assertEqual(plan["candidate_id"], "jr-" + self.revision)

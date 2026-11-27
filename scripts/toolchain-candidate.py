@@ -115,13 +115,30 @@ def make_plan(root, revision, output, optimize="none"):
     }
 
 
+CARGO_BUILD_ATTEMPTS = 3
+
+
 def build_stages(commands, run):
-    """Overlap the pinned Cargo build with bootstrap, never with PGO training."""
+    """Overlap the pinned Cargo build with bootstrap, never with PGO training.
+
+    The Cargo build runs wherever justrust routes builds, so a network drop can
+    fail it while bootstrap is fine (2026-11-27: one rsync error cost a
+    17 minute compiler stage). It is idempotent, so a failed one is repeated
+    after bootstrap, still before training starts.
+    """
     compiler, cargo = commands[:-1], commands[-1]
     with ThreadPoolExecutor(max_workers=1) as pool:
         cargo_result = pool.submit(run, cargo)
         run(compiler[0])
-        cargo_result.result()
+        for attempt in range(1, CARGO_BUILD_ATTEMPTS + 1):
+            try:
+                cargo_result.result() if attempt == 1 else run(cargo)
+                break
+            except (subprocess.CalledProcessError, OSError) as error:
+                if attempt == CARGO_BUILD_ATTEMPTS:
+                    raise
+                print(f"toolchain-candidate: Cargo build failed (attempt {attempt} of "
+                      f"{CARGO_BUILD_ATTEMPTS}), repeating it: {error}", file=sys.stderr, flush=True)
     for command in compiler[1:]:
         run(command)
 
