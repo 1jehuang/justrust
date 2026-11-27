@@ -145,7 +145,13 @@ pub fn compute(
     let test_secs = if let Some(slowest) = tests.slowest.first() {
         slowest.secs.max(0.0)
     } else if tests.libtest_secs > 0.0 {
-        tests.libtest_secs
+        // Summed over binaries, which the pool runs side by side: more than
+        // the run took is not a floor.
+        if phases.test_run > 0.0 {
+            tests.libtest_secs.min(phases.test_run)
+        } else {
+            tests.libtest_secs
+        }
     } else if phases.test_run > 0.0 {
         phases.test_run
     } else {
@@ -294,6 +300,32 @@ mod tests {
         assert_eq!(f.dirty_lines, 2);
         // 5ms overhead + ~0ms frontend + ~0ms codegen + 5ms link + 15ms test = ~25ms
         assert!((f.total_secs - 0.025).abs() < 0.001, "got {}", f.total_secs);
+    }
+
+    #[test]
+    fn summed_libtest_time_never_exceeds_the_test_phase() {
+        // 23 binaries side by side: libtest's totals sum to 36.84 s of an
+        // 8.74 s test phase (run 20261126-155311534-171924).
+        let tests = TestStats {
+            libtest_secs: 36.84,
+            ..Default::default()
+        };
+        let phases = Phases {
+            test_run: 8.74,
+            ..Default::default()
+        };
+        let floor = |phases: &Phases| {
+            compute(
+                "test",
+                &["test".into()],
+                &GitInfo::default(),
+                &UnitStats::default(),
+                phases,
+                &tests,
+            )
+        };
+        assert_eq!(floor(&phases).test_secs, 8.74);
+        assert_eq!(floor(&Phases::default()).test_secs, 36.84);
     }
 
     #[test]

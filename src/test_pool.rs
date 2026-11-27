@@ -70,12 +70,21 @@ pub fn enabled(agent: bool) -> bool {
     }
 }
 
+/// Binaries side by side: a quarter of the cores. Cargo hands binaries over
+/// in its own order within a few milliseconds, so one that arrives with the
+/// cap reached waits for a whole earlier binary, whatever its priority: on
+/// 96 cores a cap of 8 held the binary that set the suite's wall time back
+/// by up to 4.5 s (0.7 s per 23-binary run on average).
+fn default_jobs(ncpu: usize) -> usize {
+    (ncpu / 4).clamp(2, 24)
+}
+
 fn max_jobs() -> usize {
     std::env::var("JUSTRUST_TEST_JOBS")
         .ok()
         .and_then(|v| v.parse().ok())
         .filter(|&n| n >= 1)
-        .unwrap_or_else(|| (crate::procfs::ncpu() / 4).clamp(2, 8))
+        .unwrap_or_else(|| default_jobs(crate::procfs::ncpu()))
 }
 
 /// One binary handed over by the runner.
@@ -1682,6 +1691,15 @@ mod tests {
         assert_eq!(f.lines.last().unwrap().2, b"tail without newline");
         assert_eq!(f.lines[2999].2, b"test t2999 ... ok");
         pool.finish();
+    }
+
+    #[test]
+    fn job_cap_follows_the_cores_of_a_large_machine() {
+        assert_eq!(default_jobs(1), 2);
+        assert_eq!(default_jobs(16), 4);
+        assert_eq!(default_jobs(32), 8);
+        assert_eq!(default_jobs(96), 24);
+        assert_eq!(default_jobs(256), 24);
     }
 
     #[test]
