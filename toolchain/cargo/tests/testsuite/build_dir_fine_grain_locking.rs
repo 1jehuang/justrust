@@ -397,6 +397,10 @@ fn cargo_tmpdir_should_output_to_build_dir() {
 [ROOT]/foo/target-dir/debug/.cargo-lock
 [ROOT]/foo/target-dir/debug/.cargo-artifact-lock
 [ROOT]/foo/target-dir/debug/foo[EXE]
+[ROOT]/foo/target-dir/debug/deps/foo-[HASH][EXE]
+[ROOT]/foo/target-dir/debug/deps/foo-[HASH].d
+[ROOT]/foo/target-dir/debug/deps/foo-[HASH][EXE]
+[ROOT]/foo/target-dir/debug/deps/foo-[HASH].d
 
 "#]]);
 }
@@ -502,6 +506,8 @@ fn benches_should_output_to_build_dir() {
 [ROOT]/foo/target-dir/debug/.cargo-lock
 [ROOT]/foo/target-dir/debug/.cargo-artifact-lock
 [ROOT]/foo/target-dir/debug/foo[EXE]
+[ROOT]/foo/target-dir/debug/deps/foo-[HASH][EXE]
+[ROOT]/foo/target-dir/debug/deps/foo-[HASH].d
 
 "#]]);
 }

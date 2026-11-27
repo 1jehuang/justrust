@@ -299,9 +299,9 @@ fn unused_dep_lib_bins() {
 [HELP] consider removing the dependency on `unused`
 [WARNING] `foo` (manifest) generated 1 warning
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[EXECUTABLE] unittests src/lib.rs (target/debug/build/foo/[HASH]/out/foo-[HASH][EXE])
-[EXECUTABLE] unittests src/bin/bar.rs (target/debug/build/foo/[HASH]/out/bar-[HASH][EXE])
-[EXECUTABLE] unittests src/bin/foo.rs (target/debug/build/foo/[HASH]/out/foo-[HASH][EXE])
+[EXECUTABLE] unittests src/lib.rs (target/debug/deps/foo-[HASH][EXE])
+[EXECUTABLE] unittests src/bin/bar.rs (target/debug/deps/bar-[HASH][EXE])
+[EXECUTABLE] unittests src/bin/foo.rs (target/debug/deps/foo-[HASH][EXE])
 
 "#]]
             .unordered(),
@@ -436,9 +436,9 @@ fn unused_dep_static_lib_only() {
 [COMPILING] unused v0.1.0
 [COMPILING] foo v0.1.0 ([ROOT]/foo)
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[EXECUTABLE] unittests src/lib.rs (target/debug/build/foo/[HASH]/out/foo-[HASH][EXE])
-[EXECUTABLE] unittests src/bin/bar.rs (target/debug/build/foo/[HASH]/out/bar-[HASH][EXE])
-[EXECUTABLE] unittests src/bin/foo.rs (target/debug/build/foo/[HASH]/out/foo-[HASH][EXE])
+[EXECUTABLE] unittests src/lib.rs (target/debug/deps/foo-[HASH][EXE])
+[EXECUTABLE] unittests src/bin/bar.rs (target/debug/deps/bar-[HASH][EXE])
+[EXECUTABLE] unittests src/bin/foo.rs (target/debug/deps/foo-[HASH][EXE])
 
 "#]]
             .unordered(),
@@ -1092,8 +1092,8 @@ fn unused_dev_deps() {
 [COMPILING] doctest_used v0.1.0
 [COMPILING] foo v0.1.0 ([ROOT]/foo)
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[EXECUTABLE] unittests src/lib.rs (target/debug/build/foo/[HASH]/out/foo-[HASH][EXE])
-[EXECUTABLE] tests/hello.rs (target/debug/build/foo/[HASH]/out/hello-[HASH][EXE])
+[EXECUTABLE] unittests src/lib.rs (target/debug/deps/foo-[HASH][EXE])
+[EXECUTABLE] tests/hello.rs (target/debug/deps/hello-[HASH][EXE])
 
 "#]]
             .unordered(),
@@ -1105,10 +1105,10 @@ fn unused_dev_deps() {
         .with_stderr_data(str![[r#"
 [COMPILING] foo v0.1.0 ([ROOT]/foo)
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[EXECUTABLE] unittests src/lib.rs (target/debug/build/foo/[HASH]/out/foo-[HASH][EXE])
-[EXECUTABLE] tests/hello.rs (target/debug/build/foo/[HASH]/out/hello-[HASH][EXE])
-[EXECUTABLE] benches/hello.rs (target/debug/build/foo/[HASH]/out/hello-[HASH][EXE])
-[EXECUTABLE] unittests examples/hello.rs (target/debug/build/foo/[HASH]/out/hello-[HASH][EXE])
+[EXECUTABLE] unittests src/lib.rs (target/debug/deps/foo-[HASH][EXE])
+[EXECUTABLE] tests/hello.rs (target/debug/deps/hello-[HASH][EXE])
+[EXECUTABLE] benches/hello.rs (target/debug/deps/hello-[HASH][EXE])
+[EXECUTABLE] unittests examples/hello.rs (target/debug/deps/hello-[HASH][EXE])
 
 "#]])
         .run();
@@ -1118,8 +1118,8 @@ fn unused_dev_deps() {
     p.cargo("test")
         .with_stderr_data(str![[r#"
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] unittests src/lib.rs (target/debug/build/foo/[HASH]/out/foo-[HASH][EXE])
-[RUNNING] tests/hello.rs (target/debug/build/foo/[HASH]/out/hello-[HASH][EXE])
+[RUNNING] unittests src/lib.rs (target/debug/deps/foo-[HASH][EXE])
+[RUNNING] tests/hello.rs (target/debug/deps/hello-[HASH][EXE])
 [DOCTEST] foo
 
 "#]])

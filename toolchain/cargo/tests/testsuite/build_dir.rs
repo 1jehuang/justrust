@@ -362,6 +362,10 @@ fn cargo_tmpdir_should_output_to_build_dir() {
 [ROOT]/foo/target-dir/debug/.cargo-lock
 [ROOT]/foo/target-dir/debug/.cargo-artifact-lock
 [ROOT]/foo/target-dir/debug/foo[EXE]
+[ROOT]/foo/target-dir/debug/deps/foo-[HASH][EXE]
+[ROOT]/foo/target-dir/debug/deps/foo-[HASH].d
+[ROOT]/foo/target-dir/debug/deps/foo-[HASH][EXE]
+[ROOT]/foo/target-dir/debug/deps/foo-[HASH].d
 
 "#]]);
 }
@@ -456,6 +460,8 @@ fn benches_should_output_to_build_dir() {
 [ROOT]/foo/target-dir/debug/.cargo-lock
 [ROOT]/foo/target-dir/debug/.cargo-artifact-lock
 [ROOT]/foo/target-dir/debug/foo[EXE]
+[ROOT]/foo/target-dir/debug/deps/foo-[HASH][EXE]
+[ROOT]/foo/target-dir/debug/deps/foo-[HASH].d
 
 "#]]);
 }
@@ -1347,8 +1353,8 @@ fn dylib_deps_output_overwrite() {
 [COMPILING] baz v0.1.0 ([ROOT]/foo/baz)
 [COMPILING] main v0.0.0 ([ROOT]/foo)
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] unittests src/main.rs (build-dir/debug/build/main/[HASH]/out/[..])
-[RUNNING] tests/use_both_dylibs.rs (build-dir/debug/build/main/[HASH]/out/[..])
+[RUNNING] unittests src/main.rs (target-dir/debug/deps/[..])
+[RUNNING] tests/use_both_dylibs.rs (target-dir/debug/deps/[..])
 
 "#]]
             .unordered(),

@@ -432,7 +432,7 @@ fn rebuild_tests_if_lib_changes() {
 [COMPILING] foo v0.0.1 ([ROOT]/foo)
 [RUNNING] `rustc --crate-name foo_test [..]`
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] `[ROOT]/foo/target/debug/build/foo/[HASH]/out/foo_test-[HASH][EXE]`
+[RUNNING] `[ROOT]/foo/target/debug/deps/foo_test-[HASH][EXE]`
 
 "#]])
         .run();

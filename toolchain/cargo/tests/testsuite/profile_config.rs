@@ -555,7 +555,7 @@ fn test_uses_build_profile() {
         .with_stderr_data(str![[r#"
 [COMPILING] foo v0.1.0 ([ROOT]/foo)
 [FINISHED] `release` profile [optimized] target(s) in [ELAPSED]s
-[EXECUTABLE] unittests src/main.rs (target/release/build/foo/[HASH]/out/foo-[HASH][EXE])
+[EXECUTABLE] unittests src/main.rs (target/release/deps/foo-[HASH][EXE])
 
 "#]])
         .run();
@@ -580,7 +580,7 @@ fn test_ignores_install_profile() {
         .with_stderr_data(str![[r#"
 [COMPILING] foo v0.1.0 ([ROOT]/foo)
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[EXECUTABLE] unittests src/main.rs (target/debug/build/foo/[HASH]/out/foo-[HASH][EXE])
+[EXECUTABLE] unittests src/main.rs (target/debug/deps/foo-[HASH][EXE])
 
 "#]])
         .run();

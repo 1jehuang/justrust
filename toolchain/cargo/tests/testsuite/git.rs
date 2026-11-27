@@ -1821,7 +1821,7 @@ fn dev_deps_with_testing() {
 [COMPILING] bar v0.5.0 ([ROOTURL]/bar#[..])
 [COMPILING] foo v0.5.0 ([ROOT]/foo)
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] unittests src/main.rs (target/debug/build/foo/[HASH]/out/foo-[HASH][EXE])
+[RUNNING] unittests src/main.rs (target/debug/deps/foo-[HASH][EXE])
 
 "#]])
         .with_stdout_data(str![[r#"

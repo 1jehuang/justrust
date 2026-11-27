@@ -128,7 +128,7 @@ fn cargo_compile_incremental() {
 [COMPILING] foo v0.5.0 ([ROOT]/foo)
 [RUNNING] `rustc [..] -C incremental=[ROOT]/foo/target/debug/incremental[..]`
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] `[ROOT]/foo/target/debug/build/foo/[HASH]/out/foo-[HASH][EXE]`
+[RUNNING] `[ROOT]/foo/target/debug/deps/foo-[HASH][EXE]`
 
 "#]])
         .run();

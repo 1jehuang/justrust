@@ -2449,7 +2449,7 @@ fn testing_and_such() {
 [RUNNING] `rustc --crate-name foo [..]`
 [RUNNING] `rustc --crate-name foo [..]`
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] `[ROOT]/foo/target/debug/build/foo/[HASH]/out/foo-[HASH][EXE]`
+[RUNNING] `[ROOT]/foo/target/debug/deps/foo-[HASH][EXE]`
 [DOCTEST] foo
 [RUNNING] `rustdoc [..]--test [..]`
 
@@ -3561,8 +3561,8 @@ fn cfg_test() {
 [RUNNING] `rustc --crate-name foo [..] --cfg foo[..]`
 [RUNNING] `rustc --crate-name test [..] --cfg foo[..]`
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] `[ROOT]/foo/target/debug/build/foo/[HASH]/out/foo-[HASH][EXE]`
-[RUNNING] `[ROOT]/foo/target/debug/build/foo/[HASH]/out/test-[HASH][EXE]`
+[RUNNING] `[ROOT]/foo/target/debug/deps/foo-[HASH][EXE]`
+[RUNNING] `[ROOT]/foo/target/debug/deps/test-[HASH][EXE]`
 [DOCTEST] foo
 [RUNNING] `rustdoc [..]--cfg foo[..]`
 
@@ -3697,8 +3697,8 @@ fn cfg_override_test() {
 [RUNNING] `rustc --crate-name foo[..]`
 [RUNNING] `rustc --crate-name test[..]`
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] `[ROOT]/foo/target/debug/build/foo/[HASH]/out/foo-[HASH][EXE]`
-[RUNNING] `[ROOT]/foo/target/debug/build/foo/[HASH]/out/test-[HASH][EXE]`
+[RUNNING] `[ROOT]/foo/target/debug/deps/foo-[HASH][EXE]`
+[RUNNING] `[ROOT]/foo/target/debug/deps/test-[HASH][EXE]`
 [DOCTEST] foo
 [RUNNING] `rustdoc [..] --cfg foo[..]`
 
@@ -3856,8 +3856,8 @@ fn env_test() {
 [RUNNING] `rustc --crate-name foo[..]`
 [RUNNING] `rustc --crate-name test[..]`
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] `[ROOT]/foo/target/debug/build/foo/[HASH]/out/foo-[HASH][EXE]`
-[RUNNING] `[ROOT]/foo/target/debug/build/foo/[HASH]/out/test-[HASH][EXE]`
+[RUNNING] `[ROOT]/foo/target/debug/deps/foo-[HASH][EXE]`
+[RUNNING] `[ROOT]/foo/target/debug/deps/test-[HASH][EXE]`
 [DOCTEST] foo
 [RUNNING] `rustdoc --edition=2015 --crate-type lib --color auto --crate-name foo[..]`
 
@@ -3981,7 +3981,7 @@ fn flags_go_into_tests() {
 [RUNNING] `rustc [..] src/lib.rs [..] -L [ROOT]/foo/link-dir`
 [RUNNING] `rustc [..] tests/foo.rs [..] -L [ROOT]/foo/link-dir`
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] `[ROOT]/foo/target/debug/build/foo/[HASH]/out/foo-[HASH][EXE]`
+[RUNNING] `[ROOT]/foo/target/debug/deps/foo-[HASH][EXE]`
 
 "#]])
         .with_stdout_data(str![[r#"
@@ -4000,7 +4000,7 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 [COMPILING] b v0.5.0 ([ROOT]/foo/b)
 [RUNNING] `rustc --crate-name b [..] -L [ROOT]/foo/link-dir`
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] `[ROOT]/foo/target/debug/build/b/[HASH]/out/b-[HASH][EXE]`
+[RUNNING] `[ROOT]/foo/target/debug/deps/b-[HASH][EXE]`
 
 "#]])
         .with_stdout_data(str![[r#"

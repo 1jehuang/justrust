@@ -347,9 +347,9 @@ fn profile_selection_test() {
 [RUNNING] `[..] rustc --crate-name foo --edition=2015 src/main.rs [..]--emit=[..]link[..]-C codegen-units=3 -C debuginfo=2 [..]--test [..]`
 [RUNNING] `[..] rustc --crate-name foo --edition=2015 src/main.rs [..]--crate-type bin --emit=[..]link[..] -C panic=abort[..]-C codegen-units=3 -C debuginfo=2 [..]`
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] `[..][ROOT]/foo/target/debug/build/foo/[HASH]/out/foo-[HASH][EXE]`
-[RUNNING] `[..][ROOT]/foo/target/debug/build/foo/[HASH]/out/foo-[HASH][EXE]`
-[RUNNING] `[..][ROOT]/foo/target/debug/build/foo/[HASH]/out/test1-[HASH][EXE]`
+[RUNNING] `[..][ROOT]/foo/target/debug/deps/foo-[HASH][EXE]`
+[RUNNING] `[..][ROOT]/foo/target/debug/deps/foo-[HASH][EXE]`
+[RUNNING] `[..][ROOT]/foo/target/debug/deps/test1-[HASH][EXE]`
 [DOCTEST] foo
 [RUNNING] `[..] rustdoc [..]--test [..]
 
@@ -362,9 +362,9 @@ fn profile_selection_test() {
 [FRESH] bar v0.0.1 ([ROOT]/foo/bar)
 [FRESH] foo v0.0.1 ([ROOT]/foo)
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] `[..][ROOT]/foo/target/debug/build/foo/[HASH]/out/foo-[HASH][EXE]`
-[RUNNING] `[..][ROOT]/foo/target/debug/build/foo/[HASH]/out/foo-[HASH][EXE]`
-[RUNNING] `[..][ROOT]/foo/target/debug/build/foo/[HASH]/out/test1-[HASH][EXE]`
+[RUNNING] `[..][ROOT]/foo/target/debug/deps/foo-[HASH][EXE]`
+[RUNNING] `[..][ROOT]/foo/target/debug/deps/foo-[HASH][EXE]`
+[RUNNING] `[..][ROOT]/foo/target/debug/deps/test1-[HASH][EXE]`
 [DOCTEST] foo
 [RUNNING] `[..] rustdoc [..]--test [..]
 
@@ -420,9 +420,9 @@ fn profile_selection_test_release() {
 [RUNNING] `[..] rustc --crate-name ex1 --edition=2015 examples/ex1.rs [..]--crate-type bin --emit=[..]link[..] -C opt-level=3[..]-C codegen-units=2 [..]`
 [RUNNING] `[..] rustc --crate-name foo --edition=2015 src/main.rs [..]--crate-type bin --emit=[..]link[..] -C opt-level=3 -C panic=abort[..]-C codegen-units=2 [..]`
 [FINISHED] `release` profile [optimized] target(s) in [ELAPSED]s
-[RUNNING] `[..][ROOT]/foo/target/release/build/foo/[HASH]/out/foo-[HASH][EXE]`
-[RUNNING] `[..][ROOT]/foo/target/release/build/foo/[HASH]/out/foo-[HASH][EXE]`
-[RUNNING] `[..][ROOT]/foo/target/release/build/foo/[HASH]/out/test1-[HASH][EXE]`
+[RUNNING] `[..][ROOT]/foo/target/release/deps/foo-[HASH][EXE]`
+[RUNNING] `[..][ROOT]/foo/target/release/deps/foo-[HASH][EXE]`
+[RUNNING] `[..][ROOT]/foo/target/release/deps/test1-[HASH][EXE]`
 [DOCTEST] foo
 [RUNNING] `[..] rustdoc [..]--test [..]`
 
@@ -435,9 +435,9 @@ fn profile_selection_test_release() {
 [FRESH] bar v0.0.1 ([ROOT]/foo/bar)
 [FRESH] foo v0.0.1 ([ROOT]/foo)
 [FINISHED] `release` profile [optimized] target(s) in [ELAPSED]s
-[RUNNING] `[..][ROOT]/foo/target/release/build/foo/[HASH]/out/foo-[HASH][EXE]`
-[RUNNING] `[..][ROOT]/foo/target/release/build/foo/[HASH]/out/foo-[HASH][EXE]`
-[RUNNING] `[..][ROOT]/foo/target/release/build/foo/[HASH]/out/test1-[HASH][EXE]`
+[RUNNING] `[..][ROOT]/foo/target/release/deps/foo-[HASH][EXE]`
+[RUNNING] `[..][ROOT]/foo/target/release/deps/foo-[HASH][EXE]`
+[RUNNING] `[..][ROOT]/foo/target/release/deps/test1-[HASH][EXE]`
 [DOCTEST] foo
 [RUNNING] `[..] rustdoc [..]--test [..]
 
@@ -491,9 +491,9 @@ fn profile_selection_bench() {
 [RUNNING] `[..] rustc --crate-name foo --edition=2015 src/main.rs [..]--emit=[..]link[..] -C opt-level=3[..]-C codegen-units=4 --test [..]`
 [RUNNING] `[..] rustc --crate-name foo --edition=2015 src/main.rs [..]--crate-type bin --emit=[..]link[..] -C opt-level=3 -C panic=abort[..]-C codegen-units=4 [..]`
 [FINISHED] `bench` profile [optimized] target(s) in [ELAPSED]s
-[RUNNING] `[..][ROOT]/foo/target/release/build/foo/[HASH]/out/foo-[HASH][EXE] --bench`
-[RUNNING] `[..][ROOT]/foo/target/release/build/foo/[HASH]/out/foo-[HASH][EXE] --bench`
-[RUNNING] `[..][ROOT]/foo/target/release/build/foo/[HASH]/out/bench1-[HASH][EXE] --bench`
+[RUNNING] `[..][ROOT]/foo/target/release/deps/foo-[HASH][EXE] --bench`
+[RUNNING] `[..][ROOT]/foo/target/release/deps/foo-[HASH][EXE] --bench`
+[RUNNING] `[..][ROOT]/foo/target/release/deps/bench1-[HASH][EXE] --bench`
 
 "#]].unordered())
         .run();
@@ -504,9 +504,9 @@ fn profile_selection_bench() {
 [FRESH] bar v0.0.1 ([ROOT]/foo/bar)
 [FRESH] foo v0.0.1 ([ROOT]/foo)
 [FINISHED] `bench` profile [optimized] target(s) in [ELAPSED]s
-[RUNNING] `[..][ROOT]/foo/target/release/build/foo/[HASH]/out/foo-[HASH][EXE] --bench`
-[RUNNING] `[..][ROOT]/foo/target/release/build/foo/[HASH]/out/foo-[HASH][EXE] --bench`
-[RUNNING] `[..][ROOT]/foo/target/release/build/foo/[HASH]/out/bench1-[HASH][EXE] --bench`
+[RUNNING] `[..][ROOT]/foo/target/release/deps/foo-[HASH][EXE] --bench`
+[RUNNING] `[..][ROOT]/foo/target/release/deps/foo-[HASH][EXE] --bench`
+[RUNNING] `[..][ROOT]/foo/target/release/deps/bench1-[HASH][EXE] --bench`
 
 "#]]
             .unordered(),

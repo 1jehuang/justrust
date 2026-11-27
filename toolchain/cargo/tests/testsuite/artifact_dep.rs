@@ -956,7 +956,7 @@ fn allow_artifact_and_no_artifact_dep_to_same_package_within_different_dep_categ
 [COMPILING] bar v0.5.0 ([ROOT]/foo/bar)
 [COMPILING] foo v0.0.0 ([ROOT]/foo)
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] unittests src/lib.rs (target/debug/build/foo/[HASH]/out/foo-[HASH][EXE])
+[RUNNING] unittests src/lib.rs (target/debug/deps/foo-[HASH][EXE])
 [DOCTEST] foo
 
 "#]])
@@ -2250,8 +2250,8 @@ fn env_vars_and_build_products_for_various_build_targets() {
 [COMPILING] bar v0.5.0 ([ROOT]/foo/bar)
 [COMPILING] foo v0.0.0 ([ROOT]/foo)
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[RUNNING] unittests src/lib.rs (target/debug/build/foo/[HASH]/out/foo-[HASH][EXE])
-[RUNNING] tests/main.rs (target/debug/build/foo/[HASH]/out/main-[HASH][EXE])
+[RUNNING] unittests src/lib.rs (target/debug/deps/foo-[HASH][EXE])
+[RUNNING] tests/main.rs (target/debug/deps/main-[HASH][EXE])
 [DOCTEST] foo
 
 "#]])

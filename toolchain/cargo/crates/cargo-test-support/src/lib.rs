@@ -1426,6 +1426,20 @@ pub trait TestEnvCommandExt: Sized {
             .env("__CARGO_TEST_DISABLE_GLOBAL_KNOWN_HOST", "1")
             // Set retry sleep to 1 millisecond.
             .env("__CARGO_TEST_FIXED_RETRY_SLEEP_MS", "1")
+            // justrust: tests assert plain cargo's output. With the fork
+            // server on, the server a command starts as it exits resolves
+            // under the package cache lock, so the test's next command can
+            // print `[BLOCKING] waiting for file lock on package cache`, and
+            // every test leaves files in the shared runtime directory.
+            // `JUSTRUST_TEST_CARGO_DAEMON=1` runs the suite through it.
+            .env(
+                "JUSTRUST_CARGO_DAEMON",
+                if env::var_os("JUSTRUST_TEST_CARGO_DAEMON").is_some_and(|v| v == "1") {
+                    "1"
+                } else {
+                    "0"
+                },
+            )
             // Setting this to a large number helps avoid problems with long
             // paths getting trimmed in snapshot tests.
             //

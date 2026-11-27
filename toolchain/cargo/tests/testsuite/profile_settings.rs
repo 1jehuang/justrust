@@ -433,9 +433,9 @@ fn panic_unwind_does_not_build_twice() {
 [RUNNING] `rustc --crate-name foo --edition=2015 src/main.rs [..] --test [..]`
 [RUNNING] `rustc --crate-name t1 --edition=2015 tests/t1.rs [..]`
 [FINISHED] `test` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
-[EXECUTABLE] `[ROOT]/foo/target/debug/build/foo/[HASH]/out/foo-[HASH][EXE]`
-[EXECUTABLE] `[ROOT]/foo/target/debug/build/foo/[HASH]/out/foo-[HASH][EXE]`
-[EXECUTABLE] `[ROOT]/foo/target/debug/build/foo/[HASH]/out/t1-[HASH][EXE]`
+[EXECUTABLE] `[ROOT]/foo/target/debug/deps/foo-[HASH][EXE]`
+[EXECUTABLE] `[ROOT]/foo/target/debug/deps/foo-[HASH][EXE]`
+[EXECUTABLE] `[ROOT]/foo/target/debug/deps/t1-[HASH][EXE]`
 
 "#]]
             .unordered(),
