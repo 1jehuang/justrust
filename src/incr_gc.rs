@@ -52,12 +52,15 @@ const MAX_AGE_DAYS: f64 = 3.0;
 /// this long without use (`JUSTRUST_INCR_GC_SUPERSEDED_HOURS`).
 const SUPERSEDED_HOURS: f64 = 6.0;
 /// Size cap of one incremental directory (`JUSTRUST_INCR_GC_MAX_GB`, `0` = no
-/// cap).
+/// cap). The hosted stores were 6 to 8 GB of live state when this was set.
 const MAX_GB: f64 = 10.0;
-/// A directory used this recently is some build's warm state: never removed.
+/// A directory used this recently is some build's warm state: never removed,
+/// over the cap or not.
 const MIN_IDLE_SECS: f64 = 3600.0;
+/// At most one background collection per directory in this long.
 const GC_INTERVAL_SECS: u64 = 3600;
-/// Stamp and single-collector lock, inside the incremental directory.
+/// Stamp and single-collector lock, inside the incremental directory. rustc
+/// only looks at crate directories there.
 const STAMP: &str = ".justrust-incr-gc";
 
 #[derive(Debug, Clone, Copy)]
