@@ -1127,6 +1127,16 @@ fn record(
         // Detached and at most hourly; never delays or fails this run.
         slots::maybe_gc_background(&s.info);
     }
+    // Stale incremental state: detached, at most hourly per directory.
+    let incr_target = match &slot {
+        Some(s) => {
+            crate::incr_gc::target_base(Path::new(&s.info.target_dir), s.info.slot.is_some())
+        }
+        None => std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| Path::new(&meta.cwd).join("target")),
+    };
+    crate::incr_gc::maybe_background(Some(&incr_target));
     trace.mark("cleanup");
     Ok(code)
 }

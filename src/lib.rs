@@ -31,6 +31,7 @@ mod findings;
 mod hints;
 mod history;
 mod hybrid;
+mod incr_gc;
 mod install;
 mod ios_tools;
 mod linker;
@@ -344,6 +345,19 @@ enum Command {
         /// Internal: background GC of the slots under this dir.
         #[arg(long, hide = true)]
         gc_root: Option<PathBuf>,
+    },
+    /// Collect stale incremental compilation state: crate directories no
+    /// build has used for days, or that a newer crate id replaced.
+    IncrGc {
+        /// Incremental directories (`.../incremental`). Default: this
+        /// workspace's target dir and slots, and the hosted shared stores.
+        roots: Vec<PathBuf>,
+        /// Report what would be removed and delete nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Internal: detached run after a build.
+        #[arg(long, hide = true)]
+        background: bool,
     },
     /// Show the shared dependency cache: size, entries, hit rate.
     Cache {
@@ -1104,6 +1118,10 @@ fn command_name(c: &Command) -> Option<&'static str> {
             gc_root: Some(_), ..
         } => return None,
         Command::Slots { .. } => "slots",
+        Command::IncrGc {
+            background: true, ..
+        } => return None,
+        Command::IncrGc { .. } => "incr-gc",
         Command::Cache { auto: true, .. } => return None,
         Command::Cache { .. } => "cache",
         Command::Early { .. } => "early",
@@ -1239,6 +1257,11 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             du,
             gc_root,
         } => slots::command(clean, gc, du, gc_root)?,
+        Command::IncrGc {
+            roots,
+            dry_run,
+            background,
+        } => incr_gc::command(roots, dry_run, background)?,
         Command::Cache {
             prune,
             clear,
