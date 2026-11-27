@@ -74,7 +74,11 @@ const MIN_GAIN_SECS: f64 = 0.15;
 /// Fixed cost of a fetch (round trip, unpack) in seconds.
 const FETCH_FIXED_SECS: f64 = 0.08;
 /// Key set refreshed at most this often.
-const KEYSET_TTL: Duration = Duration::from_secs(5);
+const KEYSET_TTL: Duration = Duration::from_secs(30);
+/// Keep ruling out absent keys with the previous key set while a background
+/// refresh is in flight, up to this age. Returning `None` during a refresh
+/// sends every concurrent rustc shim on a WAN round trip (`miss-peer`).
+const KEYSET_MAX_STALE: Duration = Duration::from_secs(120);
 /// Most entries one background push or pull moves.
 const SYNC_MAX_ITEMS: usize = 400;
 
@@ -744,7 +748,8 @@ impl Relay {
                 me.keys_loading.store(false, Ordering::SeqCst);
             });
         }
-        cur.filter(|_| !stale).map(|(_, k)| k)
+        cur.filter(|(t, _)| t.elapsed() <= KEYSET_MAX_STALE)
+            .map(|(_, k)| k)
     }
 
     /// Forget the peer's key set (it just gained entries).
