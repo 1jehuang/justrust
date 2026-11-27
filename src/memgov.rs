@@ -659,8 +659,12 @@ mod linux {
         }
 
         fn unlock(&mut self) {
-            // Closing the only descriptor of this open file releases it.
-            self.lock = None;
+            // Explicitly unlock before closing: a concurrent fork() in another
+            // thread duplicates this fd until exec(), keeping the flock held if
+            // we only rely on close().
+            if let Some(file) = self.lock.take() {
+                let _ = file.unlock();
+            }
         }
     }
 

@@ -1084,7 +1084,16 @@ mod tests {
         index.write_all(b"{}\n").unwrap();
         assert!(wake.drain().unwrap());
         drop(index);
-        assert!(wake.drain().unwrap());
+        // IN_CLOSE_WRITE fires once the last descriptor on the open file closes;
+        // a sibling test forking a child can hold the O_CLOEXEC fd until exec().
+        let close_wait = std::time::Instant::now();
+        while !wake.drain().unwrap() {
+            assert!(
+                close_wait.elapsed() < std::time::Duration::from_secs(5),
+                "IN_CLOSE_WRITE did not arrive after closing index.jsonl"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         std::fs::write(dir.join("index.tmp"), "replacement").unwrap();
         std::fs::rename(dir.join("index.tmp"), dir.join("index.jsonl")).unwrap();
         assert!(wake.drain().unwrap());

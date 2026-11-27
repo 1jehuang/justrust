@@ -2732,11 +2732,15 @@ mod tests {
         assert!(join_identical(&root, 4, "other").0.is_none());
         let t = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(300));
+            let _ = held.unlock();
             drop(held);
         });
         let (joined, waited) = join_identical(&root, 4, &key);
-        assert_eq!(joined.map(|j| j.0), Some(1));
+        let (idx, joined_lock) = joined.expect("should join slot 1");
+        assert_eq!(idx, 1);
         assert!(waited >= 0.2, "waited {waited}");
+        let _ = joined_lock.unlock();
+        drop(joined_lock);
         t.join().unwrap();
         // The same command on other sources (it started before an edit):
         // waiting for it would end in compiling anyway.
@@ -2756,8 +2760,10 @@ mod tests {
             // Let it through, then take the lock back for the next round.
             let _ = held.unlock();
             let got = j.join().unwrap();
-            assert_eq!(got.as_ref().map(|j| j.0), Some(1));
-            drop(got);
+            let (idx, got_lock) = got.expect("should join slot 1");
+            assert_eq!(idx, 1);
+            let _ = got_lock.unlock();
+            drop(got_lock);
             held.lock().unwrap();
         }
         drop(held);
