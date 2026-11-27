@@ -136,8 +136,13 @@ download checksum, release marker and exact executable bytes. Its current
 `--activate` path runs a smoke workload before replacing the local PATH client,
 then another smoke workload afterwards. This is post-publication artifact
 verification, not a global publication gate and not full client-suite coverage.
-The release workflow calls `.github/workflows/client-production-tests.yml` after
-GitHub release creation. It waits for shared production selection, downloads the
+The release workflow calls `.github/workflows/client-production-tests.yml` as
+soon as the Linux builds of that run have published (`linux-published`). It
+does not wait for macOS or Windows runners, which can stay queued for hours.
+The legacy latest pointer still moves only after every platform has published.
+A newer release cancels older Release runs that have nothing left but queued
+macOS or Windows builds (`ci/release-run-gates.py`). The production test
+workflow waits for shared production selection, downloads the
 verified published executable, and runs the full tagged-source suite through it.
 The smoke helper alone is not full-suite acceptance.
 

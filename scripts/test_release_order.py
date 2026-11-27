@@ -47,7 +47,9 @@ class ReleaseOrderTests(unittest.TestCase):
 
     def test_postpublication_workflow_uses_exact_published_client(self):
         caller = self.job("production-tests")
-        self.assertIn("needs: [preflight, release]", caller)
+        # Acceptance waits for the Linux builds only, never for macOS or Windows.
+        self.assertIn("needs: [preflight, linux-published]", caller)
+        self.assertIn("needs: preflight", self.job("linux-published"))
         self.assertIn("uses: ./.github/workflows/client-production-tests.yml", caller)
         self.assertIn("tag: ${{ needs.preflight.outputs.tag }}", caller)
         self.assertIn("sha: ${{ needs.preflight.outputs.sha }}", caller)
