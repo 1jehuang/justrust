@@ -223,7 +223,7 @@ pub fn lexical_normalize(p: &Path) -> PathBuf {
 pub fn scan(root: &Path) -> Result<Scan> {
     let mut out = Scan::default();
     let ignore = JustrustIgnore::load(root);
-    let (listed, locks) = discover_source_entries(root);
+    let (listed, locks) = discover_source_entries(root, &ignore);
     let rels: Vec<PathBuf> = match listed {
         Ok(o) if o.status.success() => o
             .stdout
@@ -275,17 +275,23 @@ pub fn scan(root: &Path) -> Result<Scan> {
     Ok(out)
 }
 
-fn discover_source_entries(root: &Path) -> (std::io::Result<std::process::Output>, Vec<PathBuf>) {
+fn discover_source_entries(
+    root: &Path,
+    ignore: &JustrustIgnore,
+) -> (std::io::Result<std::process::Output>, Vec<PathBuf>) {
     // Both queries are fresh and read-only. Neither query depends on the other,
     // and metadata is still observed after both complete. A source tree changing
     // during discovery has never been an atomic snapshot, even when sequential.
+    let excludes = ignore.git_exclude_pathspecs();
     std::thread::scope(|scope| {
         let locks = std::thread::Builder::new().spawn_scoped(scope, || ignored_lockfiles(root));
-        let listed = Command::new("git")
-            .args(["ls-files", "-co", "--exclude-standard", "-z"])
-            .current_dir(root)
-            .stderr(Stdio::null())
-            .output();
+        let mut cmd = Command::new("git");
+        cmd.args(["ls-files", "-co", "--exclude-standard", "-z"]);
+        if !excludes.is_empty() {
+            cmd.args(["--", "."]);
+            cmd.args(&excludes);
+        }
+        let listed = cmd.current_dir(root).stderr(Stdio::null()).output();
         (listed, complete_ignored_lockfiles(root, locks))
     })
 }
@@ -452,6 +458,18 @@ impl JustrustIgnore {
             }
         }
         Self { rules }
+    }
+
+    /// Pathspec excludes for `git ls-files` so ignored trees are not enumerated
+    /// or allocated in Rust during cold/repair/gitignore rescans. Only anchored
+    /// literal rules are forwarded; glob and unanchored rules still run in
+    /// [`Self::matches`].
+    fn git_exclude_pathspecs(&self) -> Vec<String> {
+        self.rules
+            .iter()
+            .filter(|r| r.anchored && !r.pattern.contains(['*', '?', '[', ']']))
+            .map(|r| format!(":(exclude,literal){}", r.pattern))
+            .collect()
     }
 
     pub(crate) fn matches(&self, rel: &Path) -> bool {
@@ -2463,7 +2481,8 @@ mod tests {
             let serial_locks = ignored_lockfiles(&root);
             serial_times.push(start.elapsed().as_nanos());
             let start = Instant::now();
-            let (parallel_list, parallel_locks) = discover_source_entries(&root);
+            let (parallel_list, parallel_locks) =
+                discover_source_entries(&root, &JustrustIgnore::load(&root));
             let parallel_list = parallel_list.unwrap();
             assert!(parallel_list.status.success());
             parallel_times.push(start.elapsed().as_nanos());
@@ -2865,6 +2884,74 @@ mod tests {
         assert!(!remote.join("toolchain/rustc/big.rs").exists());
         assert!(!remote.join("bench/results/out.json").exists());
         assert!(!remote.join("src/scratch.tmp").exists());
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn git_ls_files_uses_justrustignore_pathspecs_and_keeps_excluded_root_packages() {
+        let d = std::env::temp_dir().join(format!("jr-git-ignore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let repo = d.join("repo");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::create_dir_all(repo.join("toolchain/cargo/src")).unwrap();
+        std::fs::create_dir_all(repo.join("bench/results")).unwrap();
+        std::fs::write(
+            repo.join(".justrustignore"),
+            "/toolchain/\n/bench/results/\n*.tmp\n",
+        )
+        .unwrap();
+        std::fs::write(repo.join("src/lib.rs"), "pub fn ok() {}\n").unwrap();
+        std::fs::write(repo.join("src/scratch.tmp"), "ignored\n").unwrap();
+        std::fs::write(
+            repo.join("toolchain/cargo/Cargo.toml"),
+            "[package]\nname = \"c\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(repo.join("toolchain/cargo/src/lib.rs"), "pub fn c() {}\n").unwrap();
+        std::fs::write(repo.join("bench/results/out.json"), "{}\n").unwrap();
+
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?} failed");
+        };
+        git(&["init", "-q"]);
+        git(&["add", "-A"]);
+
+        let ignore = JustrustIgnore::load(&repo);
+        assert_eq!(
+            ignore.git_exclude_pathspecs(),
+            vec![
+                ":(exclude,literal)toolchain",
+                ":(exclude,literal)bench/results",
+            ]
+        );
+
+        let scanned = scan(&repo).unwrap();
+        assert!(scanned.files.contains_key(Path::new("src/lib.rs")));
+        assert!(
+            !scanned
+                .files
+                .contains_key(Path::new("toolchain/cargo/src/lib.rs"))
+        );
+        assert!(
+            !scanned
+                .files
+                .contains_key(Path::new("bench/results/out.json"))
+        );
+        assert!(!scanned.files.contains_key(Path::new("src/scratch.tmp")));
+
+        // An excluded-root package inside `/toolchain/` has no `.justrustignore`
+        // of its own, so scanning it directly still mirrors all its files.
+        let sub = scan(&repo.join("toolchain/cargo")).unwrap();
+        assert!(sub.files.contains_key(Path::new("Cargo.toml")));
+        assert!(sub.files.contains_key(Path::new("src/lib.rs")));
 
         let _ = std::fs::remove_dir_all(&d);
     }
