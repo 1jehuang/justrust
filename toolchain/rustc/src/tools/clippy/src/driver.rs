@@ -7,6 +7,7 @@
 
 // FIXME: switch to something more ergonomic here, once available.
 // (Currently there is no way to opt into sysroot crates without `extern crate`.)
+extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_interface;
 extern crate rustc_session;
@@ -25,8 +26,160 @@ use rustc_span::symbol::Symbol;
 use std::env;
 use std::fs::read_to_string;
 use std::io::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Instant;
+
+/// justrust: whether this driver runs from a justrust toolchain inside a justrust build.
+///
+/// Cargo runs workspace units as `clippy-driver $RUSTC <args>` and the driver compiles in
+/// process, so the justrust `rustc` shim never sees them. What the shim does for ordinary
+/// units (parallel front end, phase ledger) is therefore done here, under the same condition.
+fn jr_toolchain(argv0: &str) -> bool {
+    fn in_jr_sysroot(exe: &Path) -> bool {
+        exe.parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .is_some_and(|name| name.to_string_lossy().starts_with("jr-"))
+    }
+    env::var_os("JUSTRUST_TOOLCHAIN_JR").is_some()
+        && (in_jr_sysroot(Path::new(argv0)) || env::current_exe().is_ok_and(|exe| in_jr_sysroot(&exe)))
+}
+
+/// justrust: the front-end thread count for a workspace unit, or `None` to leave it alone.
+///
+/// The same rule as the shim: `setting` is `JUSTRUST_FRONTEND_THREADS` (`0` or an invalid value
+/// turns it off), the default is half the CPUs up to 16, registry crates are skipped, and a unit
+/// that already picks a thread count keeps it. `-Zthreads` is not part of any cache key.
+fn jr_frontend_threads(
+    args: &[String],
+    setting: Option<&str>,
+    cpus: usize,
+    manifest_dir: Option<&Path>,
+    cargo_home: Option<&Path>,
+) -> Option<usize> {
+    let threads = match setting {
+        Some(value) => value.parse::<usize>().ok()?,
+        None => (cpus / 2).clamp(1, 16),
+    };
+    let manifest_dir = manifest_dir?;
+    if threads < 2 || cargo_home.is_some_and(|home| manifest_dir.starts_with(home)) {
+        return None;
+    }
+    let mut after_z = false;
+    for arg in args {
+        // An argument file can carry a thread count: defer instead of parsing it differently.
+        if arg.starts_with("-Zthreads")
+            || arg.starts_with("--jobs-frontend")
+            || arg.starts_with('@')
+            || (after_z && arg.starts_with("threads"))
+        {
+            return None;
+        }
+        after_z = arg == "-Z";
+    }
+    Some(threads)
+}
+
+/// justrust: where this unit's phase ledger goes, `<run dir>/phases/<pid>.tsv`, which is where
+/// the build recorder looks for it. `JUSTRUST_PASSES=0` turns it off.
+fn jr_phase_ledger_path(run_dir: Option<&Path>, passes: Option<&str>, pid: u32) -> Option<PathBuf> {
+    if matches!(passes, Some("0" | "off" | "false" | "no")) {
+        return None;
+    }
+    Some(run_dir?.join("phases").join(format!("{pid}.tsv")))
+}
+
+/// justrust: apply the parallel front end and the phase ledger to a wrapper-mode unit.
+///
+/// Neither is visible to Cargo: the thread count is appended in process and the ledger is an
+/// environment variable, so fingerprints, cache keys and incremental state are unchanged.
+fn jr_prepare_unit(args: &mut Vec<String>) {
+    let cargo_home = env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")));
+    let threads = env::var_os("CARGO_CRATE_NAME").and_then(|_| {
+        jr_frontend_threads(
+            args,
+            env::var("JUSTRUST_FRONTEND_THREADS")
+                .or_else(|_| env::var("JUSTRUST_RELEASE_FRONTEND_THREADS"))
+                .ok()
+                .as_deref(),
+            std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
+            env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from).as_deref(),
+            cargo_home.as_deref(),
+        )
+    });
+    if let Some(threads) = threads {
+        args.push(format!("-Zthreads={threads}"));
+    }
+
+    let ledger = jr_phase_ledger_path(
+        env::var_os("JUSTRUST_RUN_DIR").map(PathBuf::from).as_deref(),
+        env::var("JUSTRUST_PASSES").ok().as_deref(),
+        std::process::id(),
+    )
+    .filter(|path| path.parent().is_some_and(|dir| std::fs::create_dir_all(dir).is_ok()));
+    // SAFETY: the driver is still single threaded here, before the compiler session starts.
+    unsafe {
+        match &ledger {
+            Some(path) => env::set_var("JUSTRUST_RUSTC_PHASES_FILE", path),
+            // Never inherited: a nested build must not write another unit's file.
+            None => env::remove_var("JUSTRUST_RUSTC_PHASES_FILE"),
+        }
+    }
+    // The recorder only sees the command line Cargo spawned, which has no thread count.
+    if let Some(path) = ledger
+        && let Some(threads) = threads
+    {
+        let _ = std::fs::write(path.with_extension("driver"), format!("frontend_threads\t{threads}\n"));
+    }
+}
+
+#[test]
+fn test_jr_frontend_threads() {
+    let args = |extra: &[&str]| -> Vec<String> {
+        ["--crate-name", "foo", "src/lib.rs"]
+            .iter()
+            .chain(extra)
+            .map(ToString::to_string)
+            .collect()
+    };
+    let local = Some(Path::new("/work/foo"));
+    let home = Some(Path::new("/home/u/.cargo"));
+    let threads = |extra: &[&str], setting, cpus| jr_frontend_threads(&args(extra), setting, cpus, local, home);
+
+    assert_eq!(threads(&[], None, 96), Some(16));
+    assert_eq!(threads(&[], None, 8), Some(4));
+    assert_eq!(threads(&[], None, 2), None);
+    assert_eq!(threads(&[], Some("6"), 96), Some(6));
+    assert_eq!(threads(&[], Some("0"), 96), None);
+    assert_eq!(threads(&[], Some("many"), 96), None);
+    for explicit in [
+        &["-Zthreads=2"][..],
+        &["-Z", "threads=2"],
+        &["--jobs-frontend", "2"],
+        &["--jobs-frontend=2"],
+        &["@args"],
+    ] {
+        assert_eq!(threads(explicit, None, 96), None, "{explicit:?}");
+    }
+    assert_eq!(threads(&["-Z", "time-passes"], None, 96), Some(16));
+    let registry = Some(Path::new("/home/u/.cargo/registry/src/index/foo-1.0.0"));
+    assert_eq!(jr_frontend_threads(&args(&[]), None, 96, registry, home), None);
+    assert_eq!(jr_frontend_threads(&args(&[]), None, 96, None, home), None);
+}
+
+#[test]
+fn test_jr_phase_ledger_path() {
+    let run = Some(Path::new("/runs/1"));
+    assert_eq!(
+        jr_phase_ledger_path(run, None, 42),
+        Some(PathBuf::from("/runs/1/phases/42.tsv"))
+    );
+    assert_eq!(jr_phase_ledger_path(run, Some("0"), 42), None);
+    assert_eq!(jr_phase_ledger_path(None, None, 42), None);
+}
 
 /// If a command-line option matches `find_arg`, then apply the predicate `pred` on its value. If
 /// true, then return it. The parameter is assumed to be either `--arg=value` or `--arg value`.
@@ -208,6 +361,10 @@ fn display_help() -> ExitCode {
 const BUG_REPORT_URL: &str = "https://github.com/rust-lang/rust-clippy/issues/new?template=ice.yml";
 
 fn main() -> ExitCode {
+    // justrust: the phase ledger's total covers the whole driver, as in `rustc`.
+    let start_time = Instant::now();
+    rustc_data_structures::profiling::jr_phases_begin(start_time);
+
     let early_dcx = EarlyDiagCtxt::new(ErrorOutputType::default());
 
     rustc_driver::init_rustc_env_logger(&early_dcx);
@@ -220,7 +377,7 @@ fn main() -> ExitCode {
         dcx.note(format!("Clippy version: {version_info}"));
     });
 
-    rustc_driver::catch_with_exit_code(move || {
+    let exit_code = rustc_driver::catch_with_exit_code(move || {
         fn has_sysroot_arg(args: &[String]) -> bool {
             // https://doc.rust-lang.org/rustc/command-line-arguments.html#path-load-command-line-flags-from-a-path
             // Beside checking for existence of `--sysroot` on the command line, we need to
@@ -318,12 +475,23 @@ fn main() -> ExitCode {
         let clippy_enabled = !cap_lints_allow && relevant_package && !info_query;
         if clippy_enabled {
             args.extend(clippy_args);
+        }
+        // justrust: after `CLIPPY_ARGS`, so a thread count given there wins.
+        if wrapper_mode && !info_query && jr_toolchain(&orig_args[0]) {
+            jr_prepare_unit(&mut args);
+        }
+        if clippy_enabled {
             rustc_driver::compiler_entrypoint(&args, &mut ClippyCallbacks { clippy_args_var });
         } else {
             rustc_driver::compiler_entrypoint(&args, &mut RustcCallbacks { clippy_args_var });
         }
         ExitCode::SUCCESS
-    })
+    });
+
+    // justrust: per-phase totals for the build recorder. A no-op without a ledger.
+    rustc_data_structures::profiling::jr_phases_write(start_time.elapsed());
+
+    exit_code
 }
 
 #[must_use]
