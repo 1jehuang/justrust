@@ -2160,6 +2160,35 @@ fn resolve_remote_prefix(
     Ok(prefix)
 }
 
+/// How long a started agent may take to answer Hello. A healthy one answers
+/// in under a second; session recovery gives up after three 10 s attempts.
+const HELLO_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Stop the process `pid` unless `greeted` is set within `timeout`.
+/// Returns whether it gave up. `greeted` is set either way, so whoever
+/// reaps the child can tell that the watchdog is finished with its pid.
+fn stop_unless_greeted(pid: i32, greeted: &AtomicBool, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if greeted.load(Ordering::SeqCst) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if greeted.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    #[cfg(unix)]
+    // SAFETY: kill only signals. The child is not reaped before `greeted`
+    // is set, so the pid is still ours.
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+    #[cfg(windows)]
+    crate::sys::terminate(pid);
+    true
+}
+
 /// Connect to the agent (starting the machine only when `start`) and begin
 /// reading frames. Invalidate known roots: only roots needed by a build are
 /// mirrored before that build, so an unrelated old workspace cannot delay it.
@@ -2239,7 +2268,25 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
         },
         &[],
     )?;
-    let checkpoint = match read_frame(&mut stdout) {
+    // Nothing else bounds this read: every ssh step above ends within its
+    // keepalives, but a session bridge that never hears back kept the sync
+    // lock (and every build queued on it) for as long as it lived.
+    let greeted = Arc::new(AtomicBool::new(false));
+    {
+        let (greeted, pid) = (greeted.clone(), child.id() as i32);
+        std::thread::spawn(move || {
+            if stop_unless_greeted(pid, &greeted, HELLO_TIMEOUT) {
+                log(&format!(
+                    "remote agent did not answer the handshake in {}s, gave up this connect",
+                    HELLO_TIMEOUT.as_secs()
+                ));
+            }
+        });
+    }
+    let hello = read_frame(&mut stdout);
+    // From here the watchdog must never touch the pid.
+    let timed_out = greeted.swap(true, Ordering::SeqCst) && !matches!(hello, Ok(Some(_)));
+    let checkpoint = match hello {
         Ok(Some((Msg::Hello { version, caps }, _))) if version == VERSION => {
             remote_checkpoint::enabled() && caps.iter().any(|c| c == remote_checkpoint::CAP)
         }
@@ -2250,11 +2297,20 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
                 Ok(Some((Msg::Hello { version, .. }, _))) => Some(*version),
                 _ => None,
             };
-            if stamp_is_stale(answered, || {
-                crate::remote_build::remote_justrust_intact(&target)
-            }) && let Ok(d) = crate::remote::dir()
+            // An agent that never answered says nothing about its binary.
+            if !timed_out
+                && stamp_is_stale(answered, || {
+                    crate::remote_build::remote_justrust_intact(&target)
+                })
+                && let Ok(d) = crate::remote::dir()
             {
                 let _ = std::fs::remove_file(d.join("remote-justrust"));
+            }
+            if timed_out {
+                bail!(
+                    "remote agent handshake timed out after {}s",
+                    HELLO_TIMEOUT.as_secs()
+                );
             }
             bail!("remote agent handshake failed: {other:?}");
         }
@@ -4030,6 +4086,46 @@ mod tests {
             plain(&exe)
         );
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_agent_that_never_answers_is_stopped_and_one_that_answers_is_not() {
+        let silent = || {
+            Command::new("sleep")
+                .arg("600")
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap()
+        };
+        // Never answers: the blocked read ends once the bound passes.
+        let mut child = silent();
+        let mut out = child.stdout.take().unwrap();
+        let greeted = Arc::new(AtomicBool::new(false));
+        let watch = {
+            let (greeted, pid) = (greeted.clone(), child.id() as i32);
+            std::thread::spawn(move || {
+                stop_unless_greeted(pid, &greeted, Duration::from_millis(300))
+            })
+        };
+        let start = Instant::now();
+        let mut buf = [0u8; 1];
+        assert_eq!(out.read(&mut buf).unwrap(), 0);
+        assert!(start.elapsed() < Duration::from_secs(20));
+        assert!(watch.join().unwrap());
+        assert!(greeted.load(Ordering::SeqCst));
+        assert!(!child.wait().unwrap().success());
+        // Answered in time: left alone.
+        let mut child = silent();
+        let greeted = AtomicBool::new(true);
+        assert!(!stop_unless_greeted(
+            child.id() as i32,
+            &greeted,
+            Duration::from_millis(300)
+        ));
+        assert!(child.try_wait().unwrap().is_none());
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 
     #[test]
