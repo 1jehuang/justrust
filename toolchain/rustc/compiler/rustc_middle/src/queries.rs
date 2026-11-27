@@ -1745,6 +1745,16 @@ rustc_queries! {
         desc { "building specialization graph of trait `{}`", tcx.def_path_str(trait_id) }
         cache_on_disk
     }
+    /// The specialization parent of a trait impl: the impl it specializes, or
+    /// the trait itself for a root impl. `Err` if building the trait's
+    /// specialization graph reported an error.
+    ///
+    /// Callers that walk ancestors read this instead of
+    /// `specialization_graph_of`, whose value changes whenever any impl of
+    /// the trait is added or removed.
+    query specialization_parent(impl_def_id: DefId) -> Result<DefId, ErrorGuaranteed> {
+        desc { "finding the specialization parent of `{}`", tcx.def_path_str(impl_def_id) }
+    }
     query dyn_compatibility_violations(trait_id: DefId) -> &'tcx [DynCompatibilityViolation] {
         desc { "determining dyn-compatibility of trait `{}`", tcx.def_path_str(trait_id) }
     }

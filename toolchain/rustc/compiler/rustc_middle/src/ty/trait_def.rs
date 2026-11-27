@@ -291,16 +291,23 @@ impl<'tcx> TyCtxt<'tcx> {
         trait_def_id: DefId,
         self_ty: Ty<'tcx>,
     ) -> impl Iterator<Item = DefId> {
-        let impls = self.trait_impls_of(trait_def_id);
-        if let Some(simp) =
-            fast_reject::simplify_type(self, self_ty, TreatParams::InstantiateWithInfer)
-        {
-            if let Some(impls) = impls.non_blanket_impls.get(&simp) {
-                return impls.iter().copied();
-            }
-        }
-
-        [].iter().copied()
+        // Not `trait_impls_of`, for the same reason as in `for_each_relevant_impl`.
+        let simp = fast_reject::simplify_type(self, self_ty, TreatParams::InstantiateWithInfer);
+        let bucket = simp
+            .and_then(|simp| {
+                self.trait_impls_excluding_direct(trait_def_id).non_blanket_impls.get(&simp)
+            })
+            .map_or(&[][..], |impls| &impls[..]);
+        let direct = match simp {
+            Some(SimplifiedType::Adt(adt)) => self.local_direct_impls_of_adt(adt),
+            _ => &[],
+        };
+        bucket.iter().copied().chain(
+            direct
+                .iter()
+                .filter(move |&&(impl_trait, _)| impl_trait == trait_def_id)
+                .map(|&(_, impl_def_id)| impl_def_id),
+        )
     }
 
     /// Returns an iterator containing all impls for `trait_def_id`.

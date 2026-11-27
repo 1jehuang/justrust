@@ -2399,6 +2399,18 @@ pub fn provide(providers: &mut Providers) {
         local_direct_impls_of_adt: |tcx, adt| {
             tcx.local_direct_adt_impls(()).get(&adt).map_or(&[], |impls| &impls[..])
         },
+        specialization_parent: |tcx, impl_def_id| {
+            let trait_def_id = tcx.impl_trait_id(impl_def_id);
+            let graph = tcx.specialization_graph_of(trait_def_id)?;
+            // Graph construction may skip foreign impls, so resolve a foreign impl's
+            // parent from crate metadata instead; recorded foreign impls use the same
+            // value (see `record_impl_from_cstore`).
+            Ok(if impl_def_id.is_local() {
+                graph.parent(impl_def_id)
+            } else {
+                tcx.impl_parent(impl_def_id).unwrap_or(trait_def_id)
+            })
+        },
         crate_source_is_rlib_or_rmeta: |tcx, cnum| {
             let source = tcx.used_crate_source(cnum);
             source.rlib.is_some() || source.rmeta.is_some()

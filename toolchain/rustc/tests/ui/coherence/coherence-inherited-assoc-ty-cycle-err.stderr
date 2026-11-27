@@ -9,6 +9,11 @@ note: ...which requires computing whether impls specialize one another...
    |
 LL | impl<T> Trait<T> for String {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: ...which requires finding the specialization parent of `<impl at $DIR/coherence-inherited-assoc-ty-cycle-err.rs:15:1: 15:27>`...
+  --> $DIR/coherence-inherited-assoc-ty-cycle-err.rs:15:1
+   |
+LL | impl Trait<u8> for Vec<u8> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: ...which again requires building specialization graph of trait `Trait`, completing the cycle
    = note: cycle used when coherence checking all impls of trait `Trait`
    = note: for more information, see <https://rustc-dev-guide.rust-lang.org/overview.html#queries> and <https://rustc-dev-guide.rust-lang.org/query.html>

@@ -146,7 +146,6 @@ impl Node {
 pub struct Ancestors<'tcx> {
     tcx: TyCtxt<'tcx>,
     trait_def_id: DefId,
-    specialization_graph: &'tcx Graph,
     current_source: Option<Node>,
 }
 
@@ -155,14 +154,13 @@ impl Iterator for Ancestors<'_> {
     fn next(&mut self) -> Option<Node> {
         let cur = self.current_source.take();
         if let Some(Node::Impl(cur_impl)) = cur {
-            // Graph construction may skip foreign impls, so resolve a foreign impl's
-            // parent from crate metadata instead; recorded foreign impls use the same
-            // value (see `record_impl_from_cstore`).
-            let parent = if cur_impl.is_local() {
-                self.specialization_graph.parent(cur_impl)
-            } else {
-                self.tcx.impl_parent(cur_impl).unwrap_or(self.trait_def_id)
-            };
+            // A per-impl query rather than the trait's whole graph, so that a
+            // caller does not depend on unrelated impls of the trait. The graph
+            // was built without error when this iterator was created.
+            let parent = self
+                .tcx
+                .specialization_parent(cur_impl)
+                .expect("specialization graph error after `ancestors` succeeded");
 
             self.current_source = if parent == self.trait_def_id {
                 Some(Node::Trait(parent))
@@ -254,18 +252,15 @@ pub fn ancestors(
     trait_def_id: DefId,
     start_from_impl: DefId,
 ) -> Result<Ancestors<'_>, ErrorGuaranteed> {
-    let specialization_graph = tcx.specialization_graph_of(trait_def_id)?;
+    debug_assert_eq!(tcx.impl_trait_id(start_from_impl), trait_def_id);
+    // Reports whether building the trait's specialization graph failed.
+    tcx.specialization_parent(start_from_impl)?;
 
     if let Err(reported) =
         tcx.type_of(start_from_impl).instantiate_identity().skip_normalization().error_reported()
     {
         Err(reported)
     } else {
-        Ok(Ancestors {
-            tcx,
-            trait_def_id,
-            specialization_graph,
-            current_source: Some(Node::Impl(start_from_impl)),
-        })
+        Ok(Ancestors { tcx, trait_def_id, current_source: Some(Node::Impl(start_from_impl)) })
     }
 }
