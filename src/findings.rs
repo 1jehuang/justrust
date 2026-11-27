@@ -741,6 +741,9 @@ fn generalize_reason(r: &str) -> String {
     if r.contains("has changed") && r.starts_with("the file") {
         return "source file changed".into();
     }
+    if let Some(short) = crate::summary::unfinished_build_reason(r) {
+        return short.into();
+    }
     if r.contains("RUSTFLAGS") || r.contains("rustflags") {
         return "RUSTFLAGS changed".into();
     }

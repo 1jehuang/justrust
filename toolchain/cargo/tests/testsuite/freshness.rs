@@ -2046,3 +2046,41 @@ fn changing_linker() {
 "#]])
         .run();
 }
+
+/// A build that fails empties the unit's fingerprint hash and has already
+/// removed its old output. The next build names that, instead of "couldn't
+/// read metadata for file", which reads as if a finished output was deleted.
+#[cargo_test]
+fn rebuild_after_a_failed_build_names_the_unfinished_build() {
+    let p = project().file("src/main.rs", "fn main() {}").build();
+    p.cargo("build").run();
+    p.change_file("src/main.rs", "fn main() { nope }");
+    p.cargo("build")
+        .with_status(101)
+        .with_stderr_contains(
+            "[ERROR] could not compile `foo` (bin \"foo\") due to 1 previous error",
+        )
+        .run();
+    p.change_file("src/main.rs", "fn main() { }");
+    p.cargo("build -v")
+        .with_stderr_data(str![[r#"
+[DIRTY] foo v0.0.1 ([ROOT]/foo): the last build of this target failed or was stopped before it finished, so `target/debug/[..]foo[..]` does not exist
+[COMPILING] foo v0.0.1 ([ROOT]/foo)
+[RUNNING] `rustc --crate-name foo [..]`
+[FINISHED] `dev` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
+
+"#]])
+        .run();
+    // An output removed after a finished build keeps the old wording.
+    let mut removed = 0;
+    for exe in p.glob("target/debug/build/**/out/foo") {
+        std::fs::remove_file(exe.unwrap()).unwrap();
+        removed += 1;
+    }
+    assert!(removed > 0);
+    p.cargo("build -v")
+        .with_stderr_contains(
+            "[DIRTY] foo v0.0.1 ([ROOT]/foo): couldn't read metadata for file `[..]`",
+        )
+        .run();
+}

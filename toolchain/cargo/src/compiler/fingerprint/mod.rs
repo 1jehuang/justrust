@@ -1103,6 +1103,12 @@ pub enum StaleItem {
     FailedToReadMetadata {
         path: PathBuf,
     },
+    /// An output is missing and the stored fingerprint hash is empty: the
+    /// last build of this unit started (which empties the hash and removes
+    /// the old output) and then failed or was stopped.
+    UnfinishedBuild {
+        path: PathBuf,
+    },
     FileSizeChanged {
         path: PathBuf,
         old_size: u64,
@@ -1754,6 +1760,9 @@ impl StaleItem {
             StaleItem::FailedToReadMetadata { path } => {
                 info!("stale: couldn't read metadata {:?}", path);
             }
+            StaleItem::UnfinishedBuild { path } => {
+                info!("stale: last build did not finish, missing {:?}", path);
+            }
             StaleItem::ChangedFile {
                 reference,
                 reference_mtime,
@@ -2360,7 +2369,22 @@ fn _compare_old_fingerprint(
         );
     }
 
-    let reason = new_fingerprint.compare(&old_fingerprint);
+    let mut reason = new_fingerprint.compare(&old_fingerprint);
+    // justrust: an empty hash next to a missing output is what a build that
+    // started and never finished leaves behind (see `prepare_target`). Say
+    // that. "couldn't read metadata" reads like something deleted a finished
+    // output, which sends people looking for a deleter that does not exist.
+    if old_fingerprint_short.is_empty() {
+        if let DirtyReason::FsStatusOutdated(FsStatus::StaleItem(
+            StaleItem::FailedToReadMetadata { path },
+        )) = &reason
+        {
+            reason =
+                DirtyReason::FsStatusOutdated(FsStatus::StaleItem(StaleItem::UnfinishedBuild {
+                    path: path.clone(),
+                }));
+        }
+    }
     Ok(FingerprintComparison::Dirty { reason })
 }
 

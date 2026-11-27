@@ -251,6 +251,16 @@ impl DirtyReason {
                             format_args!("couldn't read metadata for file `{}`", file.display()),
                         )
                     }
+                    StaleItem::UnfinishedBuild { path } => {
+                        let file = path.strip_prefix(root).unwrap_or(&path);
+                        s.dirty_because(
+                            unit,
+                            format_args!(
+                                "the last build of this target failed or was stopped before it finished, so `{}` does not exist",
+                                file.display()
+                            ),
+                        )
+                    }
                     StaleItem::ChangedFile {
                         stale,
                         stale_mtime,

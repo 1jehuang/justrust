@@ -428,6 +428,10 @@ fn format_dirty_reason(
                     let path = path.strip_prefix(ws_root).unwrap_or(path).display();
                     format!("failed to read file metadata: {path}")
                 }
+                StaleItem::UnfinishedBuild { path } => {
+                    let path = path.strip_prefix(ws_root).unwrap_or(path).display();
+                    format!("last build did not finish, missing: {path}")
+                }
                 StaleItem::FileSizeChanged {
                     path,
                     old_size: old,

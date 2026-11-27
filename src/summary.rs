@@ -179,6 +179,37 @@ pub struct RebuildReason {
     pub reason: String,
 }
 
+/// Cargo's reason for a unit whose own output file is not there, in words
+/// that say what happened.
+///
+/// On hosted, 116 of 125 runs with "couldn't read metadata for file" in one
+/// afternoon followed a build of the same unit that had failed to compile
+/// (72) or was stopped (44). Cargo removes a unit's old output and empties
+/// its fingerprint before it runs rustc, so after such a build the output
+/// does not exist. Nothing deleted a finished output, which is what cargo's
+/// wording suggests and what people went looking for. The other 9 were the
+/// same run recorded twice or benchmark runs without unit records.
+///
+/// jr-cargo after 0.1.18 says it itself (the second form) when the
+/// fingerprint shows the last build did not finish. The older wording cannot
+/// tell that from a removed file, so it gets the hedged text.
+pub(crate) fn unfinished_build_reason(reason: &str) -> Option<&'static str> {
+    if reason.starts_with("the last build of this target failed or was stopped") {
+        return Some("its last build failed or was stopped before it finished");
+    }
+    let file = reason.strip_prefix("couldn't read metadata for file `")?;
+    let file = file.strip_suffix('`').unwrap_or(file);
+    // Only the unit's own output: not a trim-paths sidecar or similar.
+    let name = file.rsplit('/').next().unwrap_or(file);
+    let own_output = file.contains("/deps/")
+        || file.contains("/out/")
+        || name.ends_with(".rlib")
+        || name.ends_with(".rmeta");
+    (own_output && !name.ends_with(".json")).then_some(
+        "its output is missing (its last build failed or was stopped, or the file was removed)",
+    )
+}
+
 /// Non-overlapping split of wall time. Sums to `wall`.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Phases {
@@ -2167,7 +2198,7 @@ impl Summary {
     }
 
     /// Short summary of why units were rebuilt, grouped by reason.
-    fn rebuild_summary(&self) -> Option<String> {
+    pub(crate) fn rebuild_summary(&self) -> Option<String> {
         if self.rebuild_reasons.is_empty() {
             return None;
         }
@@ -2185,6 +2216,8 @@ impl Summary {
                     .nth(1)
                     .map(|f| format!("edited {f}"))
                     .unwrap_or_else(|| r.reason.clone())
+            } else if let Some(short) = unfinished_build_reason(&r.reason) {
+                short.to_owned()
             } else {
                 r.reason.chars().take(60).collect()
             };
@@ -2250,6 +2283,45 @@ fn trunc(s: &str, n: usize) -> String {
         let mut t: String = s.chars().take(n - 1).collect();
         t.push('…');
         t
+    }
+}
+
+#[cfg(test)]
+mod unfinished_build_tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_output_is_reported_as_an_unfinished_build() {
+        let old = "couldn't read metadata for file `target/justrust-slots/2/debug/build/justrust/2464d064e2fd6a10/out/justrust-2464d064e2fd6a10`";
+        let new = "the last build of this target failed or was stopped before it finished, so `target/debug/deps/libfoo-1.rlib` does not exist";
+        let mut s = Summary::default();
+        for (package, reason) in [("justrust", old), ("foo", new)] {
+            s.rebuild_reasons.push(RebuildReason {
+                package: package.into(),
+                reason: reason.into(),
+            });
+        }
+        let line = s.rebuild_summary().unwrap();
+        assert!(
+            line.contains("its output is missing (its last build failed or was stopped, or the file was removed) (justrust)"),
+            "{line}"
+        );
+        assert!(
+            line.contains("its last build failed or was stopped before it finished (foo)"),
+            "{line}"
+        );
+        assert!(!line.contains("metadata"), "{line}");
+        // Other files keep cargo's words.
+        assert_eq!(
+            unfinished_build_reason(
+                "couldn't read metadata for file `target/debug/deps/foo-1.trim-paths.json`"
+            ),
+            None
+        );
+        assert_eq!(
+            unfinished_build_reason("the file `src/lib.rs` has changed"),
+            None
+        );
     }
 }
 
