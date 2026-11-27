@@ -35,6 +35,9 @@ use std::time::{Duration, Instant};
 const WORKER_THREADS: usize = 64;
 const REFRESH_THREADS: usize = 4;
 const REFRESH_QUEUE_CAP: usize = 1024;
+const PREFETCH_THREADS: usize = 16;
+const PREFETCH_QUEUE_CAP: usize = 2048;
+const GROUP_QUEUE_CAP: usize = 32;
 const INDEX_TTL_SECS: f64 = 600.0;
 /// Oldest index the mirror serves while it refreshes in the background. The
 /// shim treats the copy it gets as current for another `INDEX_TTL_SECS`, and
@@ -180,10 +183,18 @@ enum Kind {
 /// Validate a `/v1/<rel>` request path. Only exact public store shapes are
 /// accepted; everything else is rejected with 400.
 fn validate_rel(rel: &str) -> Option<Kind> {
-    if rel == "index" || rel == "costs" {
+    if rel == "index" || rel == "costs" || rel == "g/index" {
         return Some(Kind::Mutable {
             max_bytes: MAX_INDEX_BYTES,
             ttl_secs: INDEX_TTL_SECS,
+        });
+    }
+    if let Some(rest) = rel.strip_prefix("g/")
+        && let Some(gid) = rest.strip_suffix(".txt")
+        && valid_group_id(gid)
+    {
+        return Some(Kind::Immutable {
+            max_bytes: MAX_INDEX_BYTES,
         });
     }
     if let Some(rest) = rel.strip_prefix("m/")
@@ -212,6 +223,13 @@ fn validate_rel(rel: &str) -> Option<Kind> {
         });
     }
     None
+}
+
+fn valid_group_id(gid: &str) -> bool {
+    gid.len() == 16
+        && gid
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
 type InflightGate = Arc<(Mutex<bool>, Condvar)>;
@@ -280,6 +298,10 @@ struct State {
     missing: Mutex<HashMap<String, Instant>>,
     refreshing: Mutex<HashSet<String>>,
     refresh_tx: mpsc::SyncSender<(String, Kind, PathBuf)>,
+    group_tx: mpsc::SyncSender<String>,
+    prefetch_tx: mpsc::SyncSender<(String, Kind)>,
+    prefetched_groups: Mutex<HashSet<String>>,
+    group_index: Mutex<Option<(Instant, HashMap<String, String>)>>,
     seq: AtomicU64,
     /// Upstream fetches started, for the order they try the upstreams in.
     requests: AtomicU64,
@@ -310,6 +332,7 @@ pub fn start_with(sources: Vec<Source>, cache_dir: PathBuf) -> Option<String> {
     let _ = std::fs::create_dir_all(cache_dir.join("v1/m"));
     let _ = std::fs::create_dir_all(cache_dir.join("v1/o"));
     let _ = std::fs::create_dir_all(cache_dir.join("v1/s"));
+    let _ = std::fs::create_dir_all(cache_dir.join("v1/g"));
     #[cfg(not(test))]
     if MIRROR.set(cache_dir.clone()).is_ok()
         && let Ok(mut early) = NOTED_EARLY.lock()
@@ -329,6 +352,8 @@ pub fn start_with(sources: Vec<Source>, cache_dir: PathBuf) -> Option<String> {
     let agent = ureq::Agent::new_with_config(config);
 
     let (refresh_tx, refresh_rx) = mpsc::sync_channel::<(String, Kind, PathBuf)>(REFRESH_QUEUE_CAP);
+    let (group_tx, group_rx) = mpsc::sync_channel::<String>(GROUP_QUEUE_CAP);
+    let (prefetch_tx, prefetch_rx) = mpsc::sync_channel::<(String, Kind)>(PREFETCH_QUEUE_CAP);
     let state = Arc::new(State {
         upstreams: sources.into_iter().map(Upstream::new).collect(),
         cache_dir,
@@ -337,6 +362,10 @@ pub fn start_with(sources: Vec<Source>, cache_dir: PathBuf) -> Option<String> {
         missing: Mutex::new(HashMap::new()),
         refreshing: Mutex::new(HashSet::new()),
         refresh_tx,
+        group_tx,
+        prefetch_tx,
+        prefetched_groups: Mutex::new(HashSet::new()),
+        group_index: Mutex::new(None),
         seq: AtomicU64::new(0),
         requests: AtomicU64::new(0),
     });
@@ -355,6 +384,29 @@ pub fn start_with(sources: Vec<Source>, cache_dir: PathBuf) -> Option<String> {
                     if let Ok(mut set) = state.refreshing.lock() {
                         set.remove(&rel);
                     }
+                }
+            });
+    }
+
+    {
+        let state = Arc::clone(&state);
+        let _ = std::thread::Builder::new()
+            .name("prebuilt-proxy-g".into())
+            .spawn(move || {
+                while let Ok(base) = group_rx.recv() {
+                    prefetch_group_for(&state, &base);
+                }
+            });
+    }
+    let prefetch_rx = Arc::new(Mutex::new(prefetch_rx));
+    for _ in 0..PREFETCH_THREADS {
+        let rx = Arc::clone(&prefetch_rx);
+        let state = Arc::clone(&state);
+        let _ = std::thread::Builder::new()
+            .name("prebuilt-proxy-p".into())
+            .spawn(move || {
+                while let Ok((rel, kind)) = rx.lock().ok().and_then(|g| g.recv().ok()).ok_or(()) {
+                    let _ = fetch_cached(&state, &rel, kind);
                 }
             });
     }
@@ -567,6 +619,13 @@ fn fetch_cached(state: &State, rel: &str, kind: Kind) -> FetchResult {
     }
 
     let result = fetch_upstream(state, rel, kind, &dst);
+    if matches!(result, FetchResult::Hit(_))
+        && let Some(key) = rel
+            .strip_prefix("m/")
+            .and_then(|r| r.strip_suffix(".jsonl"))
+    {
+        let _ = state.group_tx.try_send(key.to_owned());
+    }
 
     {
         let mut map = state.inflight.lock().unwrap();
@@ -725,6 +784,92 @@ fn poll_index_once(state: &State) -> bool {
         return true;
     }
     false
+}
+
+/// Look up `base` in `v1/g/index`; if it belongs to a group not yet prefetched
+/// by this proxy, fetch `v1/g/<gid>.txt` and enqueue its missing manifests and
+/// bundles onto the background prefetch pool. Fail-open on any error.
+fn prefetch_group_for(state: &State, base: &str) {
+    let gid = {
+        let mut guard = match state.group_index.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        let stale = guard
+            .as_ref()
+            .is_none_or(|(at, _)| at.elapsed().as_secs_f64() > INDEX_TTL_SECS);
+        if stale {
+            drop(guard);
+            let Some(kind) = validate_rel("g/index") else {
+                return;
+            };
+            let FetchResult::Hit(path) = fetch_cached(state, "g/index", kind) else {
+                return;
+            };
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                return;
+            };
+            let mut map = HashMap::new();
+            for line in text.lines() {
+                let mut parts = line.split_whitespace();
+                if let (Some(k), Some(g), None) = (parts.next(), parts.next(), parts.next())
+                    && depcache_prebuilt::valid_key(k)
+                    && valid_group_id(g)
+                {
+                    map.insert(k.to_owned(), g.to_owned());
+                }
+            }
+            guard = match state.group_index.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            *guard = Some((Instant::now(), map));
+        }
+        guard.as_ref().and_then(|(_, m)| m.get(base).cloned())
+    };
+    let Some(gid) = gid else {
+        return;
+    };
+    {
+        let mut seen = match state.prefetched_groups.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if !seen.insert(gid.clone()) {
+            return;
+        }
+    }
+    let rel = format!("g/{gid}.txt");
+    let Some(kind) = validate_rel(&rel) else {
+        return;
+    };
+    let FetchResult::Hit(path) = fetch_cached(state, &rel, kind) else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(k), Some(out), None) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        if !depcache_prebuilt::valid_key(k) || !depcache_prebuilt::valid_key(out) {
+            continue;
+        }
+        let m_rel = format!("m/{k}.jsonl");
+        if !state.cache_dir.join("v1").join(&m_rel).is_file()
+            && let Some(mk) = validate_rel(&m_rel)
+        {
+            let _ = state.prefetch_tx.try_send((m_rel, mk));
+        }
+        let o_rel = format!("o/{out}.jrdc");
+        if !state.cache_dir.join("v1").join(&o_rel).is_file()
+            && let Some(ok) = validate_rel(&o_rel)
+        {
+            let _ = state.prefetch_tx.try_send((o_rel, ok));
+        }
+    }
 }
 
 /// What each upstream has been doing, for `cat <mirror>/upstreams`: one line
@@ -984,6 +1129,8 @@ mod tests {
     fn state_for(sources: Vec<Source>, cache_dir: PathBuf) -> State {
         // Nothing here goes stale, so nothing is ever queued for refresh.
         let (refresh_tx, _) = mpsc::sync_channel(1);
+        let (group_tx, _) = mpsc::sync_channel(1);
+        let (prefetch_tx, _) = mpsc::sync_channel(1);
         State {
             upstreams: sources.into_iter().map(Upstream::new).collect(),
             cache_dir,
@@ -996,6 +1143,10 @@ mod tests {
             missing: Mutex::new(HashMap::new()),
             refreshing: Mutex::new(HashSet::new()),
             refresh_tx,
+            group_tx,
+            prefetch_tx,
+            prefetched_groups: Mutex::new(HashSet::new()),
+            group_index: Mutex::new(None),
             seq: AtomicU64::new(0),
             requests: AtomicU64::new(0),
         }
@@ -1513,6 +1664,8 @@ mod tests {
         std::fs::write(dst.with_extension("etag"), "\"v1\"").unwrap();
 
         let (refresh_tx, refresh_rx) = mpsc::sync_channel(4);
+        let (group_tx, _group_rx) = mpsc::sync_channel(4);
+        let (prefetch_tx, _prefetch_rx) = mpsc::sync_channel(4);
         let state = State {
             upstreams: vec![Upstream::new(Source {
                 base: format!("http://{addr}"),
@@ -1528,6 +1681,10 @@ mod tests {
             missing: Mutex::new(HashMap::new()),
             refreshing: Mutex::new(HashSet::new()),
             refresh_tx,
+            group_tx,
+            prefetch_tx,
+            prefetched_groups: Mutex::new(HashSet::new()),
+            group_index: Mutex::new(None),
             seq: AtomicU64::new(0),
             requests: AtomicU64::new(0),
         };
@@ -1542,6 +1699,60 @@ mod tests {
         let (rel, _, _) = refresh_rx.try_recv().expect("refresh scheduled");
         assert_eq!(rel, "index");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn group_prefetch_warms_peer_units_on_first_manifest_miss() {
+        let k1 = key(1);
+        let k2 = key(2);
+        let o1 = key(11);
+        let o2 = key(12);
+        let gid = "0123456789abcdef";
+        let (store, _hits) = fake_store(
+            vec![
+                (
+                    format!("/v1/m/{k1}.jsonl"),
+                    format!("{{\"out\":\"{o1}\"}}\n").into_bytes(),
+                ),
+                (
+                    format!("/v1/m/{k2}.jsonl"),
+                    format!("{{\"out\":\"{o2}\"}}\n").into_bytes(),
+                ),
+                (format!("/v1/o/{o1}.jrdc"), b"bundle-one".to_vec()),
+                (format!("/v1/o/{o2}.jrdc"), b"bundle-two".to_vec()),
+                (
+                    "/v1/g/index".into(),
+                    format!("{k1} {gid}\n{k2} {gid}\n").into_bytes(),
+                ),
+                (
+                    format!("/v1/g/{gid}.txt"),
+                    format!("{k1} {o1}\n{k2} {o2}\n").into_bytes(),
+                ),
+            ],
+            Duration::ZERO,
+        );
+        let dir = test_dir("group-prefetch");
+        let base = start(store, dir.clone()).unwrap();
+        let dst = dir.join("got-m1");
+        assert!(matches!(
+            depcache_prebuilt::get(&base, &format!("m/{k1}.jsonl"), &dst, 5, 1 << 20),
+            depcache_prebuilt::Got::Ok
+        ));
+        // Wait briefly for the background prefetch pool to warm k2 and o1/o2 on NVMe.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if dir.join(format!("v1/m/{k2}.jsonl")).is_file()
+                && dir.join(format!("v1/o/{o1}.jrdc")).is_file()
+                && dir.join(format!("v1/o/{o2}.jrdc")).is_file()
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(dir.join(format!("v1/m/{k2}.jsonl")).is_file());
+        assert!(dir.join(format!("v1/o/{o1}.jrdc")).is_file());
+        assert!(dir.join(format!("v1/o/{o2}.jrdc")).is_file());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
