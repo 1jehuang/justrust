@@ -43,6 +43,11 @@ const INDEX_TTL_SECS: f64 = 600.0;
 /// release answered from an index as old as the previous session and missed
 /// everything the fleet had published since.
 const INDEX_MAX_STALE_SECS: f64 = 2.0 * INDEX_TTL_SECS;
+/// How often the mirror checks `HEAD /v1/index` for a new ETag so later
+/// checkpoints of the same toolchain become visible within ~1 min without
+/// shortening the TTL or polling per build.
+#[cfg(not(test))]
+const INDEX_POLL_INTERVAL: Duration = Duration::from_secs(60);
 const MANIFEST_TTL_SECS: f64 = 3600.0;
 const NEGATIVE_TTL: Duration = Duration::from_secs(60);
 const MAX_NEGATIVE_ENTRIES: usize = 16_384;
@@ -354,6 +359,19 @@ pub fn start_with(sources: Vec<Source>, cache_dir: PathBuf) -> Option<String> {
             });
     }
 
+    #[cfg(not(test))]
+    {
+        let state = Arc::clone(&state);
+        let _ = std::thread::Builder::new()
+            .name("prebuilt-proxy-poll".into())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(INDEX_POLL_INTERVAL);
+                    poll_index_once(&state);
+                }
+            });
+    }
+
     let (tx, rx) = mpsc::channel::<TcpStream>();
     let rx = Arc::new(Mutex::new(rx));
     for _ in 0..WORKER_THREADS {
@@ -632,6 +650,14 @@ fn fetch_one(state: &State, up: &Upstream, rel: &str, max_bytes: u64, dst: &Path
         up.errors.fetch_add(1, Ordering::Relaxed);
         return One::Error;
     }
+    let etag = (rel == "index")
+        .then(|| {
+            resp.headers()
+                .get("etag")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        })
+        .flatten();
 
     if let Some(parent) = dst.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -659,8 +685,46 @@ fn fetch_one(state: &State, up: &Upstream, rel: &str, max_bytes: u64, dst: &Path
             return One::Error;
         }
     }
+    if let Some(etag) = etag {
+        let _ = std::fs::write(dst.with_extension("etag"), etag);
+    }
     up.note_ok(ttfb);
     One::Hit
+}
+
+/// Send one `HEAD /v1/index` to the fastest healthy upstream. If its `ETag`
+/// differs from the mirror's recorded `v1/index.etag`, schedule a background
+/// refresh of `v1/index` and return `true`.
+fn poll_index_once(state: &State) -> bool {
+    let Some(&idx) = upstream_order(&state.upstreams, 0).first() else {
+        return false;
+    };
+    let up = &state.upstreams[idx];
+    let url = format!("{}/v1/index", up.source.base);
+    let Ok(resp) = state.agent.head(&url).call() else {
+        return false;
+    };
+    if resp.status().as_u16() != 200 {
+        return false;
+    }
+    let Some(etag) = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
+    else {
+        return false;
+    };
+    let dst = state.cache_dir.join("v1/index");
+    let prev = std::fs::read_to_string(dst.with_extension("etag")).unwrap_or_default();
+    if dst.is_file() && prev == etag {
+        return false;
+    }
+    if let Some(kind) = validate_rel("index") {
+        schedule_refresh(state, "index", kind, &dst);
+        return true;
+    }
+    false
 }
 
 /// What each upstream has been doing, for `cat <mirror>/upstreams`: one line
@@ -1420,6 +1484,64 @@ mod tests {
             depcache_prebuilt::Got::Ok
         ));
         assert_eq!(std::fs::read(&dst).unwrap(), body);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn index_etag_poll_refreshes_when_upstream_changes() {
+        let etag = Arc::new(Mutex::new("\"v1\"".to_owned()));
+        let etag_srv = Arc::clone(&etag);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf);
+                let tag = etag_srv.lock().unwrap().clone();
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nETag: {tag}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+
+        let dir = test_dir("etag-poll");
+        let dst = dir.join("v1/index");
+        std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+        std::fs::write(&dst, b"k1\n").unwrap();
+        std::fs::write(dst.with_extension("etag"), "\"v1\"").unwrap();
+
+        let (refresh_tx, refresh_rx) = mpsc::sync_channel(4);
+        let state = State {
+            upstreams: vec![Upstream::new(Source {
+                base: format!("http://{addr}"),
+                authoritative: true,
+            })],
+            cache_dir: dir.clone(),
+            agent: ureq::Agent::new_with_config(
+                ureq::Agent::config_builder()
+                    .http_status_as_error(false)
+                    .build(),
+            ),
+            inflight: Mutex::new(HashMap::new()),
+            missing: Mutex::new(HashMap::new()),
+            refreshing: Mutex::new(HashSet::new()),
+            refresh_tx,
+            seq: AtomicU64::new(0),
+            requests: AtomicU64::new(0),
+        };
+
+        // Unchanged ETag: no refresh scheduled.
+        assert!(!poll_index_once(&state));
+        assert!(refresh_rx.try_recv().is_err());
+
+        // New ETag from a later checkpoint: refresh is scheduled once.
+        *etag.lock().unwrap() = "\"v2\"".to_owned();
+        assert!(poll_index_once(&state));
+        let (rel, _, _) = refresh_rx.try_recv().expect("refresh scheduled");
+        assert_eq!(rel, "index");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
