@@ -492,6 +492,7 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
     }
 
     out.extend(giant_crates(s));
+    out.extend(memory_wait(s));
 
     // Build gaps: no rustc running inside the build window.
     if p.build_gaps >= 1.0 {
@@ -562,6 +563,43 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
         }
     }
     out
+}
+
+/// Compilers held back for memory on a build host (`memgov.rs`). The shim
+/// charges that time to its `wait-memory` stage, outside every unit's wall,
+/// so it would otherwise read as compile time or an unexplained gap.
+fn memory_wait(s: &Summary) -> Option<Finding> {
+    let stages = &s.gaps.as_ref()?.shim_stages;
+    let secs = |name: &str| -> f64 {
+        stages
+            .iter()
+            .filter(|x| x.name == name)
+            .map(|x| x.secs)
+            .sum()
+    };
+    let (waited, gave_up) = (secs("wait-memory"), secs("wait-memory-timeout"));
+    let total = waited + gave_up;
+    if total < 1.0 {
+        return None;
+    }
+    // Job-slot seconds: jobs that waited side by side cost the wall once.
+    let window = s.phases.compile + s.phases.build_gaps;
+    let cost = (total / s.resources.avg_build_cores.max(1.0)).min(window);
+    let free = s.resources.min_mem_available_mb;
+    let gave_up = if gave_up > 0.0 {
+        format!("; {gave_up:.1}s of it ended at the wait limit and the compiler ran anyway")
+    } else {
+        String::new()
+    };
+    Some(Finding::new(
+        "memory_wait",
+        cost,
+        format!(
+            "compilers waited {total:.1}s of job time for memory before starting \
+             (lowest free memory {:.1} GB, other builds on this machine share it){gave_up}",
+            free as f64 / 1024.0
+        ),
+    ))
 }
 
 /// Crates at least this big (lines under `src/`) are flagged as split candidates.
@@ -878,6 +916,38 @@ mod tests {
             ncpu: 16,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_wait_for_memory_is_its_own_finding() {
+        let stage = |name: &str, secs: f64| crate::shim::ShimStage {
+            name: name.into(),
+            secs,
+        };
+        let mut s = base();
+        s.phases.compile = 18.0;
+        s.resources.avg_build_cores = 8.0;
+        s.resources.min_mem_available_mb = 3072;
+        s.gaps = Some(crate::gaps::Gaps {
+            shim_stages: vec![stage("key", 9.0), stage("wait-memory", 0.4)],
+            ..Default::default()
+        });
+        assert!(memory_wait(&s).is_none(), "under a second is not reported");
+        s.gaps = Some(crate::gaps::Gaps {
+            shim_stages: vec![
+                stage("key", 9.0),
+                stage("wait-memory", 30.0),
+                stage("wait-memory-timeout", 10.0),
+            ],
+            ..Default::default()
+        });
+        let f = memory_wait(&s).unwrap();
+        assert_eq!(f.kind, "memory_wait");
+        assert_eq!(f.cost_secs, 5.0, "40s of job time over 8 busy cores");
+        assert!(f.message.contains("waited 40.0s of job time for memory"));
+        assert!(f.message.contains("lowest free memory 3.0 GB"));
+        assert!(f.message.contains("10.0s of it ended at the wait limit"));
+        assert!(analyze(&s).iter().any(|f| f.kind == "memory_wait"));
     }
 
     fn with_e2e(segs: &[(&str, f64)], derived: bool) -> Summary {

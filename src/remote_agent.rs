@@ -712,9 +712,11 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
 /// Workspaces cap `build.jobs` for their contributors' laptops (Jcode sets
 /// `jobs = 4` for ~15 GB machines), which left 28 of the build machine's 32
 /// cores idle. This machine runs only justrust builds, so size jobs for it:
-/// every core, bounded by memory at ~2 GiB per job. Job count is not part
-/// of any fingerprint. An explicit `-j`/`--jobs` or a client-sent
-/// `CARGO_BUILD_JOBS` wins.
+/// by cores up to `GOVERNED_JOBS`, with memory admitted per compiler by the
+/// governor (`src/memgov.rs`) instead of a static ~2 GiB per job, which
+/// gave 14 jobs on a 96-core, 29-GiB slot. Without the governor the static
+/// bound stays. Job count is not part of any fingerprint. An explicit
+/// `-j`/`--jobs` or a client-sent `CARGO_BUILD_JOBS` wins.
 fn machine_jobs(args: &[String], env: &[(String, String)]) -> Option<usize> {
     if env.iter().any(|(k, _)| k == "CARGO_BUILD_JOBS")
         || args
@@ -725,8 +727,29 @@ fn machine_jobs(args: &[String], env: &[(String, String)]) -> Option<usize> {
         return None;
     }
     let cpus = std::thread::available_parallelism().ok()?.get();
+    if memory_governed(env) {
+        return Some(cpus.clamp(1, GOVERNED_JOBS));
+    }
     let mem_gib = crate::procfs::installed_mb().map(|mb| (mb >> 10) as usize);
     Some(jobs_for(cpus, mem_gib))
+}
+
+/// Where more jobs stopped paying on the 96-core slot: cold `check` of a
+/// 613-unit workspace took 26.0 s at 14 jobs, 21.1 at 24, 20.7 at 32, 19.4
+/// at 48 and 19.5 at 64 (runs 20261126-164410278-472317 to
+/// 20261126-164548863-485986). The dependency graph, not the core count,
+/// is the limit: about 10 cores were busy on average at every setting.
+const GOVERNED_JOBS: usize = 48;
+
+/// The memory governor runs for this machine's builds unless the client or
+/// this agent's own environment turns it off (`JUSTRUST_MEMGOV=0`).
+fn memory_governed(env: &[(String, String)]) -> bool {
+    let set = env
+        .iter()
+        .find(|(k, _)| k == crate::memgov::ENV)
+        .map(|(_, v)| v.clone())
+        .or_else(|| std::env::var(crate::memgov::ENV).ok());
+    cfg!(target_os = "linux") && set.is_none_or(|v| crate::memgov::on(&v))
 }
 
 /// The toolchain a build on this machine uses when the project pins none:
@@ -1266,6 +1289,11 @@ fn start_run(
     }
     if let Some(j) = machine_jobs(args, env) {
         c.env("CARGO_BUILD_JOBS", j.to_string());
+    }
+    // Always on here, also under an explicit job count: that is when a
+    // build can ask for more memory than the machine has.
+    if memory_governed(env) {
+        c.env(crate::memgov::ENV, "1");
     }
     // Fetch every store hit here. The per-fetch overhead the cost model
     // assumes (700 ms, a laptop under agent load) declined 487 of 529
@@ -1968,5 +1996,20 @@ mod tests {
         assert!(machine_jobs(&s(&["test"]), &env).is_none());
         // Test-binary args after `--` are not cargo's.
         assert!(machine_jobs(&s(&["test", "--", "-j"]), &[]).is_some());
+    }
+
+    #[test]
+    fn governed_jobs_follow_cores_not_memory() {
+        let kv = |v: &str| [(crate::memgov::ENV.to_string(), v.to_string())];
+        let args = ["check".to_string()];
+        let cpus = std::thread::available_parallelism().unwrap().get();
+        if cfg!(target_os = "linux") {
+            assert!(memory_governed(&kv("1")));
+            assert_eq!(machine_jobs(&args, &kv("1")), Some(cpus.min(GOVERNED_JOBS)));
+        }
+        // Turned off, the static memory bound is back.
+        assert!(!memory_governed(&kv("0")));
+        let mem_gib = crate::procfs::installed_mb().map(|mb| (mb >> 10) as usize);
+        assert_eq!(machine_jobs(&args, &kv("0")), Some(jobs_for(cpus, mem_gib)));
     }
 }

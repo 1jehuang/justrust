@@ -816,6 +816,9 @@ fn run_unit(
         None
     };
     stages.mark("spawn-setup");
+    // Build hosts only: wait until the machine has memory for this unit.
+    let memory = crate::memgov::admit(&described, run_dir);
+    stages.mark(memory.stage());
     let start = paths::now();
     let spawned = cmd.spawn();
     let early = early.map(EarlyReply::spawned);
@@ -887,6 +890,7 @@ fn run_unit(
         }
         return retry.status().ok().and_then(|s| s.code());
     }
+    drop(memory);
 
     let mut unit = described;
     if let (Some(plan), Some(captured)) = (&plan, &captured) {
@@ -981,6 +985,7 @@ fn run_unit(
     if exit == 0 {
         write_unit_cost(args, user + sys, "cpu");
     }
+    crate::memgov::learn(&unit);
     unit.incr_prior_session = incr_prior_session;
     stages.mark("store");
     stages.apply(&mut unit);

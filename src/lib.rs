@@ -40,6 +40,7 @@ mod live;
 mod localcache;
 mod log_journal;
 mod mcp;
+mod memgov;
 mod msvc_tools;
 mod native;
 mod nolocal;
