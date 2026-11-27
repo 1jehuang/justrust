@@ -115,11 +115,20 @@ class ReleaseOrderTests(unittest.TestCase):
 
     def test_published_bootstrap_replaces_cold_source_install(self):
         build = self.job("build")
-        # A pinned published bootstrap: an exact tag with its checksum. The
-        # values move with every bootstrap bump, so only their shape is fixed.
-        self.assertRegex(self.workflow, r"(?m)^  HOSTED_CLIENT_TAG: v\d+\.\d+\.\d+$")
-        self.assertRegex(self.workflow, r"(?m)^  HOSTED_CLIENT_SHA256: [0-9a-f]{64}$")
-        self.assertIn('ci/install-published-client.py --tag "$HOSTED_CLIENT_TAG" --sha256 "$HOSTED_CLIENT_SHA256" --github-path', build)
+        # The bootstrap is the published production client, frozen once in
+        # preflight. A tag or checksum written into the workflow would fall
+        # behind the shipping client again.
+        self.assertNotRegex(self.workflow, r"HOSTED_CLIENT_(?:TAG|SHA256|REV)")
+        self.assertNotRegex(self.workflow, r"\bv\d+\.\d+\.\d+\b")
+        preflight = self.job("preflight")
+        self.assertIn("ci/install-published-client.py --resolve-production", preflight)
+        self.assertIn('git merge-base --is-ancestor "refs/tags/$bootstrap_tag^{commit}" refs/remotes/origin/stable', preflight)
+        self.assertIn("bootstrap_tag: ${{ steps.bootstrap.outputs.bootstrap_tag }}", preflight)
+        self.assertIn("bootstrap_sha256: ${{ steps.bootstrap.outputs.bootstrap_sha256 }}", preflight)
+        self.assertIn("BOOTSTRAP_TAG: ${{ needs.preflight.outputs.bootstrap_tag }}", build)
+        self.assertIn("BOOTSTRAP_SHA256: ${{ needs.preflight.outputs.bootstrap_sha256 }}", build)
+        self.assertIn('ci/install-published-client.py --tag "$BOOTSTRAP_TAG" --sha256 "$BOOTSTRAP_SHA256" --github-path', build)
+        self.assertNotIn("--resolve-production", build)
         self.assertNotIn("install-hosted-client.sh", build)
         self.assertIn("Cache compatibility release dependencies", build)
         self.assertIn("key: client-release-${{ matrix.target }}", build)

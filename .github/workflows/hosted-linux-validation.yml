@@ -41,8 +41,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Updated only after reviewing and validating a new bootstrap client.
-  HOSTED_CLIENT_REV: c026ee88f391bcf74239efbc061bcca43640c17f
+  # The client is the published production release, resolved at run time
+  # (ci/install-published-client.py --resolve-production), never a pin.
   JUSTRUST_TOOLCHAIN: 1.99.0
   JUSTRUST_TOOLCHAIN_REQUIRED: "1"
   JUSTRUST_REMOTE_REQUIRED: "1"
@@ -71,12 +71,14 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends rsync zstd binutils qemu-user
 
-      - name: Install reviewed hosted client
+      - name: Install published production client
         run: |
-          git fetch --quiet --no-tags --depth=1 origin "$HOSTED_CLIENT_REV"
-          git show "$HOSTED_CLIENT_REV:ci/install-hosted-client.sh" > "$RUNNER_TEMP/install-hosted-client.sh"
-          git show "$HOSTED_CLIENT_REV:ci/check-linux-release.sh" > "$RUNNER_TEMP/check-linux-release.sh"
-          bash "$RUNNER_TEMP/install-hosted-client.sh" "$HOSTED_CLIENT_REV"
+          set -euo pipefail
+          python3 ci/install-published-client.py --resolve-production > "$RUNNER_TEMP/bootstrap.env"
+          cat "$RUNNER_TEMP/bootstrap.env"
+          python3 ci/install-published-client.py --github-path \
+            --tag "$(sed -n 's/^bootstrap_tag=//p' "$RUNNER_TEMP/bootstrap.env")" \
+            --sha256 "$(sed -n 's/^bootstrap_sha256=//p' "$RUNNER_TEMP/bootstrap.env")"
 
       - name: Build and verify both static musl releases
         env:
@@ -89,7 +91,7 @@ jobs:
             justrust build --remote --release --locked --target "$target" --bin justrust \
               --config 'profile.release.lto="thin"' \
               --config profile.release.strip=true
-            bash "$RUNNER_TEMP/check-linux-release.sh" "target/$target/release/justrust" "$target" "$version"
+            bash ci/check-linux-release.sh "target/$target/release/justrust" "$target" "$version"
           done
 
       - uses: actions/upload-artifact@v4

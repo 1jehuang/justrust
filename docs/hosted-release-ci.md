@@ -241,8 +241,10 @@ not by silently compiling locally. With the variable unset, the original local
 Linux zigbuild jobs remain active. macOS and Windows compile/package commands
 are unchanged. Hosted jobs sharing the checkout path are serialized.
 
-The immutable bootstrap client is
-`d0c35300773df0103e3beeb090a5a1a5c6681185`. Local authenticated validation alone
+The bootstrap client was first the immutable commit
+`d0c35300773df0103e3beeb090a5a1a5c6681185`. Since 2026-11-26 both `release.yml`
+and the validation workflow download the published production release instead
+(`ci/install-published-client.py --resolve-production`), so neither carries a pin. Local authenticated validation alone
 is not proof that GitHub Actions works: promotion requires the separate
 nonpublishing CI acceptance run. No new public release is required to install
 the reviewed bootstrap client.

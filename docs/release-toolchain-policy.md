@@ -60,8 +60,9 @@ and correctness audit, not changing a label here.
 
 ## Bootstrap is not the release compiler
 
-The hosted transport client is downloaded from its explicitly pinned published
-release and verified before use. Stock `1.99.0` remains frozen as `bootstrap`
+The hosted transport client is the published release production selects when
+preflight runs. It is frozen once per release run (tag plus published archive
+SHA256, tag required on `stable` history), downloaded, and verified before use. Stock `1.99.0` remains frozen as `bootstrap`
 independently of the service selection and supplies the C-only musl ABI inputs.
 The helper checks the actual bootstrap compiler version before locating those
 inputs. That compiler does not compile the Linux release binary. The candidate

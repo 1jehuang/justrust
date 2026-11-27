@@ -219,6 +219,15 @@ class ReleasePolicyTests(unittest.TestCase):
             result = p.attest(self.snapshot, p.TARGETS[0], 99, Path.cwd(), runs, binary)
             self.assertEqual(result["binary_sha256"], p.hashlib.sha256(binary.read_bytes()).hexdigest())
             self.assertEqual(result["compiler"], meta["real_rustc"])
+            # Current clients leave a speculative prebuild of the same command
+            # beside the real run, possibly unfinished. It attests nothing.
+            for name, summary in (("release-run-pre", None), ("finished-pre", '{"exit":0}')):
+                prebuild = runs / name
+                prebuild.mkdir()
+                (prebuild / "meta.json").write_text(json.dumps(dict(meta, id=name, start=101)))
+                if summary:
+                    (prebuild / "summary.json").write_text(summary)
+            self.assertEqual(p.attest(self.snapshot, p.TARGETS[0], 99, Path.cwd(), runs)["run_id"], "release-run")
             # A two-slot promotion installs the new compiler under staged/ or managed/staged/.
             for path in (
                 "/home/ubuntu/.justrust/toolchains/staged/jr-ac20de5e7921/bin/rustc",

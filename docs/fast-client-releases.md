@@ -78,8 +78,11 @@ bump its version and the client's exact dependency together. `cargo package
 Before publication: committed-source/tag/version checks, frozen compiler-policy
 selection and provenance, platform builds, package/checksum and executable sanity.
 After publication: full published-client hosted regression and broader CI.
-Linux runners download a reviewed, SHA256-pinned published bootstrap instead of
-compiling a bootstrap client on every release. Compatibility builds cache their
+Linux runners download the published production client as their bootstrap
+instead of compiling one on every release. Preflight resolves it once from the
+service selection (`ci/install-published-client.py --resolve-production`),
+requires its tag on `stable` history, and passes the tag and published SHA256
+to every build job, so no version is written into the workflow. Compatibility builds cache their
 dependencies and smoke-test native executable versions and release markers.
 Artifacts are published independently per platform. Preflight creates a shared
 draft. Each platform uploads its checked archive and compiler provenance, then

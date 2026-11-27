@@ -22,11 +22,10 @@ env:
   # Marks the binaries as release builds: they update themselves
   # (src/update.rs). Source builds never do.
   JUSTRUST_RELEASE_BUILD: "1"
-  # Immutable bootstrap client with fail-closed hosted routing support.
-  HOSTED_CLIENT_REV: 616de6552f08a9c40a5d0a79b3d0f510ce80ff46
-  # Download the reviewed published bootstrap instead of compiling it per job.
-  HOSTED_CLIENT_TAG: v0.1.58
-  HOSTED_CLIENT_SHA256: 00c8f49728eacf38ea2d6c2542345905f18d364dda6e415a5a05d5a5726faec8
+  # No pinned bootstrap client here. Preflight freezes the release production
+  # selects (ci/install-published-client.py --resolve-production) and every
+  # hosted build downloads those exact published bytes, so this workflow
+  # cannot fall behind the shipping client.
   # Small, fast release binaries without editing Cargo.toml. Codegen units
   # stay at rustc's default (16): one unit compiled the client serially (the
   # `justrust` lib alone 69s of a 140s hosted build, about 28s with 16) for a
@@ -44,6 +43,8 @@ jobs:
       sha: ${{ steps.tag.outputs.sha }}
       tag: ${{ steps.tag.outputs.tag }}
       policy_sha256: ${{ steps.policy.outputs.policy_sha256 }}
+      bootstrap_tag: ${{ steps.bootstrap.outputs.bootstrap_tag }}
+      bootstrap_sha256: ${{ steps.bootstrap.outputs.bootstrap_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -74,6 +75,20 @@ jobs:
           git show "$SHA:src/toolchain_policy.rs" > "$RUNNER_TEMP/release-toolchain-policy.rs"
           python3 ci/release-policy.py freeze --protocol-source "$RUNNER_TEMP/release-toolchain-policy.rs" --output "$RUNNER_TEMP/release-policy.json" >> "$GITHUB_OUTPUT"
           cp ci/release-policy.py "$RUNNER_TEMP/release-policy.py"
+
+      # The client that builds a release is the published production client,
+      # resolved once so both Linux targets use the same bytes. It must be a
+      # tag on stable history, and its checksum is the published one.
+      - name: Freeze production bootstrap client once
+        id: bootstrap
+        run: |
+          set -euo pipefail
+          python3 ci/install-published-client.py --resolve-production > "$RUNNER_TEMP/bootstrap.env"
+          bootstrap_tag=$(sed -n 's/^bootstrap_tag=//p' "$RUNNER_TEMP/bootstrap.env")
+          [[ "$bootstrap_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git merge-base --is-ancestor "refs/tags/$bootstrap_tag^{commit}" refs/remotes/origin/stable
+          cat "$RUNNER_TEMP/bootstrap.env"
+          cat "$RUNNER_TEMP/bootstrap.env" >> "$GITHUB_OUTPUT"
 
       - name: Prepare shared release draft
         env:
@@ -218,15 +233,16 @@ jobs:
       - name: Install hosted Linux prerequisites
         if: ${{ matrix.zig }}
         working-directory: ${{ runner.temp }}/client-release-v2/${{ matrix.target }}
+        env:
+          BOOTSTRAP_TAG: ${{ needs.preflight.outputs.bootstrap_tag }}
+          BOOTSTRAP_SHA256: ${{ needs.preflight.outputs.bootstrap_sha256 }}
         run: |
           # Stock bootstrap also supplies pinned C-only musl ABI objects.
           # It never supplies Rust rlibs to the service-selected compiler.
           rustup toolchain install 1.99.0 --profile minimal --target "${{ matrix.target }}"
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends rsync zstd binutils qemu-user
-          git fetch --quiet --no-tags --depth=1 origin "$HOSTED_CLIENT_REV"
-          git show "$HOSTED_CLIENT_REV:ci/check-linux-release.sh" > "$RUNNER_TEMP/check-linux-release.sh"
-          python3 ci/install-published-client.py --tag "$HOSTED_CLIENT_TAG" --sha256 "$HOSTED_CLIENT_SHA256" --github-path
+          python3 ci/install-published-client.py --tag "$BOOTSTRAP_TAG" --sha256 "$BOOTSTRAP_SHA256" --github-path
 
       - name: Build and verify hosted Linux release
         if: ${{ matrix.zig }}
@@ -273,7 +289,7 @@ jobs:
             --source-sha '${{ needs.preflight.outputs.sha }}' "${c_runtime_attest[@]}" \
             --since "$since" --binary "target/${{ matrix.target }}/release/justrust" --output "dist/compiler-${{ matrix.target }}.json"
           version=$(cargo +1.99.0 metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "justrust") | .version')
-          bash "$RUNNER_TEMP/check-linux-release.sh" "target/${{ matrix.target }}/release/justrust" "${{ matrix.target }}" "$version"
+          bash ci/check-linux-release.sh "target/${{ matrix.target }}/release/justrust" "${{ matrix.target }}" "$version"
 
       - name: Package
         working-directory: ${{ matrix.zig && format('{0}/client-release-v2/{1}', runner.temp, matrix.target) || format('{0}/release-client/{1}', github.workspace, matrix.target) }}

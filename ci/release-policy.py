@@ -157,6 +157,11 @@ def attest(snapshot, target, since, cwd, runs, binary=None):
             continue
         if not isinstance(m, dict):
             continue
+        # A speculative prebuild the client's daemon starts after a build (run
+        # id `<id>-pre`) repeats the release command in the same directory. It
+        # did not produce the binary, and may be unfinished with no summary.
+        if not isinstance(m.get("id"), str) or m["id"].endswith("-pre") or path.parent.name.endswith("-pre"):
+            continue
         args = m.get("args", [])
         if not isinstance(m.get("start"), (int, float)) or m["start"] < since or m.get("cwd") != str(cwd.resolve()):
             continue

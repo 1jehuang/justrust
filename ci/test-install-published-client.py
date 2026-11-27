@@ -147,6 +147,35 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs["timeout"], 30)
             self.assertEqual(run.call_args.kwargs["env"]["JUSTRUST_NO_UPDATE"], "1")
 
+    def test_production_release_takes_only_the_tag_from_the_service(self):
+        checksum = f"{'AB' * 32}  justrust-{installer.TRIPLE}.tar.gz\n".encode()
+        selected = b'{"version":"1.2.3","tag":"v1.2.3","enabled":true,"url":"https://evil.example/x","sha256_url":"https://evil.example/y"}'
+        self.network.side_effect = [selected, checksum]
+        self.assertEqual(installer.production_release(), ("v1.2.3", "ab" * 32))
+        self.assertEqual([call.args[0] for call in self.network.call_args_list], [
+            f"{installer.PRODUCTION}?target={installer.TRIPLE}",
+            f"{installer.ASSETS}v1.2.3/justrust-{installer.TRIPLE}.tar.gz.sha256"])
+
+    def test_production_release_rejects_bad_selections_and_retries_outages(self):
+        for selected in (b"[]", b"not json", b'{"version":"1.2.3","tag":"v1.2.3","enabled":false}',
+                         b'{"version":"1.2.4","tag":"v1.2.3","enabled":true}',
+                         b'{"version":"1.2.3-rc.1","tag":"v1.2.3-rc.1","enabled":true}',
+                         b'{"version":"../x","tag":"v../x","enabled":true}'):
+            self.network.reset_mock()
+            self.network.side_effect = None
+            self.network.return_value = selected
+            with self.subTest(selected=selected), self.assertRaises(ValueError):
+                installer.production_release(attempts=1)
+            self.network.assert_called_once()
+        self.network.reset_mock()
+        self.network.side_effect = [b'{"version":"1.2.3","tag":"v1.2.3","enabled":true}', b"<html>not a checksum</html>"]
+        with self.assertRaises(ValueError):
+            installer.production_release(attempts=1)
+        self.network.side_effect = [OSError("dns"), b'{"version":"1.2.3","tag":"v1.2.3","enabled":true}', b"cd" * 32]
+        with patch.object(installer.time, "sleep") as sleep:
+            self.assertEqual(installer.production_release(delay=7), ("v1.2.3", "cd" * 32))
+        sleep.assert_called_once_with(7)
+
     def test_redirect_rejects_http(self):
         with self.assertRaises(ValueError):
             installer.HTTPSRedirect().redirect_request(None, None, 302, "", {}, "http://example.com/asset")

@@ -6,11 +6,18 @@ Example: --tag v0.1.0-alpha.28 --sha256 <reviewed archive digest>
 a private unique directory is created there. --github-path appends its directory
 to GITHUB_PATH only after checksum, version, and release-marker validation.
 No service selection, compilation, default-client replacement, or updater runs.
+
+--resolve-production installs nothing. It prints the release the production
+service currently selects, with that release's published archive checksum, as
+`bootstrap_tag=` and `bootstrap_sha256=` lines for GITHUB_OUTPUT. Release CI
+freezes that pair once and passes it to --tag/--sha256 in every build job, so
+the bootstrap follows production instead of a hand-edited pin.
 """
 import argparse
 import hashlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import platform
@@ -19,12 +26,15 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 
 TRIPLE = "x86_64-unknown-linux-musl"
 ASSETS = "https://github.com/1jehuang/justrust/releases/download/"
 LIMIT = 128 * 1024 * 1024
+# The same selection `justrust update` and scripts/production-dogfood.py follow.
+PRODUCTION = "https://build.jcode.sh/v1/release/latest"
 
 # Share the production helper's sanitized release-validation environment. The
 # production latest-selection and activation paths are deliberately not used.
@@ -60,6 +70,29 @@ def pinned_url(tag, sha256):
     if platform.system() != "Linux" or platform.machine() != "x86_64":
         raise ValueError("published bootstrap requires Linux x86_64")
     return f"{ASSETS}{tag}/justrust-{TRIPLE}.tar.gz"
+
+
+def production_release(attempts=5, delay=10):
+    """The (tag, archive sha256) of the release production selects right now.
+
+    Only the tag is taken from the service. The checksum comes from the fixed
+    release asset location for that tag, never from a URL in the response.
+    """
+    for attempt in range(attempts):
+        try:
+            info = json.loads(fetch(f"{PRODUCTION}?target={TRIPLE}"))
+            tag = info.get("tag") if isinstance(info, dict) else None
+            if (not isinstance(tag, str) or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)
+                    or info.get("version") != tag[1:] or info.get("enabled") is not True):
+                raise ValueError("production service selects no enabled stable release")
+            checksum = fetch(f"{ASSETS}{tag}/justrust-{TRIPLE}.tar.gz.sha256")[:4096].decode().split()
+            if not checksum or not re.fullmatch(r"[0-9a-fA-F]{64}", checksum[0]):
+                raise ValueError("invalid published checksum")
+            return tag, checksum[0].lower()
+        except (OSError, ValueError):
+            if attempt + 1 == attempts:
+                raise
+            time.sleep(delay)
 
 
 def executable(archive, sha256):
@@ -145,11 +178,19 @@ def install(tag, sha256, output_dir=None, github_path=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tag", required=True)
-    parser.add_argument("--sha256", required=True)
+    parser.add_argument("--resolve-production", action="store_true")
+    parser.add_argument("--tag")
+    parser.add_argument("--sha256")
     parser.add_argument("--output-dir")
     parser.add_argument("--github-path", action="store_true")
     args = parser.parse_args()
+    if args.resolve_production:
+        if args.tag or args.sha256 or args.output_dir or args.github_path:
+            parser.error("--resolve-production takes no other option")
+        print("bootstrap_tag=%s\nbootstrap_sha256=%s" % production_release())
+        return
+    if not args.tag or not args.sha256:
+        parser.error("--tag and --sha256 are required")
     install(args.tag, args.sha256, args.output_dir, args.github_path)
 
 
