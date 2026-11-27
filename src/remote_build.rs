@@ -990,6 +990,68 @@ fn upload_patch(t: &Target) -> bool {
     child.wait().is_ok_and(|s| s.success()) && wrote
 }
 
+/// The sha256 of this client's executable when its build id is one.
+fn own_sha() -> Option<String> {
+    let id = crate::remote_daemon::build_id();
+    let sha = id.strip_prefix("sha256-")?;
+    (sha.len() == 64 && sha.bytes().all(|c| c.is_ascii_hexdigit())).then(|| sha.to_owned())
+}
+
+/// Where the machine keeps exact-byte copies of client executables, one
+/// directory per sha256 (created by [`ensure_session_executable`]).
+const OWN_COPIES: &str = "$HOME/.justrust/remote/session-executables";
+
+fn machine_justrust_for(sha: Option<&str>) -> String {
+    match sha {
+        // Running it marks the copy as in use (see `own_copy_script`).
+        Some(sha) => format!(
+            "\"$(d=\"{OWN_COPIES}/{sha}\"; b=\"$d/justrust\"; if [ -x \"$b\" ]; then touch \"$d\" 2>/dev/null; else b=\"$HOME/.cargo/bin/justrust\"; fi; echo \"$b\")\""
+        ),
+        None => "~/.cargo/bin/justrust".into(),
+    }
+}
+
+/// Shell word for this client's justrust on the machine: its own exact-byte
+/// copy when the machine has one, else the shared `~/.cargo/bin/justrust`.
+///
+/// There is one shared path and any number of clients. Two versions in use
+/// at once (an installed release and a candidate run by explicit path) each
+/// replaced it for the other, an install per alternation, and whichever ran
+/// second served the first one's artifact requests. A copy named by its
+/// digest is never anyone else's.
+pub fn machine_justrust() -> String {
+    machine_justrust_for(own_sha().as_deref())
+}
+
+/// Exit 0 when the machine holds a valid own copy for `sha`. Marks it used,
+/// and removes copies no client has used for two weeks and no process is
+/// still running (a durable session outlives its client).
+fn own_copy_script(sha: &str) -> String {
+    format!(
+        "d=\"{OWN_COPIES}\"; f=\"$d/{sha}/justrust\"; \
+         sha() {{ (sha256sum \"$1\" 2>/dev/null || shasum -a 256 \"$1\" 2>/dev/null) | awk '{{print $1}}'; }}; \
+         [ ! -L \"$f\" ] && [ -f \"$f\" ] && [ -O \"$f\" ] && [ -x \"$f\" ] && [ \"$(sha \"$f\")\" = {sha} ]; ok=$?; \
+         [ $ok != 0 ] || touch \"$d/{sha}\"; \
+         [ ! -d \"$d\" ] || find \"$d\" -mindepth 1 -maxdepth 1 -type d -mtime +14 ! -name {sha} 2>/dev/null | while IFS= read -r o; do \
+           ls -l /proc/[0-9]*/exe 2>/dev/null | grep -qF \"$o/\" || rm -rf \"$o\"; done; \
+         exit $ok"
+    )
+}
+
+/// Does the machine already hold this exact client? Then nothing is
+/// installed: the shared path stays whatever its last installer left.
+fn own_copy_on_machine(t: &Target) -> bool {
+    own_sha().is_some_and(|sha| {
+        t.command()
+            .arg(own_copy_script(&sha))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    })
+}
+
 /// Does `reply` (the machine's platform, the sha256 of its justrust and its
 /// `--version`, one per line) describe the binary `stamp` says was installed?
 fn stamp_describes(stamp: &str, dest: &str, own: (&str, &str, &str), reply: &str) -> bool {
@@ -1017,11 +1079,17 @@ pub fn remote_justrust_intact(t: &Target) -> Option<bool> {
     let stamp = std::fs::read_to_string(crate::remote::dir().ok()?.join("remote-justrust")).ok()?;
     let out = t
         .command()
-        .arg(
-            "uname -sm; b=~/.cargo/bin/justrust; \
-             (sha256sum \"$b\" 2>/dev/null || shasum -a 256 \"$b\" 2>/dev/null || echo -) | awk '{print $1}'; \
+        .arg(format!(
+            "uname -sm; b={}; \
+             (sha256sum \"$b\" 2>/dev/null || shasum -a 256 \"$b\" 2>/dev/null || echo -) | awk '{{print $1}}'; \
              \"$b\" --version 2>/dev/null || echo -; echo answered",
-        )
+            // A fleet stamp is about the shared path only.
+            if stamp.contains(" fleet ") {
+                machine_justrust_for(None)
+            } else {
+                machine_justrust()
+            }
+        ))
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
@@ -1080,6 +1148,17 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
     let id = crate::remote_daemon::build_id();
     let want = format!("{} {id}", t.dest);
     if std::fs::read_to_string(&stamp).ok().as_deref() == Some(want.as_str()) {
+        return Ok(());
+    }
+    let t0 = Instant::now();
+    if own_copy_on_machine(t) {
+        std::fs::write(&stamp, want)?;
+        crate::remote::log_event(&format!(
+            "justrust {} already on {} as its own copy, nothing installed ({:.1}s)",
+            env!("CARGO_PKG_VERSION"),
+            t.dest,
+            t0.elapsed().as_secs_f64()
+        ));
         return Ok(());
     }
     let arch = t
@@ -3654,6 +3733,93 @@ mod tests {
         );
         assert!(!Path::new(fields[2]).exists());
         assert!(!Path::new(&wrong_pin.path).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn two_client_versions_alternate_without_reinstalling() {
+        let home = std::env::temp_dir().join(format!("jr-own-copy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let copies = home.join(".justrust/remote/session-executables");
+        std::fs::create_dir_all(home.join(".cargo/bin")).unwrap();
+        std::fs::create_dir_all(&copies).unwrap();
+        let sh = |script: &str| {
+            Command::new("sh")
+                .args(["-c", script])
+                .env("HOME", &home)
+                .output()
+                .unwrap()
+        };
+        let digest = |body: &str| {
+            use sha2::Digest;
+            sha2::Sha256::digest(body)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
+        let shared = home.join(".cargo/bin/justrust");
+        // What an install does on the machine: replace the shared path, and
+        // (session preparation) keep an exact copy under its digest.
+        let install = |body: &str| {
+            std::fs::write(&shared, body).unwrap();
+            crate::sys::set_mode(&shared, 0o755).unwrap();
+            let dir = copies.join(digest(body));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("justrust"), body).unwrap();
+            crate::sys::set_mode(&dir.join("justrust"), 0o500).unwrap();
+        };
+        let (a, b) = ("#!/bin/sh\necho client-a\n", "#!/bin/sh\necho client-b\n");
+        // One home, two clients taking turns: the stamp names the last one.
+        let mut stamp = String::new();
+        let (mut before, mut after) = (0, 0);
+        for body in [a, b, a, b, a, b] {
+            let sha = digest(body);
+            if stamp != sha {
+                before += 1;
+                if !sh(&own_copy_script(&sha)).status.success() {
+                    after += 1;
+                    install(body);
+                }
+                stamp = sha.clone();
+            }
+            // Each client reaches its own bytes, whoever installed last.
+            let run = sh(&format!("{} x", machine_justrust_for(Some(&sha))));
+            assert_eq!(
+                String::from_utf8_lossy(&run.stdout).trim(),
+                if body == a { "client-a" } else { "client-b" }
+            );
+        }
+        assert_eq!(
+            (before, after),
+            (6, 2),
+            "installs: every turn before, once each now"
+        );
+        // The shared path still works, for whatever else calls it.
+        assert!(sh("~/.cargo/bin/justrust").status.success());
+        // A client the machine has never seen falls back to the shared path.
+        let unknown = digest("never installed");
+        assert!(!sh(&own_copy_script(&unknown)).status.success());
+        let run = sh(&format!("{} x", machine_justrust_for(Some(&unknown))));
+        assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "client-b");
+        assert_eq!(machine_justrust_for(None), "~/.cargo/bin/justrust");
+        // A copy whose bytes are not its name is not ours.
+        let forged = copies.join(&unknown);
+        std::fs::create_dir_all(&forged).unwrap();
+        std::fs::write(forged.join("justrust"), a).unwrap();
+        crate::sys::set_mode(&forged.join("justrust"), 0o500).unwrap();
+        assert!(!sh(&own_copy_script(&unknown)).status.success());
+        // Copies unused for two weeks go, the one in use stays.
+        std::fs::File::open(copies.join(digest(b)))
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(std::time::SystemTime::now() - Duration::from_secs(20 * 86400)),
+            )
+            .unwrap();
+        assert!(sh(&own_copy_script(&digest(a))).status.success());
+        assert!(copies.join(digest(a)).join("justrust").exists());
+        assert!(!copies.join(digest(b)).exists());
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

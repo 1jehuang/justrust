@@ -2188,14 +2188,16 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
             crate::remote_session::command(&target, &prefix)
         })?
     } else {
-        let agent_cmd = if prefix.is_empty() {
-            "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; exec ~/.cargo/bin/justrust __agent".to_string()
-        } else {
-            format!(
-                "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; exec ~/.cargo/bin/justrust __agent {}",
-                crate::remote_build::shell_quote(&prefix)
-            )
-        };
+        // This client's own copy on the machine when it has one.
+        let agent_cmd = format!(
+            "export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; exec {} __agent{}",
+            crate::remote_build::machine_justrust(),
+            if prefix.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", crate::remote_build::shell_quote(&prefix))
+            }
+        );
         let mut command = target.command();
         command.arg(agent_cmd);
         command

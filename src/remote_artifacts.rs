@@ -1316,7 +1316,8 @@ fn artifact_command(toolchain: Option<&str>) -> String {
         })
         .unwrap_or_default();
     format!(
-        "{pin}export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; ~/.cargo/bin/justrust {ARG}"
+        "{pin}export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:$HOME/.homebrew/bin:/usr/local/bin:$PATH\"; {} {ARG}",
+        crate::remote_build::machine_justrust()
     )
 }
 
@@ -1720,7 +1721,10 @@ mod tests {
             "export JUSTRUST_TOOLCHAIN={}; ",
             crate::remote_build::shell_quote(pin)
         )));
-        assert!(command.ends_with("~/.cargo/bin/justrust __artifacts"));
+        // This client's own copy on the machine when there is one, else the
+        // shared path.
+        assert!(command.ends_with(" __artifacts"));
+        assert!(command.contains("/.cargo/bin/justrust"));
         assert!(!artifact_command(None).contains("JUSTRUST_TOOLCHAIN="));
     }
 
