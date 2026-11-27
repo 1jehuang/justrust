@@ -355,7 +355,7 @@ pub fn source_roots(cwd: &Path) -> Result<Vec<PathBuf>> {
         // workspace under lockfiles that have changed since.
         if let (Some(entries), Some((workspace, _))) = (v.as_object_mut(), key.split_once('|')) {
             entries.retain(|k, _| {
-                k.starts_with("v3:") && k.split_once('|').is_none_or(|(w, _)| w != workspace)
+                k.starts_with("v4:") && k.split_once('|').is_none_or(|(w, _)| w != workspace)
             });
         }
         v[key] = serde_json::json!(roots);
@@ -533,14 +533,12 @@ fn roots_cache_key(cwd: &Path) -> Option<String> {
     let mut d = Some(cwd);
     while let Some(dir) = d {
         let lock = dir.join("Cargo.lock");
-        if let Ok(md) = std::fs::metadata(&lock) {
-            let mtime = md
-                .modified()
-                .ok()?
-                .duration_since(std::time::UNIX_EPOCH)
-                .ok()?
-                .as_nanos();
-            locks.push(format!("{}@{mtime}", lock.display()));
+        if let Some(hash) = crate::depcache::hash_file_content(&lock) {
+            locks.push(format!(
+                "{}@{}",
+                lock.display(),
+                &hash[..16.min(hash.len())]
+            ));
         }
         d = dir.parent();
     }
@@ -548,7 +546,7 @@ fn roots_cache_key(cwd: &Path) -> Option<String> {
         return None;
     }
     Some(format!(
-        "v3:{}|{}",
+        "v4:{}|{}",
         workspace_dir(cwd).display(),
         locks.join("|")
     ))
@@ -3547,10 +3545,14 @@ mod tests {
 
     #[test]
     fn attached_remote_run_does_not_duplicate_index_entry() {
-        let _guard = crate::test_env::ENV_LOCK.lock().unwrap();
-        let home = tempfile::tempdir().unwrap();
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap();
+        let home =
+            std::env::temp_dir().join(format!("justrust-attached-run-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
         let prev = std::env::var_os("JUSTRUST_HOME");
-        unsafe { std::env::set_var("JUSTRUST_HOME", home.path()) };
+        unsafe { std::env::set_var("JUSTRUST_HOME", &home) };
         let summary = crate::summary::Summary {
             id: "20261126-180033110-1442668".into(),
             subcommand: "test".into(),
@@ -3582,7 +3584,7 @@ mod tests {
             None,
             4.2,
         ));
-        let index = std::fs::read_to_string(home.path().join("index.jsonl")).unwrap();
+        let index = std::fs::read_to_string(home.join("index.jsonl")).unwrap();
         assert_eq!(
             index.lines().count(),
             1,
@@ -3592,6 +3594,7 @@ mod tests {
             Some(v) => unsafe { std::env::set_var("JUSTRUST_HOME", v) },
             None => unsafe { std::env::remove_var("JUSTRUST_HOME") },
         }
+        let _ = std::fs::remove_dir_all(&home);
     }
     #[test]
     fn ambiguous_submission_never_falls_back_but_confirmed_rejection_can() {
@@ -4626,7 +4629,7 @@ mod tests {
         let key = |d: &Path| roots_cache_key(d).unwrap();
         assert_ne!(key(&repo), key(&inner));
         assert_eq!(key(&inner), key(&inner.join("crates/a")));
-        assert!(key(&inner).starts_with(&format!("v3:{}|", inner.display())));
+        assert!(key(&inner).starts_with(&format!("v4:{}|", inner.display())));
         // Before the nested workspace has a lockfile, and for a member of the
         // repository's workspace under the excluded tree, the key is the
         // repository's: a cached set that leaves the directory out is not
@@ -4642,7 +4645,8 @@ mod tests {
             &[repo.clone(), inner.clone()],
             &inner.join("crates/a")
         ));
-        // Another lockfile state of the same workspace is another key.
+        // Touching mtime without changing contents keeps the same key;
+        // changing the lockfile contents produces a new key.
         let before = key(&inner);
         let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
         std::fs::File::options()
@@ -4651,6 +4655,8 @@ mod tests {
             .unwrap()
             .set_modified(later)
             .unwrap();
+        assert_eq!(before, key(&inner));
+        std::fs::write(inner.join("Cargo.lock"), "version = 4\n").unwrap();
         assert_ne!(before, key(&inner));
         let _ = std::fs::remove_dir_all(&t);
     }
