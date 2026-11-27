@@ -325,13 +325,25 @@ pub fn source_roots(cwd: &Path) -> Result<Vec<PathBuf>> {
         dirs.insert(repo_root(ws));
         dirs.extend(excluded_root(ws));
     }
+    let mut packages = Vec::new();
     for p in m["packages"].as_array().into_iter().flatten() {
         if p["source"].is_null()
             && let Some(manifest) = p["manifest_path"].as_str()
             && let Some(d) = Path::new(manifest).parent()
         {
             dirs.extend(roots_of(d));
+            packages.push(d.to_path_buf());
         }
+    }
+    // Files the sources reach by path (`#[path]`, `include!`) from outside
+    // every root, and those an earlier failed build named as missing.
+    let named = packages
+        .iter()
+        .flat_map(|d| crate::remote_sync::escaping_source_dirs(d))
+        .chain(learned_dirs(&cache, cwd));
+    let package_roots = outermost(dirs.clone());
+    for dir in named {
+        dirs.extend(outside_root(&package_roots, &dir));
     }
     let roots = outermost(dirs);
     if let Some(key) = cache_key {
@@ -350,6 +362,90 @@ pub fn source_roots(cwd: &Path) -> Result<Vec<PathBuf>> {
         let _ = std::fs::write(&cache, v.to_string());
     }
     Ok(roots)
+}
+
+/// A root for `dir`, which holds a source file named by path, when no root
+/// in `roots` mirrors it. None for an ancestor of a root: one stray
+/// `../../x.rs` must not mirror a home directory. That build still fails on
+/// the machine, naming the file.
+fn outside_root(roots: &[PathBuf], dir: &Path) -> Option<PathBuf> {
+    if !dir.is_dir() || mirrors(roots, dir) || roots.iter().any(|r| r.starts_with(dir)) {
+        return None;
+    }
+    Some(excluded_root(dir).unwrap_or_else(|| dir.to_path_buf()))
+}
+
+fn learned_key(cwd: &Path) -> String {
+    format!("v3:learned|{}", workspace_dir(cwd).display())
+}
+
+fn learned_dirs(cache: &Path, cwd: &Path) -> Vec<PathBuf> {
+    std::fs::read(cache)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.get(learned_key(cwd))?.as_array().cloned())
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p.as_str().map(PathBuf::from))
+        .collect()
+}
+
+/// Files a failed build on the machine could not find or read that exist
+/// here outside every mirrored root: the paths in rustc's "couldn't find
+/// file" and "couldn't read" errors, which are relative to the workspace.
+fn unmirrored_missing(output: &str, cwd: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for marker in ["couldn't find file `", "couldn't read `"] {
+        for rest in output.split(marker).skip(1) {
+            let Some(named) = rest.split('`').next() else {
+                continue;
+            };
+            let found = [workspace_dir(cwd), cwd.to_path_buf()]
+                .iter()
+                .map(|base| crate::remote_sync::lexical_normalize(&base.join(named)))
+                .find(|p| p.is_file());
+            if let Some(file) = found
+                && file.parent().is_some_and(|d| !mirrors(roots, d))
+                && !out.contains(&file)
+            {
+                out.push(file);
+            }
+        }
+    }
+    out
+}
+
+/// After a failed remote build: remember the directories of files it named
+/// as missing that exist here, so the next build mirrors them. Returns the
+/// files that will now be mirrored.
+fn learn_missing(output: &str, cwd: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut files = unmirrored_missing(output, cwd, roots);
+    files.retain(|f| f.parent().is_some_and(|d| outside_root(roots, d).is_some()));
+    if files.is_empty() {
+        return files;
+    }
+    let Ok(cache) = crate::remote::dir().map(|d| d.join("roots.json")) else {
+        return Vec::new();
+    };
+    let mut v: serde_json::Value = std::fs::read(&cache)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let mut dirs: BTreeSet<PathBuf> = learned_dirs(&cache, cwd).into_iter().collect();
+    dirs.extend(
+        files
+            .iter()
+            .filter_map(|f| f.parent().map(Path::to_path_buf)),
+    );
+    v[learned_key(cwd)] = serde_json::json!(dirs);
+    // The cached roots predate this: compute them again on the next build.
+    if let (Some(entries), Some(key)) = (v.as_object_mut(), roots_cache_key(cwd)) {
+        entries.remove(&key);
+    }
+    if std::fs::write(&cache, v.to_string()).is_err() {
+        return Vec::new();
+    }
+    files
 }
 
 fn cargo_missing(e: &anyhow::Error) -> bool {
@@ -2238,6 +2334,14 @@ fn run_remote_inner(
                 if let Some(hr) = admitted.as_mut() {
                     hr.finish("done", Some(code), failure.as_ref());
                 }
+                if code != 0 {
+                    for file in learn_missing(&String::from_utf8_lossy(&summary), &cwd, &roots) {
+                        eprintln!(
+                            "justrust remote: {} exists here but was outside the mirrored roots, so the machine did not have it. It is mirrored from the next build on: run this again.",
+                            file.display()
+                        );
+                    }
+                }
                 if compile_only {
                     compile_stdout.finish(&mut so, &mut se, json_output)?;
                     // A prebuild only warms the machine's target dir: the
@@ -3797,5 +3901,70 @@ mod tests {
         assert_eq!(shell_quote("a b"), "'a b'");
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
         assert_eq!(shell_quote(""), "''");
+    }
+
+    /// The layout that failed on the machine: a workspace copied outside git
+    /// whose crate names `../shared/x.rs` by `#[path]`.
+    #[test]
+    fn sources_named_by_path_outside_the_roots_get_a_root() {
+        let t = std::env::temp_dir().join(format!("jr-roots-escaping-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let ws = t.join("toolchain/cargo");
+        let krate = ws.join("crates/util");
+        let shared = t.join("toolchain/shared");
+        let data = t.join("toolchain/data");
+        for d in [&krate.join("src"), &shared, &data, &ws.join("target/debug")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(ws.join("Cargo.toml"), "[workspace]\n").unwrap();
+        std::fs::write(krate.join("Cargo.toml"), "[package]\n").unwrap();
+        std::fs::write(shared.join("binding.rs"), "").unwrap();
+        std::fs::write(data.join("table.bin"), "").unwrap();
+        std::fs::write(t.join("toolchain/stray.rs"), "").unwrap();
+        std::fs::write(krate.join("other.rs"), "").unwrap();
+        std::fs::write(
+            krate.join("src/lib.rs"),
+            concat!(
+                "#[path = \"../../../../shared/binding.rs\"]\nmod binding;\n",
+                "static T: &[u8] = include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../../data/table.bin\"));\n",
+                "// include!(\"../../../../commented/out.rs\");\n",
+                "include!(\"../../../../gone/missing.rs\");\n",
+                "include!(\"../other.rs\");\n",
+                "#[path = \"../../../../stray.rs\"]\nmod stray;\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            ws.join("target/debug/gen.rs"),
+            "include!(\"../../../shared/binding.rs\");\n",
+        )
+        .unwrap();
+        let named = crate::remote_sync::escaping_source_dirs(&krate);
+        let toolchain = t.join("toolchain");
+        assert_eq!(
+            named.iter().collect::<Vec<_>>(),
+            vec![&toolchain, &data, &shared]
+        );
+        // Neither build output nor a nested package is a source of the
+        // workspace root package.
+        assert!(crate::remote_sync::escaping_source_dirs(&ws).is_empty());
+        let roots = vec![ws.clone()];
+        assert_eq!(outside_root(&roots, &shared), Some(shared.clone()));
+        assert_eq!(outside_root(&roots, &data), Some(data.clone()));
+        // Above a root: never widened to it.
+        assert_eq!(outside_root(&roots, &toolchain), None);
+        // Already mirrored.
+        assert_eq!(outside_root(&roots, &krate), None);
+
+        // The same file, learned from the machine's error instead.
+        let error = "error: couldn't find file `crates/util/src/../../../../shared/binding.rs`\n\
+                     error: couldn't read `crates/util/src/../../../../gone/missing.rs`: No such file\n\
+                     error: couldn't read `crates/util/src/../other.rs`: No such file";
+        assert_eq!(
+            unmirrored_missing(error, &krate, &roots),
+            vec![shared.join("binding.rs")]
+        );
+        assert!(unmirrored_missing(error, &krate, &[ws, shared]).is_empty());
+        let _ = std::fs::remove_dir_all(&t);
     }
 }

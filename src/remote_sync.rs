@@ -133,6 +133,91 @@ pub struct Scan {
     pub oversized: Vec<PathBuf>,
 }
 
+/// Directories outside `pkg` holding files that its sources name by a literal
+/// relative path: `#[path = "../x.rs"]`, `include!("../x.rs")` (also `_str`
+/// and `_bytes`), or `concat!(env!("CARGO_MANIFEST_DIR"), "/../x")`.
+///
+/// Cargo metadata names packages, not files, so a mirror of the package
+/// roots alone left such a file behind and the machine failed with
+/// "couldn't find file" on a tree that builds locally. Only literals on one
+/// line are read. Anything else is found from the failed build's error.
+pub fn escaping_source_dirs(pkg: &Path) -> BTreeSet<PathBuf> {
+    let mut out = BTreeSet::new();
+    let mut stack = vec![pkg.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if kind.is_dir() {
+                let name = entry.file_name();
+                // Build output, VCS data, and nested packages (scanned as
+                // packages of their own when they are part of the build).
+                if name != "target"
+                    && !name.to_string_lossy().starts_with('.')
+                    && !path.join("Cargo.toml").is_file()
+                {
+                    stack.push(path);
+                }
+            } else if kind.is_file()
+                && path.extension().is_some_and(|x| x == "rs")
+                && let Ok(text) = std::fs::read_to_string(&path)
+                && text.contains("../")
+            {
+                let here = path.parent().unwrap_or(pkg);
+                for line in text.lines() {
+                    escaping_literals(pkg, here, line, &mut out);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn escaping_literals(pkg: &Path, here: &Path, line: &str, out: &mut BTreeSet<PathBuf>) {
+    let code = line.trim_start();
+    if !code.contains("../") || code.starts_with("//") {
+        return;
+    }
+    let manifest = code.contains("CARGO_MANIFEST_DIR");
+    if !(manifest || code.contains("include") || code.contains("#[path")) {
+        return;
+    }
+    // Odd pieces of a split on quotes are the string literals.
+    for literal in code.split('"').skip(1).step_by(2) {
+        if !literal.contains("../") {
+            continue;
+        }
+        let base = if manifest { pkg } else { here };
+        let file = lexical_normalize(&base.join(literal.trim_start_matches('/')));
+        if !file.starts_with(pkg)
+            && file.is_file()
+            && let Some(dir) = file.parent()
+        {
+            out.insert(dir.to_path_buf());
+        }
+    }
+}
+
+/// `a/b/../c` as `a/c`, without touching the filesystem.
+pub fn lexical_normalize(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => (),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Every regular file the build may read under `root`: tracked and untracked
 /// files that are not gitignored (or a plain walk outside git).
 pub fn scan(root: &Path) -> Result<Scan> {
