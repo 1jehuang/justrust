@@ -261,13 +261,27 @@ fn scan(root: &Path, now: SystemTime) -> Vec<CrateDir> {
     dirs
 }
 
-fn try_lock_existing(path: &Path) -> std::io::Result<Option<File>> {
+/// A lock that is released when this is dropped, not when the last copy of
+/// its descriptor closes. Closing is not enough: a child process started by
+/// another thread inherits the descriptor until it execs, and the lock
+/// belongs to the open file, so it outlived the drop. The next collection
+/// then found its own stamp or a session lock taken (seen as a test that
+/// removed nothing when the suite ran in parallel).
+struct Held(File);
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
+fn try_lock_existing(path: &Path) -> std::io::Result<Option<Held>> {
     let f = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)?;
     match f.try_lock() {
-        Ok(()) => Ok(Some(f)),
+        Ok(()) => Ok(Some(Held(f))),
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
         Err(std::fs::TryLockError::Error(e)) => Err(e),
     }
@@ -309,7 +323,7 @@ fn remove_crate_dir(root: &Path, name: &str, policy: &Policy, now: SystemTime) -
         return Outcome::Changed;
     };
     // Take every session lock. They are held until this function returns.
-    let mut locks: Vec<File> = Vec::new();
+    let mut locks: Vec<Held> = Vec::new();
     for n in before.iter().filter(|n| n.ends_with(".lock")) {
         match try_lock_existing(&dir.join(n)) {
             Ok(Some(f)) => locks.push(f),
@@ -437,12 +451,12 @@ pub fn collect(root: &Path, policy: &Policy, dry_run: bool) -> Option<Report> {
         .write(true)
         .open(root.join(STAMP))
         .ok();
-    let Some(stamp) = stamp.filter(|f| f.try_lock().is_ok()) else {
+    let Some(stamp) = stamp.filter(|f| f.try_lock().is_ok()).map(Held) else {
         rep.skipped = Some("another collector is running");
         return Some(rep);
     };
     if !dry_run {
-        let _ = stamp.set_modified(now);
+        let _ = stamp.0.set_modified(now);
     }
     let dirs = scan(&root, now);
     rep.dirs = dirs.len();
@@ -825,6 +839,38 @@ mod tests {
         // Idempotent.
         let again = collect(&root, &policy(), false).unwrap();
         assert_eq!((again.dirs, again.removed), (2, 0));
+    }
+
+    /// A child started by another thread holds a copy of every open
+    /// descriptor until it execs. A lock the collector dropped must be free
+    /// at once anyway.
+    #[cfg(unix)]
+    #[test]
+    fn a_dropped_lock_is_free_while_other_threads_start_processes() {
+        let (_tmp, root) = Tmp::new("fork", "debug/incremental");
+        let path = root.join("x.lock");
+        std::fs::write(&path, b"").unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let spawners: Vec<_> = (0..4)
+            .map(|_| {
+                let stop = stop.clone();
+                std::thread::spawn(move || {
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        let _ = std::process::Command::new("/bin/true").status();
+                    }
+                })
+            })
+            .collect();
+        let mut busy = 0;
+        for _ in 0..3000 {
+            drop(try_lock_existing(&path).unwrap());
+            busy += usize::from(try_lock_existing(&path).unwrap().is_none());
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        for s in spawners {
+            s.join().unwrap();
+        }
+        assert_eq!(busy, 0);
     }
 
     #[test]
