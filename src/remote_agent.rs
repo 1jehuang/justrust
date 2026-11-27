@@ -1143,20 +1143,22 @@ fn bwrap_canonical_mount(cwd: &Path, env: &[(String, String)]) -> Option<PathBuf
     Some(canonical)
 }
 
-fn prebuilt_proxy_url() -> Option<&'static str> {
-    static URL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+/// The loopback proxy's URL and the store it serves.
+fn prebuilt_proxy() -> Option<&'static (String, String)> {
+    static URL: std::sync::OnceLock<Option<(String, String)>> = std::sync::OnceLock::new();
     URL.get_or_init(|| {
         let upstream = crate::depcache_prebuilt::base()?;
         if !upstream.starts_with("https://") && !upstream.starts_with("http://") {
             return None;
         }
         let cache_dir = crate::paths::cache_root()?.join("prebuilt-mirror");
-        crate::prebuilt_proxy::start_with(
+        let url = crate::prebuilt_proxy::start_with(
             crate::depcache_prebuilt::proxy_sources(&upstream),
             cache_dir,
-        )
+        )?;
+        Some((url, upstream))
     })
-    .as_deref()
+    .as_ref()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1310,9 +1312,12 @@ fn start_run(
     // loopback proxy (pooled upstream TLS + local NVMe cache) when the caller
     // has not overridden JUSTRUST_PREBUILT.
     if !env.iter().any(|(k, _)| k == "JUSTRUST_PREBUILT")
-        && let Some(proxy_url) = prebuilt_proxy_url()
+        && let Some((proxy_url, store)) = prebuilt_proxy()
     {
         c.env("JUSTRUST_PREBUILT", proxy_url);
+        // The proxy's port differs per agent. Shims name their copy of the
+        // store's index after the store, so sessions share one.
+        c.env(crate::depcache_prebuilt::STORE_ENV, store);
     }
     // Enable workspace-portable localcache on hosted builds so unchanged
     // workspace crates reuse across git worktrees and fresh checkouts of the

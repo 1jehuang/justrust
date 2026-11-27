@@ -354,11 +354,70 @@ pub(crate) fn tmp(root: &Path, tag: &str) -> PathBuf {
     ))
 }
 
-/// Local copy of the store's index, one hash of the base URL per store.
+/// Names the store behind `JUSTRUST_PREBUILT` when that is a loopback proxy
+/// (`http://127.0.0.1:<port>`, what the remote agent gives its builds).
+pub(crate) const STORE_ENV: &str = "JUSTRUST_PREBUILT_STORE";
+
+/// Local copy of the store's index, one hash of the store's URL per store.
+///
+/// Behind the agent's proxy the base URL is `http://127.0.0.1:<port>` with a
+/// port the kernel picked for that agent, so naming the file after the base
+/// gave every session its own index of the same store: its first build
+/// fetched it again, and the old files were never read again. The agent
+/// names the store it proxies in [`STORE_ENV`], and the file is named after
+/// that. One index covers every toolchain (the keys in it differ), so the
+/// toolchain is not part of the name. A different store is a different name.
 fn index_path(root: &Path, base: &str) -> PathBuf {
+    index_path_for(root, base, std::env::var(STORE_ENV).ok().as_deref())
+}
+
+fn index_path_for(root: &Path, base: &str, store: Option<&str>) -> PathBuf {
     let mut h = depcache::H128::new();
-    h.field(base.as_bytes());
+    h.field(index_identity(base, store).as_bytes());
     root.join(format!("prebuilt-index-{}", &h.hex()[..12]))
+}
+
+/// Remove other stores' index copies nobody has refreshed for a day.
+///
+/// An index is used for [`INDEX_SECS`] and then fetched again, so one this
+/// old is only disk: a build host had 50 of them (206 MB), one per agent
+/// session, from when they were named after the proxy's port. Runs after a
+/// refresh, so at most once per [`INDEX_SECS`] per store. Lock files (empty)
+/// stay: a lock must keep its inode while anyone may hold it.
+fn sweep_old_indexes(root: &Path, keep: &Path) {
+    const OLD_SECS: f64 = 24.0 * 3600.0;
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        let name = e.file_name();
+        let Some(hex) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix("prebuilt-index-"))
+        else {
+            continue;
+        };
+        let is_index = hex.len() == 12 && hex.bytes().all(|b| b.is_ascii_hexdigit());
+        if is_index && p != keep && !fresh_file(&p, OLD_SECS) {
+            let _ = std::fs::remove_file(&p);
+            let _ = std::fs::remove_file(p.with_extension("costs"));
+            let _ = std::fs::remove_file(p.with_extension("none"));
+        }
+    }
+}
+
+/// What an index file is named after: the proxied store for a loopback base
+/// that names one, else the base itself. A store name next to a real store
+/// URL is ignored, so it cannot point one store's lookups at another's index.
+fn index_identity<'a>(base: &'a str, store: Option<&'a str>) -> &'a str {
+    let loopback = ["http://127.0.0.1:", "http://localhost:", "http://[::1]:"]
+        .iter()
+        .any(|p| base.starts_with(p));
+    match store.map(|s| s.trim().trim_end_matches('/')) {
+        Some(s) if loopback && !s.is_empty() => s,
+        _ => base,
+    }
 }
 
 /// Whether downloading the unit should beat compiling it here, from the
@@ -542,6 +601,7 @@ fn may_have(root: &Path, base: &str, key: &str) -> bool {
                     let _ = std::fs::remove_file(&t);
                     return true;
                 }
+                sweep_old_indexes(root, &idx);
             }
             Got::Missing => {
                 let _ = std::fs::write(&none, b"");
@@ -955,6 +1015,83 @@ mod tests {
             ]
         );
         assert!(v[0].authoritative && !v[1].authoritative && !v[2].authoritative);
+    }
+
+    #[test]
+    fn index_file_is_named_after_the_store_not_the_proxy_port() {
+        let root = Path::new("/r");
+        let store = "https://prebuilt.example";
+        let a = index_path_for(root, "http://127.0.0.1:40001", Some(store));
+        // Another session: another port, the same store, the same file.
+        assert_eq!(
+            a,
+            index_path_for(
+                root,
+                "http://127.0.0.1:51877",
+                Some("https://prebuilt.example/")
+            )
+        );
+        // And the file a direct client of that store uses.
+        assert_eq!(a, index_path_for(root, store, None));
+        // Another store behind the same port is another file.
+        assert_ne!(
+            a,
+            index_path_for(
+                root,
+                "http://127.0.0.1:40001",
+                Some("https://other.example")
+            )
+        );
+        // A proxy that names no store keeps its own file, as before.
+        let unnamed = index_path_for(root, "http://127.0.0.1:40001", None);
+        assert_ne!(a, unnamed);
+        assert_eq!(
+            unnamed,
+            index_path_for(root, "http://127.0.0.1:40001", Some(" "))
+        );
+        // A real store URL is never renamed by the variable.
+        assert_eq!(
+            index_path_for(root, "https://other.example", Some(store)),
+            index_path_for(root, "https://other.example", None)
+        );
+        assert_eq!(
+            index_path_for(root, "file:///srv/store", Some(store)),
+            index_path_for(root, "file:///srv/store", None)
+        );
+        // Costs, the no-index marker and the refresh lock follow the index.
+        assert_eq!(
+            costs_path(root, store),
+            index_path_for(root, store, None).with_extension("costs")
+        );
+    }
+
+    #[test]
+    fn only_day_old_copies_of_other_indexes_are_swept() {
+        let root = std::env::temp_dir().join(format!("jr-idx-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let age = |name: &str, secs: u64| {
+            let p = root.join(name);
+            std::fs::write(&p, b"k\n").unwrap();
+            let f = std::fs::File::options().write(true).open(&p).unwrap();
+            f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(secs))
+                .unwrap();
+            p
+        };
+        let day = 24 * 3600;
+        let ours = age("prebuilt-index-aaaaaaaaaaaa", 2 * day);
+        let old = age("prebuilt-index-bbbbbbbbbbbb", 2 * day);
+        let old_costs = age("prebuilt-index-bbbbbbbbbbbb.costs", 2 * day);
+        let old_lock = age("prebuilt-index-bbbbbbbbbbbb.refresh-lock", 2 * day);
+        let recent = age("prebuilt-index-cccccccccccc", day / 2);
+        let other = age("prebuilt-index-notanindex", 2 * day);
+        sweep_old_indexes(&root, &ours);
+        assert!(ours.exists(), "the index just refreshed");
+        assert!(!old.exists() && !old_costs.exists());
+        assert!(old_lock.exists(), "locks keep their inode");
+        assert!(recent.exists(), "another store in use today");
+        assert!(other.exists(), "not a file this module named");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
