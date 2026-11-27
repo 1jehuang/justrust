@@ -14,6 +14,11 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 RELEVANT = ["toolchain", "scripts/toolchain-candidate.py", "scripts/toolchain-source.py",
             "Cargo.toml", "Cargo.lock", "build.rs", ".cargo"]
+# What the compiler and Cargo are built from. A client release bumps the root
+# Cargo.toml and Cargo.lock, which the frozen snapshot of the revision never
+# reads. The ship tool resumes a tag behind such commits, so this must agree
+# with its TOOLCHAIN_SOURCE or a resumed ship can never build (2026-11-27).
+TOOLCHAIN_SOURCE = ["toolchain", "scripts/toolchain-candidate.py", "scripts/toolchain-source.py"]
 
 
 def cargo_archive_argv(root, revision):
@@ -31,11 +36,12 @@ def validate_source(root, revision):
         raise ValueError("candidate builds require the stable branch")
     head = git(root, "rev-parse", "HEAD")
     if head != revision:
-        # HEAD may advance during a long build through unrelated commits
-        # (other agents share stable). Only relevant source drift fails.
+        # HEAD may advance through unrelated commits, client releases
+        # included (other agents share stable). Only toolchain source drift
+        # fails.
         if subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", revision, head]).returncode != 0:
             raise ValueError("--source-commit must be the checked-out HEAD or an ancestor of it")
-        if git(root, "diff", "--name-only", revision, head, "--", *RELEVANT):
+        if git(root, "diff", "--name-only", revision, head, "--", *TOOLCHAIN_SOURCE):
             raise ValueError("relevant toolchain source changed between --source-commit and HEAD")
     dirty = git(root, "status", "--porcelain", "--untracked-files=no", "--", *RELEVANT)
     if dirty:

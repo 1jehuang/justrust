@@ -124,6 +124,20 @@ class CandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "dirty relevant"):
             self.plan()
 
+    def test_a_client_release_after_the_revision_does_not_stop_the_build(self):
+        (self.root / "Cargo.toml").write_text('[package]\nversion = "0.1.2"\n')
+        (self.root / "Cargo.lock").write_text("version = 4\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Release v0.1.2")
+        self.assertEqual(self.plan()["source_revision"], self.revision)
+
+    def test_toolchain_source_committed_after_the_revision_stops_the_build(self):
+        (self.root / "toolchain/shared/query_binding.rs").write_text("changed\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "compiler change")
+        with self.assertRaisesRegex(ValueError, "toolchain source changed"):
+            self.plan()
+
     def test_unrelated_dirty_allowed_and_untracked_excluded_from_archive(self):
         (self.root / "docs/note.md").write_text("unrelated\n")
         (self.root / "toolchain/untracked").write_text("not committed\n")
