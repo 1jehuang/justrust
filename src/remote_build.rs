@@ -2219,6 +2219,11 @@ fn run_remote_inner(
                 mark(&format!("run files {} KB", data.len() / 1024));
                 run_files = data
             }
+            (Msg::LinkOutage { ms, .. }, _) => {
+                // The daemon's transport dropped and came back under this run.
+                mark(&format!("link outage {ms:.0} ms"));
+                crate::e2e::note("link_outage", ms / 1000.0);
+            }
             (Msg::Exit { code, timing, .. }, summary) => {
                 settle_overlap_admit!(true);
                 diagnostic.exit = Some(code);
@@ -2615,6 +2620,8 @@ fn record_remote(
             slot_wait: s.slot.as_ref().map_or(0.0, |slot| slot.join_wait_secs),
             host_own,
             host_phases: s.phases.clone(),
+            link_outage: crate::e2e::noted("link_outage"),
+            artifacts: crate::e2e::ArtifactTimes::noted(),
         },
     ));
     // Hints are local state: attach them here, not on the remote machine

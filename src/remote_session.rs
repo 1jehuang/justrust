@@ -898,6 +898,25 @@ fn retryable(error: &anyhow::Error) -> bool {
     })
 }
 
+/// Bridge stderr, read by the sync daemon: the transport dropped and the
+/// original session is being reattached.
+pub const INTERRUPTED: &str = "hosted: transport interrupted";
+const RESTORED: &str = "hosted: transport restored after ";
+
+fn restored_line(silent: Duration) -> String {
+    format!("{RESTORED}{:.3}s", silent.as_secs_f64())
+}
+
+/// Seconds without the machine, from a bridge's "restored" line.
+pub fn restored_secs(line: &str) -> Option<f64> {
+    line.trim()
+        .strip_prefix(RESTORED)?
+        .strip_suffix('s')?
+        .parse()
+        .ok()
+        .filter(|secs: &f64| secs.is_finite() && *secs >= 0.0)
+}
+
 #[derive(Default)]
 struct RecoveryBudget {
     retries: usize,
@@ -995,6 +1014,8 @@ fn bridge(target: Target, prefix: String, executable: PinnedSessionExecutable) -
     let mut offset = 0;
     let mut recovery = RecoveryBudget::default();
     let mut create = true;
+    // Last time the machine was heard before the transport dropped.
+    let mut silent_since: Option<Instant> = None;
     loop {
         let mode = if create { "create" } else { "attach" };
         // Creation is one-shot even when its response is lost. All later
@@ -1068,6 +1089,9 @@ fn bridge(target: Target, prefix: String, executable: PinnedSessionExecutable) -
             };
             connected.store(true, Ordering::SeqCst);
             *last_seen.lock().unwrap() = Instant::now();
+            if let Some(since) = silent_since.take() {
+                eprintln!("{}", restored_line(since.elapsed()));
+            }
             let (lock, cv) = &*pending;
             acknowledge(&mut lock.lock().unwrap(), accepted)?;
             cv.notify_all();
@@ -1166,8 +1190,11 @@ fn bridge(target: Target, prefix: String, executable: PinnedSessionExecutable) -
         match result {
             Ok(_) => return Ok(()),
             Err(e) if recovery.retry(&e, Instant::now()) => {
+                // A failed reattach attempt keeps the first loss's time.
+                let heard = *last_seen.lock().unwrap();
+                silent_since.get_or_insert(heard);
                 eprintln!(
-                    "hosted: transport interrupted, reattaching original session ({}/{RECONNECTS})",
+                    "{INTERRUPTED}, reattaching original session ({}/{RECONNECTS})",
                     recovery.retries
                 );
             }

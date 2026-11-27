@@ -461,6 +461,8 @@ struct Link {
     stdin: Arc<Mutex<BufWriter<ChildStdin>>>,
     routes: Mutex<Routes>,
     mirror: Mirror,
+    /// Transport drops this link's durable session reattached through.
+    outage: Arc<Outage>,
     /// Peer dependency cache over this session (`src/peercache.rs`).
     peer: Arc<peercache::Relay>,
     /// The agent serves `Checkpoint` and `Verify`, and this daemon uses them.
@@ -565,9 +567,55 @@ impl InstallRetry {
     }
 }
 
+/// How long a link's transport was down, from its session bridge's stderr.
+/// The bridge hides a reattached drop from the frame stream, so without this
+/// a build only looks slow to return.
+#[derive(Default)]
+struct Outage {
+    restored_us: AtomicU64,
+    down: Mutex<Option<Instant>>,
+}
+
+impl Outage {
+    /// Feed one stderr line of the bridge.
+    fn observe(&self, line: &str) {
+        if line.starts_with(crate::remote_session::INTERRUPTED) {
+            self.down.lock().unwrap().get_or_insert_with(Instant::now);
+        } else if let Some(secs) = crate::remote_session::restored_secs(line) {
+            self.restored_us
+                .fetch_add((secs * 1e6) as u64, Ordering::SeqCst);
+            *self.down.lock().unwrap() = None;
+        }
+    }
+
+    /// The bridge reported a drop it has not recovered from.
+    fn is_down(&self) -> bool {
+        self.down.lock().unwrap().is_some()
+    }
+
+    /// Milliseconds of outages that ended in a reattach.
+    fn restored_ms(&self) -> f64 {
+        self.restored_us.load(Ordering::SeqCst) as f64 / 1000.0
+    }
+
+    /// As `restored_ms`, for a caller holding a frame that arrived after a
+    /// reattach: stderr is read on another thread, so give its line a moment.
+    fn settled_ms(&self) -> f64 {
+        let waited = Instant::now();
+        while self.is_down() && waited.elapsed() < Duration::from_millis(100) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        self.restored_ms()
+    }
+}
+
 /// Everything network operations touch. Held across them.
 struct Sync {
     install_retry: InstallRetry,
+    /// Where the last connect's time went, until the run that paid reports it.
+    link_parts: Option<[Duration; 3]>,
+    /// Roots of recent builds, newest last: re-verified after a relink.
+    recent_roots: Vec<(PathBuf, Instant)>,
     // One whole-root-set receipt, never persisted or shared across connections.
     receipt: Option<(Vec<std::ffi::OsString>, String)>,
     backend: Backend,
@@ -774,6 +822,8 @@ struct Daemon {
     warm_admit: Mutex<Option<WarmAdmit>>,
     /// Pre-authorized monthly included build-allowance leases for ~0 ms warm admission.
     leases: Arc<Mutex<LeasePool>>,
+    /// Wakes `relink_loop` when a link died of a transport drop.
+    relink: Option<std::sync::mpsc::SyncSender<()>>,
 }
 
 fn hosted_admit_agent() -> ureq::Agent {
@@ -929,6 +979,7 @@ fn daemon() -> Result<()> {
         daemon_id()
     ));
     let (wtx, wrx) = channel::<PathBuf>();
+    let (relink_tx, relink_rx) = std::sync::mpsc::sync_channel::<()>(1);
     let d = Arc::new(Daemon {
         status_hint: Some(status_hints(sock.with_file_name("daemon-status"))),
         info: Mutex::new(Info {
@@ -938,11 +989,14 @@ fn daemon() -> Result<()> {
         }),
         sync: SyncQueue::new(Sync {
             install_retry: Default::default(),
+            link_parts: None,
+            recent_roots: Vec::new(),
             receipt: None,
             backend,
             link: None,
             roots: BTreeMap::new(),
         }),
+        relink: Some(relink_tx),
         next_id: AtomicU64::new(1),
         watcher: Watcher::new(wtx)?,
         sock: (sock.clone(), crate::sys::file_id(&md)),
@@ -980,6 +1034,10 @@ fn daemon() -> Result<()> {
     }
     {
         let d = d.clone();
+        std::thread::spawn(move || relink_loop(&d, relink_rx));
+    }
+    {
+        let d = d.clone();
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(Duration::from_secs(60));
@@ -1006,6 +1064,76 @@ fn daemon() -> Result<()> {
 
 #[path = "remote_daemon_debounce.rs"]
 mod debounce;
+
+/// After a transport drop killed the link, connect again and re-verify the
+/// mirrors of recent builds, so the next build does not wait for either.
+/// Bounded: only while a client used this daemon recently, a few attempts,
+/// and never starting a stopped machine. Builds always go first.
+fn relink_loop(d: &Daemon, rx: Receiver<()>) {
+    const ATTEMPTS: [u64; 6] = [1, 2, 4, 8, 15, 30];
+    const RECENT: Duration = Duration::from_secs(600);
+    while rx.recv().is_ok() {
+        for wait in ATTEMPTS {
+            std::thread::sleep(Duration::from_secs(wait));
+            let used = d
+                .info
+                .lock()
+                .is_ok_and(|i| i.active > 0 || i.last_client.is_some_and(|t| t.elapsed() < RECENT));
+            if d.draining.load(Ordering::SeqCst) || !used {
+                break;
+            }
+            // A build holding or waiting for the lock connects by itself.
+            let Ok(mut st) = d.sync.try_background_lock() else {
+                continue;
+            };
+            if st.link.as_ref().is_some_and(|l| l.alive()) {
+                break;
+            }
+            let t = Instant::now();
+            let link = match ensure_link(d, &mut st, false) {
+                Ok(link) => link,
+                Err(e) => {
+                    log(&format!("relink: {e:#}"));
+                    continue;
+                }
+            };
+            // No run waited for this connect: none should report its parts.
+            st.link_parts = None;
+            let roots: Vec<PathBuf> = st
+                .recent_roots
+                .iter()
+                .rev()
+                .filter(|(root, at)| at.elapsed() < RECENT && root.is_dir())
+                .take(2)
+                .map(|(root, _)| root.clone())
+                .collect();
+            let mut verified = 0;
+            for root in &roots {
+                if d.sync.foreground_waiting() || !link.alive() {
+                    break;
+                }
+                if !st.needs_mirror(root) {
+                    continue;
+                }
+                match mirror_root(d, &mut st, &link, root) {
+                    Ok(_) => verified += 1,
+                    Err(e) => {
+                        st.source_sync_failed(root);
+                        log(&format!("relink: mirror {}: {e:#}", root.display()));
+                    }
+                }
+            }
+            log(&format!(
+                "relinked after a transport drop in {:.2}s, {verified} of {} recent mirror(s) re-verified",
+                t.elapsed().as_secs_f64(),
+                roots.len()
+            ));
+            break;
+        }
+        // Drops during the attempts are covered by them.
+        while rx.try_recv().is_ok() {}
+    }
+}
 
 /// Debounce watch events, then push the touched roots.
 fn push_loop(d: &Daemon, rx: Receiver<PathBuf>) {
@@ -1926,12 +2054,15 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     if !start && !st.backend.probably_up() {
         bail!("remote machine is not running");
     }
+    let connecting = Instant::now();
     let target = st.backend.ensure_ready()?;
+    let ready = connecting.elapsed();
     st.install_retry.run(&target.dest, Instant::now, || {
         crate::remote_build::ensure_remote_justrust(&target)
     })?;
     let prefix = resolve_remote_prefix(&st.backend, &target)?;
     save_active_prefix(&prefix);
+    let installed = connecting.elapsed();
     let mut command = if st.backend == Backend::Hosted && crate::remote_session::enabled() {
         st.install_retry.run(&target.dest, Instant::now, || {
             crate::remote_session::command(&target, &prefix)
@@ -1957,7 +2088,9 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
         .context("starting the remote agent")?;
     // The agent reports write failures on stderr: drain it into our log so
     // a full pipe never stalls it.
+    let outage = Arc::new(Outage::default());
     if let Some(mut e) = child.stderr.take() {
+        let outage = outage.clone();
         std::thread::spawn(move || {
             let mut s = String::new();
             let mut buf = [0u8; 4096];
@@ -1967,6 +2100,7 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
                 }
                 s.push_str(&String::from_utf8_lossy(&buf[..n]));
                 while let Some(i) = s.find('\n') {
+                    outage.observe(&s[..i]);
                     log(&format!("agent: {}", &s[..i]));
                     s.drain(..=i);
                 }
@@ -2009,6 +2143,7 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     let link = Arc::new(Link {
         child: Mutex::new(child),
         stdin,
+        outage,
         peer: peer.clone(),
         checkpoint,
         routes: Mutex::default(),
@@ -2020,9 +2155,31 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     {
         let link = link.clone();
         let hint = d.status_hint.clone();
-        std::thread::spawn(move || read_agent(&link, stdout, hint));
+        let relink = d.relink.clone();
+        std::thread::spawn(move || {
+            read_agent(&link, stdout, hint);
+            // The machine closing an idle session is not a reason to come
+            // back. A transport that dropped under a live session is.
+            if link.outage.is_down()
+                && let Some(tx) = relink
+            {
+                let _ = tx.try_send(());
+            }
+        });
     }
-    log(&format!("connected to {}", target.dest));
+    st.link_parts = Some([
+        ready,
+        installed.saturating_sub(ready),
+        connecting.elapsed().saturating_sub(installed),
+    ]);
+    log(&format!(
+        "connected to {} in {:.2}s: ready {:.2}s, install {:.2}s, session {:.2}s",
+        target.dest,
+        connecting.elapsed().as_secs_f64(),
+        ready.as_secs_f64(),
+        installed.saturating_sub(ready).as_secs_f64(),
+        connecting.elapsed().saturating_sub(installed).as_secs_f64()
+    ));
     peer.prefetch_keys();
     if let Ok(mut c) = d.peer.lock() {
         *c = Some(peer);
@@ -3213,6 +3370,15 @@ fn run(
             setup_phase(w, "connecting")?;
             let link = ensure_link(d, &mut st, start)?;
             let linked = t.elapsed();
+            // Only the run that waited for a connect reports its parts.
+            let link_parts = st
+                .link_parts
+                .take()
+                .filter(|_| linked - locked >= Duration::from_millis(1));
+            st.recent_roots.retain(|(root, _)| !roots.contains(root));
+            let now = Instant::now();
+            st.recent_roots
+                .extend(roots.iter().map(|root| (root.clone(), now)));
             setup_phase(w, "syncing")?;
             let mut files = repair_sources(d, &mut st, &link)?;
             for root in &roots {
@@ -3328,11 +3494,15 @@ fn run(
                     return Err(e);
                 }
             }
+            let part_ms = |i: usize| link_parts.map_or(0.0, |p| p[i].as_secs_f64() * 1000.0);
             let timing = crate::e2e::SyncTiming {
                 lock_ms: locked.as_secs_f64() * 1000.0,
                 link_ms: (linked - locked).as_secs_f64() * 1000.0,
                 push_ms: (pushed - linked).as_secs_f64() * 1000.0,
                 barrier_ms: (t.elapsed() - pushed).as_secs_f64() * 1000.0,
+                link_ready_ms: part_ms(0),
+                link_install_ms: part_ms(1),
+                link_session_ms: part_ms(2),
             };
             if t.elapsed() > Duration::from_millis(1000) {
                 log(&format!(
@@ -3404,10 +3574,15 @@ fn run(
             }
         });
     }
+    let outage_before = link.outage.restored_ms();
     while let Ok((msg, payload)) = rx.recv() {
         let done = matches!(msg, Msg::Exit { .. } | Msg::Error { .. });
         if done {
             finished.store(true, Ordering::SeqCst);
+            let ms = link.outage.settled_ms() - outage_before;
+            if ms > 0.0 && write_frame(w, &Msg::LinkOutage { id, ms }, &[]).is_err() {
+                break;
+            }
         }
         if write_frame(w, &msg, &payload).is_err() || done {
             break;
@@ -3838,6 +4013,7 @@ mod tests {
             let stdin = Arc::new(Mutex::new(BufWriter::new(child.stdin.take().unwrap())));
             let stdout = BufReader::new(child.stdout.take().unwrap());
             let link = Link {
+                outage: Arc::default(),
                 child: Mutex::new(child),
                 stdin,
                 routes: Mutex::default(),
@@ -3892,6 +4068,7 @@ mod tests {
         let stdin = Arc::new(Mutex::new(BufWriter::new(child.stdin.take().unwrap())));
         let stdout = BufReader::new(child.stdout.take().unwrap());
         let link = Arc::new(Link {
+            outage: Arc::default(),
             child: Mutex::new(child),
             stdin,
             routes: Mutex::default(),
@@ -3910,6 +4087,8 @@ mod tests {
             status_hint: None,
             sync: SyncQueue::new(Sync {
                 install_retry: Default::default(),
+                link_parts: None,
+                recent_roots: Vec::new(),
                 receipt: None,
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
@@ -3931,6 +4110,7 @@ mod tests {
             live_link_ptr: AtomicUsize::new(0),
             warm_admit: Mutex::default(),
             leases: Arc::default(),
+            relink: None,
         };
         // Simulate a sync already in progress. Retirement must not wait on it
         // or replace its link, kill its process, cancel, or resubmit its run.
@@ -4214,6 +4394,8 @@ mod tests {
         for count in [1, 20] {
             let mut sync = Sync {
                 install_retry: Default::default(),
+                link_parts: None,
+                recent_roots: Vec::new(),
                 receipt: None,
                 backend: Backend::Hosted,
                 link: None,
@@ -4302,6 +4484,7 @@ mod tests {
             .unwrap();
         let mut frames = BufReader::new(child.stdout.take().unwrap());
         let link = Arc::new(Link {
+            outage: Arc::default(),
             stdin: Arc::new(Mutex::new(BufWriter::new(child.stdin.take().unwrap()))),
             child: Mutex::new(child),
             routes: Mutex::default(),
@@ -4316,6 +4499,8 @@ mod tests {
             status_hint: None,
             sync: SyncQueue::new(Sync {
                 install_retry: Default::default(),
+                link_parts: None,
+                recent_roots: Vec::new(),
                 receipt: None,
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
@@ -4334,6 +4519,7 @@ mod tests {
             live_link_ptr: AtomicUsize::new(0),
             warm_admit: Mutex::default(),
             leases: Arc::default(),
+            relink: None,
         };
         let mut st = d.sync.lock().unwrap();
         let failed_write = a.join("lib.rs").display().to_string();
@@ -4412,6 +4598,7 @@ mod tests {
             .unwrap();
         let mut frames = BufReader::new(child.stdout.take().unwrap());
         let link = Arc::new(Link {
+            outage: Arc::default(),
             stdin: Arc::new(Mutex::new(BufWriter::new(child.stdin.take().unwrap()))),
             child: Mutex::new(child),
             routes: Mutex::default(),
@@ -4435,6 +4622,8 @@ mod tests {
             status_hint: None,
             sync: SyncQueue::new(Sync {
                 install_retry: Default::default(),
+                link_parts: None,
+                recent_roots: Vec::new(),
                 receipt: None,
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
@@ -4453,6 +4642,7 @@ mod tests {
             live_link_ptr: AtomicUsize::new(0),
             warm_admit: Mutex::default(),
             leases: Arc::default(),
+            relink: None,
         };
         let mut st = d.sync.lock().unwrap();
         let name = root.display().to_string();
@@ -4613,6 +4803,7 @@ mod tests {
         let stdout = BufReader::new(child.stdout.take().unwrap());
         let peer = peercache::Relay::new(true, |_, _| true);
         let link = Arc::new(Link {
+            outage: Arc::default(),
             child: Mutex::new(child),
             stdin,
             routes: Mutex::default(),
@@ -4646,6 +4837,8 @@ mod tests {
             status_hint: None,
             sync: SyncQueue::new(Sync {
                 install_retry: Default::default(),
+                link_parts: None,
+                recent_roots: Vec::new(),
                 receipt: None,
                 backend: Backend::Hosted,
                 link: Some(link.clone()),
@@ -4664,6 +4857,7 @@ mod tests {
             live_link_ptr: AtomicUsize::new(0),
             warm_admit: Mutex::default(),
             leases: Arc::default(),
+            relink: None,
         };
         watch_tx.send(base.clone()).unwrap();
         drop(watch_tx);
@@ -4721,6 +4915,8 @@ mod tests {
         };
         let mut sync = Sync {
             install_retry: Default::default(),
+            link_parts: None,
+            recent_roots: Vec::new(),
             receipt: None,
             backend: Backend::Hosted,
             link: None,
@@ -4812,6 +5008,8 @@ mod tests {
         };
         let mut sync = Sync {
             install_retry: Default::default(),
+            link_parts: None,
+            recent_roots: Vec::new(),
             receipt: None,
             backend: Backend::Hosted,
             link: None,
@@ -4978,6 +5176,27 @@ cmp "$base/expected-lib" "$live/src/lib.rs"
             !REMOTE_MIRROR_PREFIX_SCRIPT.contains("~/.justrust/"),
             "fallback remote mirror path must not overlap ~/.justrust"
         );
+    }
+
+    #[test]
+    fn outage_counts_only_reattached_drops_and_flags_an_unrecovered_one() {
+        let o = Outage::default();
+        o.observe("justrust artifacts: unrelated");
+        assert!(!o.is_down() && o.restored_ms() == 0.0);
+        o.observe("hosted: transport interrupted, reattaching original session (1/3)");
+        o.observe("hosted: transport interrupted, reattaching original session (2/3)");
+        assert!(o.is_down());
+        // The bridge measured the silence: its figure wins over our clock.
+        o.observe("hosted: transport restored after 12.500s");
+        assert!(!o.is_down());
+        assert!((o.restored_ms() - 12_500.0).abs() < 1e-6);
+        assert!((o.settled_ms() - 12_500.0).abs() < 1e-6);
+        o.observe("hosted: transport restored after 0.250s");
+        assert!((o.restored_ms() - 12_750.0).abs() < 1e-6);
+        // A drop the bridge gave up on is what asks for a background relink.
+        o.observe("hosted: transport interrupted, reattaching original session (1/3)");
+        assert!(o.is_down());
+        assert!((o.settled_ms() - 12_750.0).abs() < 1e-6);
     }
 
     #[test]

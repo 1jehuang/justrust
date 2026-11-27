@@ -1178,6 +1178,7 @@ fn apply_frame(
         c.arg(format!("--patch-from={}", from.display()));
     }
     let res = (|| {
+        let receiving = Instant::now();
         if let Some(Basis::Predicted(old)) = from {
             let file = std::fs::File::create_new(&tmp)?;
             prediction::expand(old, size, frame, file)
@@ -1210,6 +1211,9 @@ fn apply_frame(
         if got != size {
             bail!("{name}: {got} bytes, expected {size}");
         }
+        // Decoding is streamed: it ends when the last payload byte arrived.
+        crate::e2e::note("artifacts.receive", receiving.elapsed().as_secs_f64());
+        let verifying = Instant::now();
         crate::sys::set_mode(&tmp, mode)?;
         match validation {
             Validation::Glibc217 => check_glibc_217(&std::fs::read(&tmp)?)?,
@@ -1231,6 +1235,7 @@ fn apply_frame(
             Validation::NativeBuild => (),
         }
         std::fs::rename(&tmp, &dst)?;
+        crate::e2e::note("artifacts.verify", verifying.elapsed().as_secs_f64());
         Ok(())
     })();
     if res.is_err() {
@@ -1426,14 +1431,25 @@ fn fetch_inner(
     let mut remote_darwin_target: Option<&'static str> = None;
     let mut selected = None;
     let mut streamed: std::collections::HashSet<String> = Default::default();
+    let requested = Instant::now();
     let (res, st, err) = artifact_command_response(&mut child, |r| -> Result<()> {
         let mut line = String::new();
         loop {
             line.clear();
+            // Nothing flows while the machine snapshots and encodes a file:
+            // its frame header arrives only once the payload is ready.
+            let waiting = Instant::now();
             if r.read_line(&mut line)? == 0 {
                 bail!("the machine closed the artifact stream early");
             }
-            match serde_json::from_str::<Frame>(&line).context("bad artifact frame")? {
+            let frame = serde_json::from_str::<Frame>(&line).context("bad artifact frame")?;
+            match &frame {
+                Frame::Hello { .. } => {
+                    crate::e2e::note("artifacts.connect", requested.elapsed().as_secs_f64())
+                }
+                _ => crate::e2e::note("artifacts.encode", waiting.elapsed().as_secs_f64()),
+            }
+            match frame {
                 Frame::Hello { arch, os, dir } => {
                     let cross_darwin_ssh = is_ssh_backend
                         && test_run.is_none()

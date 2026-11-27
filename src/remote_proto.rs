@@ -117,6 +117,20 @@ pub struct SyncTiming {
     pub push_ms: f64,
     /// Waiting for the machine to confirm it applied the sources.
     pub barrier_ms: f64,
+    /// Parts of `link_ms` when this run had to connect (zero otherwise, and
+    /// from older daemons). Machine ready: hosted lease or SSH master.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub link_ready_ms: f64,
+    /// Checking or installing the machine's client, resolving the mirror path.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub link_install_ms: f64,
+    /// Starting the session or agent and its handshake.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub link_session_ms: f64,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 /// Host-side monotonic durations, independent of the client's clock. This is
@@ -311,6 +325,12 @@ pub enum Msg {
     },
     Cancel {
         id: u64,
+    },
+    /// Daemon -> client, just before `Exit`: how long the transport to the
+    /// machine was down and being reattached while this run was in flight.
+    LinkOutage {
+        id: u64,
+        ms: f64,
     },
     /// Infrastructure failure (not a build failure).
     Error {
@@ -539,6 +559,7 @@ mod tests {
             link_ms: 2.0,
             push_ms: 3.0,
             barrier_ms: 4.0,
+            ..Default::default()
         };
         let new = Msg::Flushed {
             id: 1,

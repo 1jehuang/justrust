@@ -47,6 +47,11 @@ impl<T> SyncQueue<T> {
         self.foreground_epoch.load(Ordering::SeqCst)
     }
 
+    /// A build is waiting for the lock: background work should yield.
+    pub(super) fn foreground_waiting(&self) -> bool {
+        self.foreground_waiters.load(Ordering::SeqCst) != 0
+    }
+
     pub(super) fn foreground_lock(&self) -> LockResult<MutexGuard<'_, T>> {
         self.foreground_waiters.fetch_add(1, Ordering::SeqCst);
         let guard = self.inner.lock();

@@ -9,6 +9,27 @@ fn pinned_executable() -> PinnedSessionExecutable {
 }
 
 #[test]
+fn restored_line_round_trips_and_rejects_everything_else() {
+    let line = restored_line(Duration::from_millis(12_345));
+    assert_eq!(line, "hosted: transport restored after 12.345s");
+    assert_eq!(restored_secs(&line), Some(12.345));
+    assert_eq!(restored_secs(&format!("{line}\r")), Some(12.345));
+    for other in [
+        "hosted: transport interrupted, reattaching original session (1/3)",
+        "hosted: transport restored after -1.000s",
+        "hosted: transport restored after NaNs",
+        "hosted: transport restored after 3.0",
+        "",
+    ] {
+        assert_eq!(restored_secs(other), None, "{other}");
+    }
+    assert!(
+        "hosted: transport interrupted, reattaching original session (1/3)"
+            .starts_with(INTERRUPTED)
+    );
+}
+
+#[test]
 fn pinned_launcher_rejects_changed_executable_path_or_digest_before_connecting() {
     let target = Target {
         dest: "not-contacted".into(),
