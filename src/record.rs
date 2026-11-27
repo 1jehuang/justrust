@@ -1206,6 +1206,7 @@ fn finish(
     );
     s.sched = sched;
     s.savings = crate::savings::from_dir(run_dir);
+    s.lock_holders = std::mem::take(&mut *LOCK_HOLDERS.lock().unwrap());
     if let Some((pre_id, waited)) = crate::buildd::waited_prebuild() {
         // Its record is next to this run's: it exited before this run began.
         let pre = run_dir
@@ -1459,6 +1460,9 @@ fn push_line(lines: &Mutex<OutputCapture>, t: f64, stream: &str, raw: &[u8]) {
     if text.trim().is_empty() {
         return;
     }
+    if text.contains("Blocking waiting for file lock on ") {
+        note_lock_holders();
+    }
     let line = OutputLine {
         t,
         s: stream.to_owned(),
@@ -1467,6 +1471,27 @@ fn push_line(lines: &Mutex<OutputCapture>, t: f64, stream: &str, raw: &[u8]) {
     let mut capture = lines.lock().unwrap();
     capture.journal.append(&line);
     capture.lines.push(line);
+}
+
+/// Who held the locks this run waited for ([`procfs::lock_holders_blocking_us`]).
+static LOCK_HOLDERS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Cargo said it is blocked on a file lock: look at who holds it, off the
+/// output thread. Cargo prints before it blocks, and the holder can change
+/// during a long wait, so look twice.
+fn note_lock_holders() {
+    std::thread::spawn(|| {
+        for wait_ms in [100, 2000] {
+            std::thread::sleep(Duration::from_millis(wait_ms));
+            let found = procfs::lock_holders_blocking_us();
+            let mut all = LOCK_HOLDERS.lock().unwrap();
+            for h in found {
+                if !all.contains(&h) && all.len() < 8 {
+                    all.push(h);
+                }
+            }
+        }
+    });
 }
 
 pub fn strip_ansi(s: &str) -> String {

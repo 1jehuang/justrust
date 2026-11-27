@@ -88,6 +88,10 @@ pub struct Summary {
     /// The build daemon's prebuild that compiled this run's units first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prebuild: Option<PrebuildReuse>,
+    /// Who held the file locks this run waited for (`locks_waited`), seen in
+    /// `/proc/locks` while it was blocked: `pid N (command line[, run ID])`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lock_holders: Vec<String>,
 }
 
 /// A compile-only prebuild whose units this run found Fresh (`buildd`). The
@@ -1490,6 +1494,7 @@ pub fn build(
         e2e: None,
         theoretical_floor,
         prebuild: None,
+        lock_holders: Vec::new(),
     }
 }
 
@@ -2001,6 +2006,9 @@ impl Summary {
         );
         if let Some(l) = self.prebuild_line() {
             let _ = writeln!(o, "  prebuilt {l}");
+        }
+        for h in &self.lock_holders {
+            let _ = writeln!(o, "  lock    waited for a file lock held by {h}");
         }
         if u.compiled > u.with_pass_timings {
             let _ = writeln!(
