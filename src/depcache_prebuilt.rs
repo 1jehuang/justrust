@@ -524,9 +524,12 @@ fn may_have(root: &Path, base: &str, key: &str) -> bool {
         else {
             return true;
         };
-        if lock.try_lock().is_err() || fresh_file(&none, INDEX_SECS) {
-            // Busy or unsupported locking: a stale negative could hide a new
-            // key. Probe the manifest normally, including all validation.
+        if lock.try_lock().is_err() && !wait_for_refresh(&lock, &idx, &none) {
+            // Still busy or unsupported locking: a stale negative could hide
+            // a new key. Probe the manifest normally, including all validation.
+            return true;
+        }
+        if fresh_file(&none, INDEX_SECS) {
             return true;
         }
         if fresh_file(&idx, INDEX_SECS) {
@@ -552,6 +555,29 @@ fn may_have(root: &Path, base: &str, key: &str) -> bool {
         }
     }
     index_file_contains(&idx, key).unwrap_or(true)
+}
+
+/// How long a shim waits for another shim's index refresh before it probes
+/// the store itself. One upstream manifest probe costs about this much.
+const REFRESH_WAIT: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Another shim is refreshing the index: wait briefly for it instead of
+/// asking the store about this key. A build starts one shim per job at once
+/// and all of them find the index stale. Only one can refresh it, and the
+/// rest each paid an upstream manifest request (measured on a build host:
+/// 0.75s for each of the first 13 units, 9.4s of job time, while the index
+/// itself arrived from the loopback proxy in 2ms). Returns true holding the
+/// lock, or with a fresh index or a fresh no-index marker in place. The
+/// answer still comes from a fresh index only.
+fn wait_for_refresh(lock: &std::fs::File, idx: &Path, none: &Path) -> bool {
+    let t = std::time::Instant::now();
+    while t.elapsed() < REFRESH_WAIT {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        if fresh_file(idx, INDEX_SECS) || fresh_file(none, INDEX_SECS) || lock.try_lock().is_ok() {
+            return true;
+        }
+    }
+    false
 }
 
 fn index_file_contains(path: &Path, key: &str) -> std::io::Result<bool> {

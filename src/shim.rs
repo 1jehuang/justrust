@@ -87,6 +87,82 @@ pub struct Unit {
     /// compiler.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reuse: Vec<crate::reuse::Row>,
+    /// Seconds the shim spent before `start` (the compiler spawn, or the
+    /// cache tier that hit): argument rewriting, cache keys and every cache
+    /// tier that missed. Cargo holds a job slot for all of it, and none of
+    /// it is inside `wall`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shim_pre_secs: Option<f64>,
+    /// Seconds the shim spent after `end` before it recorded the unit
+    /// (storing the outputs in the caches). Absent on cache hits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shim_post_secs: Option<f64>,
+    /// Where `shim_pre_secs` and `shim_post_secs` went: stages of at least
+    /// a millisecond, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shim_stages: Vec<ShimStage>,
+}
+
+#[derive(Debug, Serialize, serde::Deserialize, Clone, PartialEq)]
+pub struct ShimStage {
+    pub name: String,
+    pub secs: f64,
+}
+
+/// Wall-clock split of the shim's own work around one compiler invocation.
+struct Stages {
+    last: std::time::Instant,
+    pre: f64,
+    post: f64,
+    after: bool,
+    rows: Vec<ShimStage>,
+}
+
+impl Stages {
+    fn new(started: std::time::Instant) -> Self {
+        Stages {
+            last: started,
+            pre: 0.0,
+            post: 0.0,
+            after: false,
+            rows: Vec::new(),
+        }
+    }
+
+    /// Charge the time since the previous mark to `name`.
+    fn mark(&mut self, name: &str) {
+        let now = std::time::Instant::now();
+        let secs = now.duration_since(self.last).as_secs_f64();
+        self.last = now;
+        if self.after {
+            self.post += secs;
+        } else {
+            self.pre += secs;
+        }
+        if secs < 0.001 {
+            return;
+        }
+        match self.rows.iter_mut().find(|r| r.name == name) {
+            Some(r) => r.secs += secs,
+            None => self.rows.push(ShimStage {
+                name: name.to_owned(),
+                secs,
+            }),
+        }
+    }
+
+    /// The compiler ran since the last mark: that time is the unit's own
+    /// `wall`, not the shim's.
+    fn resume_after(&mut self) {
+        self.last = std::time::Instant::now();
+        self.after = true;
+    }
+
+    fn apply(&self, unit: &mut Unit) {
+        unit.shim_pre_secs = Some(self.pre);
+        unit.shim_post_secs = self.after.then_some(self.post);
+        unit.shim_stages = self.rows.clone();
+    }
 }
 
 #[derive(Debug, Serialize, serde::Deserialize, Clone)]
@@ -115,6 +191,7 @@ fn real_rustc() -> PathBuf {
 }
 
 pub fn main() -> ! {
+    let started = std::time::Instant::now();
     let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let real = real_rustc();
     share_slot_incremental(&mut args);
@@ -135,7 +212,7 @@ pub fn main() -> ! {
         eprintln!("{}", crate::nolocal::refusal("a local rustc"));
         std::process::exit(1);
     }
-    match run_unit(&real, &args, &run_dir) {
+    match run_unit(&real, &args, &run_dir, started) {
         Some(code) => std::process::exit(code),
         None => exec(&real, &args),
     }
@@ -583,7 +660,14 @@ fn want_passes(args: &[OsString], local: bool) -> (bool, bool) {
 }
 
 /// Returns `None` only if the compiler could not be spawned at all.
-fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Option<i32> {
+fn run_unit(
+    real: &PathBuf,
+    args: &[OsString],
+    run_dir: &std::path::Path,
+    started: std::time::Instant,
+) -> Option<i32> {
+    let mut stages = Stages::new(started);
+    stages.mark("args");
     let hit_started = std::time::Instant::now();
     let described = describe(args);
     let plan = (!described.local && crate::depcache::enabled())
@@ -592,6 +676,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             crate::depcache::plan(real, args, &env)
         })
         .flatten();
+    stages.mark("key");
     // Local units link with wild when installed (fail open inside the `ld`
     // dispatcher). Never for depcache units (registry crates).
     let nightly = std::env::var_os("JUSTRUST_TOOLCHAIN_NIGHTLY").is_some();
@@ -622,11 +707,13 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
         })
         .flatten();
     let plan_secs = paths::now() - plan_t0;
+    stages.mark("local-key");
     if let Some(lp) = &local_plan {
         let start = paths::now();
         if let Some(hit) = crate::localcache::restore(lp, &mut std::io::stderr()) {
             let end = paths::now();
             let mut unit = described;
+            stages.apply(&mut unit);
             unit.start = start;
             unit.end = end;
             unit.wall = end - start;
@@ -640,29 +727,37 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             }
             return Some(0);
         }
+        stages.mark("miss-localcache");
     }
     if let Some(plan) = &plan {
-        let start = paths::now();
         let mut err = std::io::stderr();
         // Tiers, cheapest first: this machine, the prebuilt store (static
         // HTTP, anonymous), the account and shared cache (HTTP), then the
         // peer machine over the remote link.
-        let mut tier = "hit";
-        let found = plan
-            .restore(&mut err)
-            .or_else(|| {
-                tier = "prebuilt";
-                crate::depcache_prebuilt::fetch(plan, &mut err)
-            })
-            .or_else(|| {
-                tier = "remote";
-                crate::depcache_remote::fetch(plan, &mut err)
-            })
-            .or_else(|| {
-                tier = "peer";
-                crate::peercache::fetch(plan, &mut err)
-            });
-        if let Some(hit) = found {
+        // A tier that misses is charged to the shim (`miss-<tier>`), and a
+        // hit's `wall` is the tier that hit: a miss pays for all four before
+        // the compiler starts.
+        let mut found = None;
+        for (name, missed) in [
+            ("hit", "miss-local"),
+            ("prebuilt", "miss-prebuilt"),
+            ("remote", "miss-remote"),
+            ("peer", "miss-peer"),
+        ] {
+            let start = paths::now();
+            let got = match name {
+                "hit" => plan.restore(&mut err),
+                "prebuilt" => crate::depcache_prebuilt::fetch(plan, &mut err),
+                "remote" => crate::depcache_remote::fetch(plan, &mut err),
+                _ => crate::peercache::fetch(plan, &mut err),
+            };
+            if let Some(hit) = got {
+                found = Some((name, start, hit));
+                break;
+            }
+            stages.mark(missed);
+        }
+        if let Some((tier, start, hit)) = found {
             // Downloaded from the account or shared cache: the peer
             // machine likely lacks it too, so offer it on the next sync.
             if matches!(tier, "remote" | "prebuilt")
@@ -673,6 +768,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             }
             let end = paths::now();
             let mut unit = described;
+            stages.apply(&mut unit);
             unit.start = start;
             unit.end = end;
             unit.wall = end - start;
@@ -688,11 +784,6 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             return Some(0);
         }
     }
-    // Every tier missed: name the key part that moved, while the unit's
-    // inputs are still the ones the key was computed from.
-    let why = plan
-        .as_ref()
-        .map(|p| crate::depcache_why::diagnose(p, real, args));
     let (passes_on, force_bootstrap) = want_passes(args, described.local);
     let mut cmd = Command::new(real);
     cmd.args(args).stderr(Stdio::piped());
@@ -723,6 +814,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     } else {
         None
     };
+    stages.mark("spawn-setup");
     let start = paths::now();
     let spawned = cmd.spawn();
     let early = early.map(EarlyReply::spawned);
@@ -741,6 +833,14 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             forward_stderr(stderr, passes_on, &rmeta_at, &passes, captured.as_deref())
         })
     };
+    // Every tier missed: name the key part that moved. This runs beside the
+    // compiler, not before it (it cost 0.5 to 0.8s of job time over 206
+    // misses when it ran first). The compiler does not rewrite its inputs
+    // and the manifest and ledger only change when this shim stores below,
+    // so the answer is the same.
+    let why = plan
+        .as_ref()
+        .map(|p| crate::depcache_why::diagnose(p, real, args));
 
     // jr-rustc replied after the link (outputs complete, no errors, all
     // diagnostics printed) and is still persisting its incremental state:
@@ -758,6 +858,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
         crate::sys::wait_usage(&mut child, job.as_ref())
     };
     let end = paths::now();
+    stages.resume_after();
     let _ = reader.join();
     if replied {
         // Not reaped: cargo never waits for it, init adopts it on exit.
@@ -876,6 +977,8 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
         write_unit_cost(args, user + sys, "cpu");
     }
     unit.incr_prior_session = incr_prior_session;
+    stages.mark("store");
+    stages.apply(&mut unit);
     if let Ok(line) = serde_json::to_string(&unit) {
         let _ = paths::append_line(&run_dir.join("units.jsonl"), &line);
     }

@@ -28,6 +28,7 @@ mod early;
 mod export;
 mod failure;
 mod findings;
+mod gaps;
 mod hints;
 mod history;
 mod hybrid;

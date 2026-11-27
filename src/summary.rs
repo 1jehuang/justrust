@@ -32,6 +32,11 @@ pub struct Summary {
     pub measurement_coverage: Option<MeasurementCoverage>,
     pub ncpu: usize,
     pub phases: Phases,
+    /// What ran while no compiler did, inside `phases.startup` and
+    /// `phases.build_gaps` (`gaps.rs`). Absent without recorded units and in
+    /// older summaries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gaps: Option<crate::gaps::Gaps>,
     pub units: UnitStats,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) dashboard_profile: Option<crate::dashboard::DashboardProfile>,
@@ -1105,6 +1110,7 @@ pub fn build(
         test_run,
         tail: (wall - build_end - test_run).max(0.0),
     };
+    let gaps = crate::gaps::attribute(units, procs, start, startup, build_end);
 
     // Units.
     let mut stats = UnitStats {
@@ -1354,6 +1360,7 @@ pub fn build(
         measurement_coverage: Some(measurement_coverage(samples, procs)),
         ncpu: meta.ncpu,
         phases,
+        gaps,
         units: stats,
         dashboard_profile: Some(crate::dashboard::DashboardProfile::recorded(units)),
         top_units: top,
@@ -1687,6 +1694,9 @@ impl Summary {
             }
         }
         let _ = writeln!(o, "  time    {}", parts.join(" | "));
+        if let Some(line) = self.gaps.as_ref().and_then(|g| g.report_line(p)) {
+            let _ = writeln!(o, "  idle    {line}");
+        }
         if let Some(slot) = &self.slot {
             let _ = writeln!(o, "  target  {}", slot.report_line());
         }
