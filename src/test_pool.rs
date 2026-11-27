@@ -1693,6 +1693,47 @@ mod tests {
         pool.finish();
     }
 
+    /// Another thread starting a process holds every open pipe for a moment,
+    /// between its fork and its exec. That is not a process the test binary
+    /// left behind: no note, and the output has exactly its own lines.
+    #[cfg(unix)]
+    #[test]
+    fn a_process_starting_elsewhere_is_not_taken_for_one_holding_the_output() {
+        let dir = TmpDir(std::env::temp_dir().join(format!("jr-forks-{}", std::process::id())));
+        std::fs::create_dir_all(dir.path()).unwrap();
+        let bin = dir.path().join("plain");
+        std::fs::write(&bin, "#!/bin/sh\necho 'test t ... ok'\nprintf 'tail'\n").unwrap();
+        crate::sys::set_mode(&bin, 0o755).unwrap();
+        let sink = Arc::new(VecSink(Mutex::new(Vec::new())));
+        let pool = Pool::start(dir.path(), dir.path(), Path::new("jr"), sink, true).unwrap();
+        let req = Request {
+            bin: bin.to_string_lossy().into_owned(),
+            args: Vec::new(),
+            cwd: dir.path().to_string_lossy().into_owned(),
+            env: Vec::new(),
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let forkers: Vec<_> = (0..8)
+            .map(|_| {
+                let stop = stop.clone();
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        let _ = std::process::Command::new("/bin/true").status();
+                    }
+                })
+            })
+            .collect();
+        let noted = (0..150)
+            .filter(|_| execute(&pool.inner, &req, &req.args, "plain").lines.len() != 2)
+            .count();
+        stop.store(true, Ordering::Relaxed);
+        for t in forkers {
+            t.join().unwrap();
+        }
+        assert_eq!(noted, 0, "of 150 runs");
+        pool.finish();
+    }
+
     #[test]
     fn job_cap_follows_the_cores_of_a_large_machine() {
         assert_eq!(default_jobs(1), 2);

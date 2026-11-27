@@ -546,6 +546,9 @@ pub trait OutputPipe: io::Read + Send + 'static {
 
 #[cfg(unix)]
 fn pipe_more(fd: std::os::fd::RawFd, exited: &std::sync::atomic::AtomicBool) -> bool {
+    // Once the child is reaped and its pipe is empty, how long the pipe may
+    // stay open before that means a process the child left behind.
+    let mut grace = PIPE_HELD_GRACE_MS;
     loop {
         // Read the flag first: an empty pipe only means "all read" when the
         // child had already exited before the pipe was looked at.
@@ -555,8 +558,13 @@ fn pipe_more(fd: std::os::fd::RawFd, exited: &std::sync::atomic::AtomicBool) -> 
             events: libc::POLLIN,
             revents: 0,
         };
+        let wait = if done {
+            grace.min(PIPE_HELD_STEP_MS)
+        } else {
+            50
+        };
         // SAFETY: one valid pollfd.
-        let r = unsafe { libc::poll(&mut p, 1, if done { 0 } else { 50 }) };
+        let r = unsafe { libc::poll(&mut p, 1, wait) };
         if r > 0 {
             // Data, or every writer closed: `read` tells which.
             return true;
@@ -565,10 +573,25 @@ fn pipe_more(fd: std::os::fd::RawFd, exited: &std::sync::atomic::AtomicBool) -> 
             return true;
         }
         if r == 0 && done {
-            return false;
+            // Open and empty is also what a process being started by another
+            // thread looks like: between its fork and its exec it holds a
+            // copy of every descriptor, close-on-exec ones included. Under
+            // load that window is long enough to be seen here, so only a
+            // pipe that stays open is one somebody keeps.
+            if grace <= 0 {
+                return false;
+            }
+            grace -= wait.max(1);
         }
     }
 }
+
+/// See [`pipe_more`]: far longer than a fork-to-exec window, far shorter than
+/// anything worth not waiting for.
+#[cfg(unix)]
+const PIPE_HELD_GRACE_MS: i32 = 250;
+#[cfg(unix)]
+const PIPE_HELD_STEP_MS: i32 = 10;
 
 #[cfg(unix)]
 impl OutputPipe for std::process::ChildStdout {
