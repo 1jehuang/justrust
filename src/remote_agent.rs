@@ -1284,15 +1284,15 @@ fn start_run(
     let policy = crate::toolchain_policy::current();
     match store_toolchain(cwd, args, env, policy.as_ref()) {
         Ok(Some(tc)) => {
+            // A compiler this machine has not built with before: its copy
+            // of the store's index predates the fleet's units for it.
+            crate::prebuilt_proxy::note_toolchain(tc.as_ref());
             c.env("JUSTRUST_TOOLCHAIN", tc);
         }
         Ok(None) => {}
         Err(refused) => bail!("build not started: {refused}"),
     }
     if let Some(j) = machine_jobs(args, env) {
-            // A compiler this machine has not built with before: its copy
-            // of the store's index predates the fleet's units for it.
-            crate::prebuilt_proxy::note_toolchain(tc.as_ref());
         c.env("CARGO_BUILD_JOBS", j.to_string());
     }
     // Always on here, also under an explicit job count: that is when a
