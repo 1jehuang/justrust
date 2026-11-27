@@ -610,6 +610,17 @@ rustc_queries! {
         desc { "Computing all lints that are explicitly enabled or with a default level greater than Allow" }
     }
 
+    /// Returns the crate imported by the given `extern crate` item.
+    ///
+    /// A query, not a direct read of `resolutions(())`, so that a reader is
+    /// invalidated only when this item's crate changes. Derive expansions
+    /// put an `extern crate` in most modules, and the per-module stability
+    /// check reads it: reading the whole resolver output there re-ran the
+    /// check for every such module after any edit that changed resolution.
+    query extern_mod_stmt_cnum(def_id: LocalDefId) -> Option<CrateNum> {
+        desc { "looking up the crate imported by `{}`", tcx.def_path_str(def_id) }
+    }
+
     query expn_that_defined(key: DefId) -> rustc_span::ExpnId {
         desc { "getting the expansion that defined `{}`", tcx.def_path_str(key) }
         separate_provide_extern

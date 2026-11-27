@@ -2959,11 +2959,6 @@ impl<'tcx> TyCtxt<'tcx> {
         self.resolutions(()).module_children.get(&def_id).map_or(&[], |v| &v[..])
     }
 
-    /// Return the crate imported by given use item.
-    pub fn extern_mod_stmt_cnum(self, def_id: LocalDefId) -> Option<CrateNum> {
-        self.resolutions(()).extern_crate_map.get(&def_id).copied()
-    }
-
     pub fn resolver_for_lowering(
         self,
     ) -> (&'tcx Steal<ResolverAstLowering<'tcx>>, &'tcx Steal<ast::Crate>) {
