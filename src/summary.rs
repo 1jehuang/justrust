@@ -541,7 +541,13 @@ pub fn units_from_wrapper_procs(procs: &[ProcRecord], run_dir: &Path) -> Vec<Uni
                 .to_owned();
             let wall = (p.last_seen - p.first_seen).max(0.0);
             let ledger = run_dir.join("phases").join(format!("{}.tsv", p.pid));
-            let read = |path: std::path::PathBuf| std::fs::read_to_string(path).ok();
+            // Like the shim, consume the ledger files so they do not pile up in the run
+            // directory.
+            let read = |path: std::path::PathBuf| {
+                let text = std::fs::read_to_string(&path).ok();
+                let _ = std::fs::remove_file(&path);
+                text
+            };
             let passes = read(ledger.clone())
                 .map(|text| crate::shim::parse_phase_ledger(&text))
                 .unwrap_or_default();
@@ -2748,7 +2754,10 @@ mod tests {
             ],
             &dir,
         );
+        // The ledger files are consumed, like the shim's.
+        let left = std::fs::read_dir(dir.join("phases")).unwrap().count();
         std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(left, 0);
         assert_eq!(units.len(), 2);
         // Our driver's ledger and thread count, found by process id.
         let timed = &units[1];
