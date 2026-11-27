@@ -669,9 +669,232 @@ fn normalize(p: &Path) -> PathBuf {
     out
 }
 
+/// Every package directory a build in `cwd` can compile from local source:
+/// the workspace root, its members, and every path dependency reachable from
+/// their manifests or named by a cargo config file (`[patch]`, `paths`).
+/// `None` when a manifest, a config file or a member pattern cannot be read
+/// with certainty, so that a caller pruning by this list falls back to pruning
+/// nothing.
+fn local_packages(cwd: &Path, configs: &[PathBuf]) -> Option<Vec<PathBuf>> {
+    fn paths(v: &toml::Value, out: &mut Vec<String>) {
+        match v {
+            toml::Value::Table(t) => {
+                for (k, v) in t {
+                    match v {
+                        toml::Value::String(s) if k == "path" => out.push(s.clone()),
+                        _ => paths(v, out),
+                    }
+                }
+            }
+            toml::Value::Array(a) => a.iter().for_each(|v| paths(v, out)),
+            _ => {}
+        }
+    }
+    let root = crate::early::workspace_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+    let mut dirs = vec![root.clone()];
+    let mut pending = vec![root];
+    for config in configs {
+        let Ok(text) = std::fs::read_to_string(config) else {
+            continue;
+        };
+        let table: toml::Table = text.parse().ok()?;
+        // Relative to the directory holding `.cargo`.
+        let base = config.parent().and_then(Path::parent)?;
+        let mut named = Vec::new();
+        if let Some(overrides) = table.get("paths").and_then(|p| p.as_array()) {
+            named.extend(
+                overrides
+                    .iter()
+                    .filter_map(|p| p.as_str().map(String::from)),
+            );
+        }
+        paths(&toml::Value::Table(table), &mut named);
+        for p in named.iter().map(|p| normalize(&base.join(p))) {
+            if p.join("Cargo.toml").is_file() {
+                dirs.push(p.clone());
+                pending.push(p);
+            }
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    while let Some(dir) = pending.pop() {
+        if !seen.insert(dir.clone()) {
+            continue;
+        }
+        let text = std::fs::read_to_string(dir.join("Cargo.toml")).ok()?;
+        let manifest: toml::Table = text.parse().ok()?;
+        let mut found = Vec::new();
+        if let Some(members) = manifest
+            .get("workspace")
+            .and_then(|w| w.get("members"))
+            .and_then(|m| m.as_array())
+        {
+            for member in members {
+                found.extend(expand_member(&dir, member.as_str()?)?);
+            }
+        }
+        let mut named = Vec::new();
+        paths(&toml::Value::Table(manifest), &mut named);
+        // `path` of a [lib]/[[bin]] target names a file, not a crate.
+        found.extend(named.iter().map(|p| normalize(&dir.join(p))));
+        for p in found {
+            if p.join("Cargo.toml").is_file() {
+                dirs.push(p.clone());
+                pending.push(p);
+            }
+        }
+    }
+    dirs.sort();
+    dirs.dedup();
+    Some(dirs)
+}
+
+/// The directories a `[workspace] members` entry names. Literal components
+/// and `*`/`?` within one component are expanded; anything else (`**`,
+/// character classes) is `None`: not understood, so nothing may be pruned.
+fn expand_member(base: &Path, pattern: &str) -> Option<Vec<PathBuf>> {
+    let mut dirs = vec![base.to_path_buf()];
+    for part in Path::new(pattern).components() {
+        let std::path::Component::Normal(part) = part else {
+            dirs.iter_mut().for_each(|d| d.push(part));
+            continue;
+        };
+        let part = part.to_str()?;
+        if part.contains(['[', ']', '{', '}']) || part.contains("**") {
+            return None;
+        }
+        if !part.contains(['*', '?']) {
+            dirs.iter_mut().for_each(|d| d.push(part));
+            continue;
+        }
+        let mut next = Vec::new();
+        for d in &dirs {
+            let Ok(rd) = std::fs::read_dir(d) else {
+                continue;
+            };
+            for e in rd.flatten() {
+                if e.file_name().to_str().is_some_and(|n| wildcard(part, n)) {
+                    next.push(e.path());
+                }
+            }
+        }
+        dirs = next;
+    }
+    Some(dirs.iter().map(|d| normalize(d)).collect())
+}
+
+/// `*` and `?` within one path component.
+fn wildcard(pattern: &str, name: &str) -> bool {
+    let (p, n) = (pattern.as_bytes(), name.as_bytes());
+    let (mut pi, mut ni) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == b'?' || p[pi] == n[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == b'*' {
+            star = Some((pi, ni));
+            pi += 1;
+        } else if let Some((sp, sn)) = star {
+            star = Some((sp, sn + 1));
+            pi = sp + 1;
+            ni = sn + 1;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|b| *b == b'*')
+}
+
+/// What the stamp leaves out under one root.
+///
+/// Always: build output and hidden directories (except `.cargo`, whose
+/// config changes builds).
+///
+/// In a source mirror on a build machine, also what the mirror's
+/// `.justrustignore` keeps out of it. The sync never writes those paths, so
+/// whatever an older mirror left there cannot change between two builds, yet
+/// here they were 93,025 of the 94,450 files stamped before every build of
+/// this repository (`/toolchain/`, `/bench/results/`), 150-320 ms warm and 2 s
+/// once the kernel had dropped their inodes. A mirror is recognised by the
+/// sync's own checkpoint token, which only a build machine's agent writes: a
+/// local checkout has none and is stamped in full, because a local build can
+/// read an edit anywhere in it.
+///
+/// A package of this build inside an excluded tree is mirrored as a root of
+/// its own (`remote_build::roots_of`), so the build does see edits to it:
+/// those directories (`MirrorIgnore::packages`), and the way down to them,
+/// are never pruned.
+struct Prune {
+    mirror: Option<MirrorIgnore>,
+}
+
+struct MirrorIgnore {
+    root: PathBuf,
+    rules: crate::remote_sync::JustrustIgnore,
+    packages: Vec<PathBuf>,
+}
+
+impl Prune {
+    fn of(root: &Path, cwd: &Path, configs: &[PathBuf]) -> Self {
+        Self {
+            mirror: MirrorIgnore::of(root, cwd, configs),
+        }
+    }
+
+    fn hidden_or_output(name: &str) -> bool {
+        name == "target"
+            || name.starts_with("target-")
+            || (name.starts_with('.') && name != ".cargo")
+    }
+
+    /// Whether the stamp leaves out `path`, an entry called `name`.
+    fn skips(&self, path: &Path, name: &str, is_dir: bool) -> bool {
+        (is_dir && Self::hidden_or_output(name))
+            || self.mirror.as_ref().is_some_and(|m| m.skips(path, is_dir))
+    }
+}
+
+impl MirrorIgnore {
+    fn of(root: &Path, cwd: &Path, configs: &[PathBuf]) -> Option<Self> {
+        #[cfg(test)]
+        if tests::STAMP_EVERYTHING.with(|on| on.get()) {
+            return None;
+        }
+        // The nearest mirror root at or above: a workspace below its
+        // repository's root is mirrored with the repository.
+        let mirror = root
+            .ancestors()
+            .find(|a| a.join(crate::remote_checkpoint::TOKEN_FILE).is_file())?;
+        if !mirror.join(".justrustignore").is_file() {
+            return None;
+        }
+        let rules = crate::remote_sync::JustrustIgnore::load(mirror);
+        // Only a package the rules exclude is a root of its own. The others
+        // are mirrored with this root, under its rules.
+        let mut packages = local_packages(cwd, configs)?;
+        packages.retain(|p| p.strip_prefix(mirror).is_ok_and(|rel| rules.matches(rel)));
+        Some(Self {
+            root: mirror.to_path_buf(),
+            rules,
+            packages,
+        })
+    }
+
+    fn skips(&self, path: &Path, is_dir: bool) -> bool {
+        let Ok(rel) = path.strip_prefix(&self.root) else {
+            return false;
+        };
+        self.rules.matches(rel)
+            && !self
+                .packages
+                .iter()
+                .any(|p| path.starts_with(p) || (is_dir && p.starts_with(path)))
+    }
+}
+
 /// Hash of the source state under `roots`: every file's path, size, mtime
-/// and inode, skipping build output and hidden directories (except
-/// `.cargo`, whose config changes builds), plus cargo config files in the
+/// and inode that `Prune` does not leave out, plus cargo config files in the
 /// ancestors of `cwd` and in CARGO_HOME.
 pub fn source_stamp(roots: &[PathBuf], cwd: &Path, env: &[(String, String)]) -> (String, usize) {
     source_stamp_observed(roots, cwd, env, |_| {})
@@ -686,7 +909,7 @@ fn source_stamp_observed(
     phase: impl FnMut(&'static str),
 ) -> (String, usize) {
     let mut phase = phase;
-    stamp_walk(roots, cwd, env, |root, add| {
+    stamp_walk(roots, cwd, env, |root, prune, add| {
         phase("root-start");
         // Sorted siblings visited depth first produce Path's component order.
         let mut stack = vec![(root.to_owned(), true)];
@@ -703,17 +926,13 @@ fn source_stamp_observed(
             let first = stack.len();
             for entry in rd.flatten() {
                 let Ok(ft) = entry.file_type() else { continue };
-                if ft.is_dir() {
-                    let name = entry.file_name();
-                    let n = name.to_string_lossy();
-                    if n == "target"
-                        || n.starts_with("target-")
-                        || (n.starts_with('.') && n != ".cargo")
-                    {
-                        continue;
-                    }
+                let path = entry.path();
+                if (ft.is_dir() || prune.mirror.is_some())
+                    && prune.skips(&path, &entry.file_name().to_string_lossy(), ft.is_dir())
+                {
+                    continue;
                 }
-                stack.push((entry.path(), ft.is_dir()));
+                stack.push((path, ft.is_dir()));
             }
             stack[first..].sort_unstable_by(|a, b| b.0.as_os_str().cmp(a.0.as_os_str()));
         }
@@ -729,7 +948,7 @@ fn source_stamp_with_sort(
     mut phase: impl FnMut(&'static str),
     mut sort: impl FnMut(&mut [(PathBuf, std::fs::Metadata)]),
 ) -> (String, usize) {
-    stamp_walk(roots, cwd, env, |r, add| {
+    stamp_walk(roots, cwd, env, |r, prune, add| {
         phase("root-start");
         let mut stack = vec![r.to_owned()];
         let mut entries: Vec<(PathBuf, std::fs::Metadata)> = Vec::new();
@@ -741,13 +960,10 @@ fn source_stamp_with_sort(
                 let name = e.file_name();
                 let n = name.to_string_lossy();
                 let Ok(ft) = e.file_type() else { continue };
+                if prune.skips(&e.path(), &n, ft.is_dir()) {
+                    continue;
+                }
                 if ft.is_dir() {
-                    if n == "target"
-                        || n.starts_with("target-")
-                        || (n.starts_with('.') && n != ".cargo")
-                    {
-                        continue;
-                    }
                     stack.push(e.path());
                 } else if let Ok(m) = std::fs::metadata(e.path()) {
                     entries.push((e.path(), m));
@@ -770,7 +986,7 @@ fn stamp_walk(
     roots: &[PathBuf],
     cwd: &Path,
     env: &[(String, String)],
-    mut walk: impl FnMut(&Path, &mut dyn FnMut(&Path, &std::fs::Metadata)),
+    mut walk: impl FnMut(&Path, &Prune, &mut dyn FnMut(&Path, &std::fs::Metadata)),
 ) -> (String, usize) {
     let mut h = crate::depcache::H128::new();
     let mut files = 0usize;
@@ -782,12 +998,6 @@ fn stamp_walk(
         h.field(&ns.to_le_bytes());
         h.field(&crate::sys::file_id(m).1.to_le_bytes());
     };
-    for r in roots {
-        walk(r, &mut |p, m| {
-            files += 1;
-            add(p, m);
-        });
-    }
     let cargo_home = env
         .iter()
         .find(|(k, _)| k == "CARGO_HOME")
@@ -800,6 +1010,12 @@ fn stamp_walk(
     if let Some(ch) = cargo_home {
         configs.push(ch.join("config.toml"));
         configs.push(ch.join("config"));
+    }
+    for r in roots {
+        walk(r, &Prune::of(r, cwd, &configs), &mut |p, m| {
+            files += 1;
+            add(p, m);
+        });
     }
     for c in configs {
         if let Ok(m) = std::fs::metadata(&c) {
@@ -1156,10 +1372,21 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
         }
     };
     if let Some(build) = native {
-        return serve_build(dm, &req, &roots, &mut s, build, false, false, t0, 0.0, 0.0);
+        return serve_build(
+            dm,
+            &req,
+            &roots,
+            &mut s,
+            build,
+            false,
+            false,
+            t0,
+            (0.0, 0),
+            0.0,
+        );
     }
-    let (stamp, _files) = source_stamp(&roots, &cwd, &req.env);
-    let scan_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let (stamp, files) = source_stamp(&roots, &cwd, &req.env);
+    let scan = (t0.elapsed().as_secs_f64() * 1000.0, files);
     let wait_start = Instant::now();
     if !req.prebuild {
         cancel_stale_prebuild(dm, &key, &stamp);
@@ -1234,7 +1461,7 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
         }
     };
     serve_build(
-        dm, &req, &roots, &mut s, build, attached, replayed, t0, scan_ms, waited_ms,
+        dm, &req, &roots, &mut s, build, attached, replayed, t0, scan, waited_ms,
     )
 }
 
@@ -1307,7 +1534,7 @@ fn serve_build(
     attached: bool,
     replayed: bool,
     t0: Instant,
-    scan_ms: f64,
+    (scan_ms, scan_files): (f64, usize),
     waited_ms: f64,
 ) -> Result<()> {
     let lookup_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -1334,7 +1561,7 @@ fn serve_build(
         return Ok(());
     }
     log(&format!(
-        "{} {} in {} ({:.1} ms lookup, {:.1} ms source validation, {:.1} ms prebuild coordination, stamp {})",
+        "{} {} in {} ({:.1} ms lookup, {:.1} ms source validation of {} files, {:.1} ms prebuild coordination, stamp {})",
         if replayed {
             "replay"
         } else if attached {
@@ -1346,6 +1573,7 @@ fn serve_build(
         req.cwd,
         lookup_ms,
         scan_ms,
+        scan_files,
         waited_ms,
         build
             .stamp
@@ -2012,6 +2240,12 @@ fn reap(dm: &Daemon, key: &str, b: &Arc<Build>) {
 mod tests {
     use super::*;
 
+    thread_local! {
+        /// The stamp before mirrors were recognised, for the paired profile.
+        pub(super) static STAMP_EVERYTHING: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
+    }
+
     #[test]
     fn each_build_has_its_own_daemon_socket() {
         let a = build_stem(&format!("sha256-{}", "ab12".repeat(16)));
@@ -2173,7 +2407,10 @@ mod tests {
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
         let roots = source_roots(&cwd);
         let env: Vec<_> = std::env::vars().collect();
-        for sample in 0..5 {
+        // Interleaved: what a mirror's `.justrustignore` saves on this tree.
+        for sample in 0..10 {
+            let everything = sample % 2 == 0;
+            STAMP_EVERYTHING.with(|on| on.set(everything));
             let start = Instant::now();
             let mut last = start;
             let mut timings = std::collections::BTreeMap::<&str, Duration>::new();
@@ -2185,7 +2422,8 @@ mod tests {
                 last = now;
             });
             eprintln!(
-                "stamp-profile sample={sample} files={files} stamp={stamp} total_ms={:.3} phases_ms={:?}",
+                "stamp-profile sample={sample} mirror_rules={} files={files} stamp={stamp} total_ms={:.3} phases_ms={:?}",
+                !everything,
                 start.elapsed().as_secs_f64() * 1000.0,
                 timings
                     .iter()
@@ -2193,6 +2431,7 @@ mod tests {
                     .collect::<Vec<_>>()
             );
         }
+        STAMP_EVERYTHING.with(|on| on.set(false));
     }
 
     #[test]
@@ -2867,6 +3106,184 @@ mod tests {
         let (s1, _) = source_stamp(&roots, &ws, &[]);
         assert_ne!(s1, s0);
         let _ = std::fs::remove_dir_all(&t);
+    }
+
+    /// A workspace with trees its `.justrustignore` keeps out of the mirror:
+    /// plain files (`vendor/big`, `data`, `gen/notes.txt`), a path dependency
+    /// (`vendor/dep`), a member matched by a pattern (`gen/m`) and a package a
+    /// cargo config patches in (`vendor/patched`). 13 files, 3 of them plain.
+    fn ignored_trees(name: &str, members: &str) -> (PathBuf, PathBuf, Vec<(String, String)>) {
+        let t = std::env::temp_dir().join(format!("jr-buildd-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let ws = t.join("ws");
+        let file = |rel: &str, text: &str| {
+            let p = ws.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        file(
+            "Cargo.toml",
+            &format!(
+                "[workspace]\nmembers = [{members}]\n[package]\nname = \"ws\"\n[dependencies]\ndep = {{ path = 'vendor/dep' }}\n"
+            ),
+        );
+        file("src/lib.rs", "");
+        file(".justrustignore", "/vendor/\n/data/\n/gen/\n");
+        file("vendor/big/x.rs", "");
+        file("data/a", "");
+        file("gen/notes.txt", "");
+        file("vendor/dep/Cargo.toml", "[package]\nname = \"dep\"\n");
+        file("vendor/dep/src/lib.rs", "");
+        file("gen/m/Cargo.toml", "[package]\nname = \"m\"\n");
+        file("gen/m/src/lib.rs", "");
+        file("vendor/patched/Cargo.toml", "[package]\nname = \"p\"\n");
+        file("vendor/patched/src/lib.rs", "");
+        file(
+            ".cargo/config.toml",
+            "[patch.crates-io]\np = { path = \"vendor/patched\" }\n",
+        );
+        let home = t.join("cargo-home");
+        std::fs::create_dir_all(&home).unwrap();
+        let env = vec![("CARGO_HOME".to_string(), home.display().to_string())];
+        (t, ws, env)
+    }
+
+    fn make_mirror(root: &Path) {
+        let token = root.join(crate::remote_checkpoint::TOKEN_FILE);
+        std::fs::create_dir_all(token.parent().unwrap()).unwrap();
+        std::fs::write(token, "token").unwrap();
+    }
+
+    #[test]
+    fn mirror_stamp_leaves_out_only_what_the_build_cannot_see_change() {
+        let (t, ws, env) = ignored_trees("mirror", "\"gen/*\"");
+        let roots = source_roots(&ws);
+        assert_eq!(roots, vec![ws.clone()]);
+        let stamp = || source_stamp(&roots, &ws, &env);
+        let edit = |rel: &str| {
+            let p = ws.join(rel);
+            let mut text = std::fs::read_to_string(&p).unwrap();
+            text.push_str("# edited\n");
+            std::fs::write(p, text).unwrap();
+        };
+
+        // A local checkout: a build reads all of it, so all of it is stamped.
+        let (local, n) = stamp();
+        assert_eq!(n, 13);
+        edit("vendor/big/x.rs");
+        let (local_edited, _) = stamp();
+        assert_ne!(local_edited, local);
+
+        // The same tree as a mirror: the sync never writes the three plain
+        // files, and they are the only ones left out.
+        make_mirror(&ws);
+        let (s0, n) = stamp();
+        assert_eq!(n, 10);
+        assert_eq!(
+            source_stamp_with_sort(
+                &roots,
+                &ws,
+                &env,
+                |_| {},
+                |entries| entries.sort_by(|a, b| a.0.cmp(&b.0))
+            ),
+            (s0.clone(), n)
+        );
+        for rel in ["vendor/big/x.rs", "data/a", "gen/notes.txt"] {
+            edit(rel);
+            assert_eq!(stamp().0, s0, "{rel}");
+        }
+        std::fs::write(ws.join("vendor/big/new.rs"), "").unwrap();
+        assert_eq!(stamp().0, s0);
+
+        // Everything the build compiles still changes the stamp, inside an
+        // excluded tree or not, and so do the rules themselves.
+        let mut last = s0;
+        for rel in [
+            "src/lib.rs",
+            "Cargo.toml",
+            "vendor/dep/src/lib.rs",
+            "vendor/dep/Cargo.toml",
+            "gen/m/src/lib.rs",
+            "vendor/patched/src/lib.rs",
+            ".cargo/config.toml",
+            ".justrustignore",
+        ] {
+            edit(rel);
+            let (next, _) = stamp();
+            assert_ne!(next, last, "{rel}");
+            last = next;
+        }
+        std::fs::write(ws.join("vendor/dep/src/new.rs"), "").unwrap();
+        assert_ne!(stamp().0, last);
+
+        // A rule that goes away brings its tree back: `data/a` and the file
+        // added to the dependency, not `vendor/big`.
+        std::fs::write(ws.join(".justrustignore"), "/vendor/\n/gen/\n").unwrap();
+        assert_eq!(stamp().1, 12);
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn mirror_stamp_prunes_nothing_it_cannot_prove_unused() {
+        // A member pattern this does not expand could name any directory.
+        let (t, ws, env) = ignored_trees("mirror-glob", "\"gen/**\"");
+        make_mirror(&ws);
+        let roots = source_roots(&ws);
+        assert_eq!(source_stamp(&roots, &ws, &env).1, 13);
+        let _ = std::fs::remove_dir_all(&t);
+
+        // Nor does a manifest that does not parse say what it depends on.
+        let (t, ws, env) = ignored_trees("mirror-bad", "\"gen/*\"");
+        make_mirror(&ws);
+        std::fs::write(ws.join("gen/m/Cargo.toml"), "[package\n").unwrap();
+        let roots = source_roots(&ws);
+        assert_eq!(source_stamp(&roots, &ws, &env).1, 13);
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn mirror_rules_of_the_repository_reach_a_workspace_below_it() {
+        let t = std::env::temp_dir().join(format!("jr-buildd-below-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let (repo, home) = (t.join("repo"), t.join("cargo-home"));
+        let ws = repo.join("app");
+        let manifest = "[workspace]\n[package]\nname=\"a\"\n";
+        std::fs::create_dir_all(ws.join("src")).unwrap();
+        std::fs::create_dir_all(ws.join("fixtures")).unwrap();
+        std::fs::create_dir_all(repo.join("tool/src")).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(ws.join("Cargo.toml"), manifest).unwrap();
+        std::fs::write(ws.join("src/lib.rs"), "").unwrap();
+        std::fs::write(ws.join("fixtures/big"), "").unwrap();
+        std::fs::write(repo.join("tool/Cargo.toml"), manifest).unwrap();
+        std::fs::write(repo.join("tool/src/lib.rs"), "").unwrap();
+        std::fs::write(repo.join(".justrustignore"), "/app/fixtures/\n/tool/\n").unwrap();
+        let env = vec![("CARGO_HOME".to_string(), home.display().to_string())];
+        let count = |cwd: &Path| source_stamp(&source_roots(cwd), cwd, &env).1;
+        assert_eq!(count(&ws), 3);
+        make_mirror(&repo);
+        assert_eq!(count(&ws), 2);
+        // A build started inside an excluded tree reads that tree: the sync
+        // mirrors it as a root of its own, and the stamp covers it.
+        assert_eq!(count(&repo.join("tool")), 2);
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn member_patterns_expand_within_one_component() {
+        assert!(wildcard("*", "a"));
+        assert!(wildcard("jr-*-sys", "jr-zlib-sys"));
+        assert!(wildcard("a?c", "abc"));
+        assert!(!wildcard("a?c", "ac"));
+        assert!(!wildcard("jr-*", "other"));
+        assert!(wildcard("a*", "a"));
+        assert!(expand_member(Path::new("/x"), "crates/**").is_none());
+        assert!(expand_member(Path::new("/x"), "crates/[ab]").is_none());
+        assert_eq!(
+            expand_member(Path::new("/x"), "./crates/../a"),
+            Some(vec![PathBuf::from("/x/a")])
+        );
     }
 
     #[test]
