@@ -694,9 +694,100 @@ pub(crate) fn rustc_version(real: &Path) -> Option<String> {
     {
         return v.clone();
     }
-    let v = rustc_version_uncached(real);
+    let v = rustc_version_on_disk(real, paths::cache_root().as_deref());
     *memo = Some((real.to_path_buf(), v.clone()));
     v
+}
+
+/// `rustc -vV`, remembered on disk per compiler identity. Every unit runs in
+/// its own shim process, so without this each unit started a compiler just
+/// to compute its key (18 ms each on the build hosts, 4 s of job time over
+/// the 362 units of a Cargo check that hit the cache for all of them).
+fn rustc_version_on_disk(real: &Path, cache_root: Option<&Path>) -> Option<String> {
+    let file = rustc_identity(real).and_then(|id| {
+        let mut h = H128::new();
+        h.field(b"rustc-vV-v1");
+        h.field(id.as_bytes());
+        Some(cache_root?.join("rustc-version").join(h.hex()))
+    });
+    if let Some(f) = &file
+        && let Ok(v) = std::fs::read_to_string(f)
+        && v.starts_with("rustc ")
+        && v.ends_with('\n')
+    {
+        return Some(v);
+    }
+    let v = rustc_version_uncached(real)?;
+    if let Some(f) = &file
+        && v.starts_with("rustc ")
+        && v.ends_with('\n')
+        && let Some(dir) = f.parent()
+        && std::fs::create_dir_all(dir).is_ok()
+    {
+        // Atomic: a concurrent shim reads the whole text or nothing.
+        let tmp = dir.join(format!(".tmp-{}", std::process::id()));
+        if std::fs::write(&tmp, &v).is_err() || std::fs::rename(&tmp, f).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+    Some(v)
+}
+
+/// What decides a compiler's `-vV` output without running it: the resolved
+/// binary and the compiler library beside it (a toolchain's `rustc` is a
+/// small launcher for `librustc_driver`), each by size and times. `None`
+/// (ask the compiler every time) for a rustup proxy, whose answer depends
+/// on the directory and environment, and for anything unreadable.
+fn rustc_identity(real: &Path) -> Option<String> {
+    fn stamp(p: &Path) -> Option<String> {
+        let m = std::fs::metadata(p).ok()?;
+        let t = |t: std::io::Result<std::time::SystemTime>| {
+            t.ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos())
+        };
+        #[cfg(unix)]
+        let changed = {
+            use std::os::unix::fs::MetadataExt;
+            (m.ctime(), m.ctime_nsec(), m.ino())
+        };
+        #[cfg(not(unix))]
+        let changed = t(m.created());
+        Some(format!(
+            "{}|{}|{:?}|{changed:?}",
+            p.display(),
+            m.len(),
+            t(m.modified())?
+        ))
+    }
+    let bin = real.canonicalize().ok()?;
+    if bin.file_stem()?.to_str()? == "rustup" {
+        return None;
+    }
+    // A script can start any compiler: only a native binary is its own answer.
+    let mut magic = [0u8; 4];
+    std::io::Read::read_exact(&mut std::fs::File::open(&bin).ok()?, &mut magic).ok()?;
+    if !matches!(
+        &magic,
+        b"\x7fELF" | b"\xcf\xfa\xed\xfe" | b"\xca\xfe\xba\xbe" | b"MZ\x90\x00"
+    ) {
+        return None;
+    }
+    let mut id = vec![stamp(&bin)?];
+    for dir in ["lib", "bin"] {
+        let Ok(rd) = std::fs::read_dir(bin.parent()?.parent()?.join(dir)) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("librustc_driver") || name.starts_with("rustc_driver") {
+                id.push(stamp(&e.path())?);
+            }
+        }
+    }
+    id.sort();
+    Some(id.join("\n"))
 }
 
 fn rustc_version_uncached(real: &Path) -> Option<String> {
@@ -2048,6 +2139,55 @@ pub(crate) fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rustc_version_is_remembered_per_compiler_identity() {
+        let d = std::env::temp_dir().join(format!("jr-rustc-vv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (bin, lib, cache) = (d.join("tc/bin"), d.join("tc/lib"), d.join("cache"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&lib).unwrap();
+        let rustc = bin.join("rustc");
+        let driver = lib.join("librustc_driver-abc.so");
+        std::fs::write(&rustc, b"\x7fELF not a real compiler").unwrap();
+        std::fs::write(&driver, b"one").unwrap();
+        let id = rustc_identity(&rustc).unwrap();
+        let memo = |id: &str| {
+            let mut h = H128::new();
+            h.field(b"rustc-vV-v1");
+            h.field(id.as_bytes());
+            cache.join("rustc-version").join(h.hex())
+        };
+        // Not runnable, nothing remembered: no answer, and nothing written.
+        assert_eq!(rustc_version_on_disk(&rustc, Some(&cache)), None);
+        assert!(!memo(&id).exists());
+        // Remembered: answered without running anything.
+        std::fs::create_dir_all(cache.join("rustc-version")).unwrap();
+        std::fs::write(memo(&id), "rustc 1.0.0\nhost: x\n").unwrap();
+        assert_eq!(
+            rustc_version_on_disk(&rustc, Some(&cache)).as_deref(),
+            Some("rustc 1.0.0\nhost: x\n")
+        );
+        // A torn or foreign file is not an answer.
+        std::fs::write(memo(&id), "rustc 1.0.0").unwrap();
+        assert_eq!(rustc_version_on_disk(&rustc, Some(&cache)), None);
+        std::fs::write(memo(&id), "rustc 1.0.0\nhost: x\n").unwrap();
+        // A replaced compiler library is a different compiler.
+        std::fs::write(&driver, b"two!").unwrap();
+        let id2 = rustc_identity(&rustc).unwrap();
+        assert_ne!(id, id2);
+        assert_eq!(rustc_version_on_disk(&rustc, Some(&cache)), None);
+        // So is a replaced launcher.
+        std::fs::write(&rustc, b"\x7fELF another compiler").unwrap();
+        assert_ne!(rustc_identity(&rustc).unwrap(), id2);
+        // A script and a rustup proxy are asked every time.
+        std::fs::write(&rustc, b"#!/bin/sh\nexec other\n").unwrap();
+        assert_eq!(rustc_identity(&rustc), None);
+        let rustup = bin.join("rustup");
+        std::fs::write(&rustup, b"\x7fELF proxy").unwrap();
+        assert_eq!(rustc_identity(&rustup), None);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn strict_hash_matches_content_and_length_across_buffer_sizes() {
