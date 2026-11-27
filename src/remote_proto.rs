@@ -18,6 +18,23 @@ pub const VERSION: u32 = 5;
 /// `Cache*` frames, v3 is v4 without `RunFiles`, v4 is v5 without
 /// sync-guarded `RunSync` and client `RunState`).
 pub const MIN_VERSION: u32 = 1;
+
+/// Session bridge stderr, read by the sync daemon: the transport dropped and
+/// the original session is being reattached. Here rather than with the
+/// bridge because the daemon is also built where the bridge is not (Windows).
+pub const INTERRUPTED: &str = "hosted: transport interrupted";
+pub const RESTORED: &str = "hosted: transport restored after ";
+
+/// Seconds without the machine, from a bridge's "restored" line.
+pub fn restored_secs(line: &str) -> Option<f64> {
+    line.trim()
+        .strip_prefix(RESTORED)?
+        .strip_suffix('s')?
+        .parse()
+        .ok()
+        .filter(|secs: &f64| secs.is_finite() && *secs >= 0.0)
+}
+
 /// First version with the peer dependency cache (`Cache*` frames).
 pub const CACHE_VERSION: u32 = 3;
 /// First version whose agent sends `RunFiles` before `Exit`.

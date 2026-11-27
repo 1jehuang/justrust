@@ -900,21 +900,12 @@ fn retryable(error: &anyhow::Error) -> bool {
 
 /// Bridge stderr, read by the sync daemon: the transport dropped and the
 /// original session is being reattached.
-pub const INTERRUPTED: &str = "hosted: transport interrupted";
-const RESTORED: &str = "hosted: transport restored after ";
+#[cfg(test)]
+use crate::remote_proto::restored_secs;
+use crate::remote_proto::{INTERRUPTED, RESTORED};
 
 fn restored_line(silent: Duration) -> String {
     format!("{RESTORED}{:.3}s", silent.as_secs_f64())
-}
-
-/// Seconds without the machine, from a bridge's "restored" line.
-pub fn restored_secs(line: &str) -> Option<f64> {
-    line.trim()
-        .strip_prefix(RESTORED)?
-        .strip_suffix('s')?
-        .parse()
-        .ok()
-        .filter(|secs: &f64| secs.is_finite() && *secs >= 0.0)
 }
 
 #[derive(Default)]

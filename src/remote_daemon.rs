@@ -684,9 +684,9 @@ struct Outage {
 impl Outage {
     /// Feed one stderr line of the bridge.
     fn observe(&self, line: &str) {
-        if line.starts_with(crate::remote_session::INTERRUPTED) {
+        if line.starts_with(crate::remote_proto::INTERRUPTED) {
             self.down.lock().unwrap().get_or_insert_with(Instant::now);
-        } else if let Some(secs) = crate::remote_session::restored_secs(line) {
+        } else if let Some(secs) = crate::remote_proto::restored_secs(line) {
             self.restored_us
                 .fetch_add((secs * 1e6) as u64, Ordering::SeqCst);
             *self.down.lock().unwrap() = None;
