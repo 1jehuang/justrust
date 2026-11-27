@@ -990,6 +990,61 @@ fn upload_patch(t: &Target) -> bool {
     child.wait().is_ok_and(|s| s.success()) && wrote
 }
 
+/// Does `reply` (the machine's platform, the sha256 of its justrust and its
+/// `--version`, one per line) describe the binary `stamp` says was installed?
+fn stamp_describes(stamp: &str, dest: &str, own: (&str, &str, &str), reply: &str) -> bool {
+    let (own_platform, own_sha, own_version) = own;
+    let mut lines = reply.lines().map(str::trim);
+    let (Some(platform), Some(sha), Some(version)) = (lines.next(), lines.next(), lines.next())
+    else {
+        return false;
+    };
+    let Some(installed) = stamp.strip_prefix(dest).and_then(|s| s.strip_prefix(' ')) else {
+        return false;
+    };
+    match installed.strip_prefix("fleet ") {
+        Some(fleet) => version == format!("justrust {fleet}"),
+        // This client's own bytes, or its release built for another platform.
+        None => sha == own_sha || (platform != own_platform && version == own_version),
+    }
+}
+
+/// After a handshake that got no answer: is the machine's justrust still the
+/// one the stamp records? One short command instead of a reinstall. `None`
+/// when the machine did not answer either, which says nothing about its
+/// binary: a dropped link must not cost an install over that same link.
+pub fn remote_justrust_intact(t: &Target) -> Option<bool> {
+    let stamp = std::fs::read_to_string(crate::remote::dir().ok()?.join("remote-justrust")).ok()?;
+    let out = t
+        .command()
+        .arg(
+            "uname -sm; b=~/.cargo/bin/justrust; \
+             (sha256sum \"$b\" 2>/dev/null || shasum -a 256 \"$b\" 2>/dev/null || echo -) | awk '{print $1}'; \
+             \"$b\" --version 2>/dev/null || echo -; echo answered",
+        )
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let reply = String::from_utf8_lossy(&out.stdout);
+    // The last line shows the whole reply arrived, not a cut-off part of it.
+    if !out.status.success() || reply.lines().last().map(str::trim) != Some("answered") {
+        return None;
+    }
+    let exe = crate::procfs::running_executable_path().ok()?;
+    let sha = crate::toolchain::sha256(&exe).ok()?;
+    Some(stamp_describes(
+        &stamp,
+        &t.dest,
+        (
+            &crate::remote::local_platform(),
+            &sha,
+            concat!("justrust ", env!("CARGO_PKG_VERSION")),
+        ),
+        &reply,
+    ))
+}
+
 /// Make sure the machine runs this exact justrust binary. Same OS and
 /// architecture (the common case): fetch it from its release on the
 /// machine, else copy it. Otherwise build it there from crates.io at this
@@ -3599,6 +3654,68 @@ mod tests {
         );
         assert!(!Path::new(fields[2]).exists());
         assert!(!Path::new(&wrong_pin.path).exists());
+    }
+
+    #[test]
+    fn stamp_survives_unless_the_machine_reports_another_binary() {
+        let own = ("Linux x86_64", "aaaa", "justrust 0.1.68");
+        let reply = |platform: &str, sha: &str, version: &str| {
+            format!("{platform}\n{sha}\n{version}\nanswered\n")
+        };
+        // Fleet stamp: the version decides, whatever the bytes.
+        let fleet = "host:22 fleet 0.1.68";
+        assert!(stamp_describes(
+            fleet,
+            "host:22",
+            own,
+            &reply("Linux x86_64", "bbbb", "justrust 0.1.68")
+        ));
+        assert!(!stamp_describes(
+            fleet,
+            "host:22",
+            own,
+            &reply("Linux x86_64", "aaaa", "justrust 0.1.67")
+        ));
+        // Own build: exact bytes, or this version built for another platform.
+        let mine = "host:22 0.1.68-abc";
+        assert!(stamp_describes(
+            mine,
+            "host:22",
+            own,
+            &reply("Linux x86_64", "aaaa", "justrust 0.1.68")
+        ));
+        assert!(!stamp_describes(
+            mine,
+            "host:22",
+            own,
+            &reply("Linux x86_64", "bbbb", "justrust 0.1.68")
+        ));
+        assert!(stamp_describes(
+            mine,
+            "host:22",
+            own,
+            &reply("Darwin arm64", "bbbb", "justrust 0.1.68")
+        ));
+        assert!(!stamp_describes(
+            mine,
+            "host:22",
+            own,
+            &reply("Darwin arm64", "bbbb", "justrust 0.1.67")
+        ));
+        // No binary there, a stamp for another machine, a short reply.
+        assert!(!stamp_describes(
+            mine,
+            "host:22",
+            own,
+            &reply("Linux x86_64", "-", "-")
+        ));
+        assert!(!stamp_describes(
+            mine,
+            "other:22",
+            own,
+            &reply("Linux x86_64", "aaaa", "justrust 0.1.68")
+        ));
+        assert!(!stamp_describes(mine, "host:22", own, "Linux x86_64\n"));
     }
 
     #[test]

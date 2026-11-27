@@ -672,6 +672,21 @@ impl InstallRetry {
     }
 }
 
+/// After a failed handshake: must the machine's justrust be installed again?
+///
+/// Only an agent that answered in another protocol version shows that some
+/// other build replaced the binary. No answer (a dropped link, a closed
+/// stream) used to count as that too, so every drop cost a full install over
+/// the link that had just failed: seven in half an hour on 2026-11-27, 28 to
+/// 165 s each against 0.7 s for a handshake. Now the machine is asked, in one
+/// command, and its binary is replaced only if it says it is another one.
+fn stamp_is_stale(answered: Option<u32>, intact: impl FnOnce() -> Option<bool>) -> bool {
+    match answered {
+        Some(version) => version != VERSION,
+        None => intact() == Some(false),
+    }
+}
+
 /// How long a link's transport was down, from its session bridge's stderr.
 /// The bridge hides a reattached drop from the frame stream, so without this
 /// a build only looks slow to return.
@@ -2229,9 +2244,14 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
         other => {
             let _ = child.kill();
             let _ = child.wait();
-            // Most likely another justrust build replaced the machine's
-            // binary: install ours again on the next attempt.
-            if let Ok(d) = crate::remote::dir() {
+            let answered = match &other {
+                Ok(Some((Msg::Hello { version, .. }, _))) => Some(*version),
+                _ => None,
+            };
+            if stamp_is_stale(answered, || {
+                crate::remote_build::remote_justrust_intact(&target)
+            }) && let Ok(d) = crate::remote::dir()
+            {
                 let _ = std::fs::remove_file(d.join("remote-justrust"));
             }
             bail!("remote agent handshake failed: {other:?}");
@@ -5364,6 +5384,21 @@ cmp "$base/expected-lib" "$live/src/lib.rs"
             !REMOTE_MIRROR_PREFIX_SCRIPT.contains("~/.justrust/"),
             "fallback remote mirror path must not overlap ~/.justrust"
         );
+    }
+
+    #[test]
+    fn only_another_version_or_a_confirmed_other_binary_costs_a_reinstall() {
+        let unasked = || -> Option<bool> { panic!("an answer needs no second question") };
+        // The agent answered in another protocol version.
+        assert!(stamp_is_stale(Some(VERSION + 1), unasked));
+        assert!(stamp_is_stale(Some(VERSION - 1), unasked));
+        // No answer: a dropped link, EOF, a transport error.
+        assert!(!stamp_is_stale(None, || None), "machine unreachable");
+        assert!(!stamp_is_stale(None, || Some(true)), "binary is ours");
+        assert!(stamp_is_stale(None, || Some(false)), "binary replaced");
+        // Seven drops in a row over a bad link: no install.
+        let installs = (0..7).filter(|_| stamp_is_stale(None, || None)).count();
+        assert_eq!(installs, 0);
     }
 
     #[test]
