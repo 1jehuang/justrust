@@ -1184,6 +1184,8 @@ struct Build {
     prebuild: Mutex<bool>,
     /// The daemon terminated it ([`stop`]): its exit is not a result.
     stopped: std::sync::atomic::AtomicBool,
+    /// A prebuild's [`prebuild_claim`], held until it exits.
+    claim: Mutex<Option<std::fs::File>>,
     log: Mutex<Log>,
     cv: Condvar,
 }
@@ -1830,6 +1832,59 @@ fn peer_closed(s: &UnixStream) -> bool {
     n == 0 || err.is_some_and(|e| e != WSAEWOULDBLOCK)
 }
 
+/// Another prebuild holds the claim.
+#[derive(Debug, PartialEq)]
+struct Busy;
+
+/// The right to prebuild `req`'s command in its directory for its session
+/// (sessions build in separate slots). A daemon runs per client build, so
+/// several see the same edit, and requests that differ only in environment
+/// have separate keys in one daemon: each started the same prebuild and all
+/// but one waited for the build directory (252 of 270 doubled prebuilds on
+/// the hosted machine came from two daemons). The lock dies with its holder.
+/// Fails open: no claim file, no coordination.
+fn prebuild_claim(dir: &Path, req: &Request) -> Result<Option<std::fs::File>, Busy> {
+    let mut h = crate::depcache::H128::new();
+    h.field(req.cwd.as_bytes());
+    for a in &req.argv {
+        h.field(a.as_bytes());
+    }
+    h.field(b"--session--");
+    h.field(session_of(req).as_bytes());
+    let hex = h.hex();
+    let path = dir.join(format!("{}.claim", hex.get(..16).unwrap_or(&hex)));
+    let _ = std::fs::create_dir_all(dir);
+    let Ok(f) = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+    else {
+        return Ok(None);
+    };
+    match f.try_lock() {
+        Ok(()) => Ok(Some(f)),
+        Err(std::fs::TryLockError::WouldBlock) => Err(Busy),
+        Err(std::fs::TryLockError::Error(_)) => Ok(None),
+    }
+}
+
+/// A workspace that was deleted (a scratch checkout, a finished CI job):
+/// deleting it wakes the watcher like an edit does, and a prebuild cannot
+/// start in a directory that is gone. Nobody will ask for it again either.
+fn forget_if_gone<V>(recent: &mut HashMap<String, V>, key: &str, cwd: &Path) -> bool {
+    if cwd.is_dir() {
+        return false;
+    }
+    if recent.remove(key).is_some() {
+        log(&format!(
+            "workspace {} is gone, no more prebuilds for it",
+            cwd.display()
+        ));
+    }
+    true
+}
+
 fn start(req: &Request, stamp: Option<String>, cwd: &Path) -> Result<Arc<Build>> {
     let mut c = Command::new(live_exe()?);
     c.args(&req.argv)
@@ -1881,6 +1936,7 @@ fn start(req: &Request, stamp: Option<String>, cwd: &Path) -> Result<Arc<Build>>
         pid: child.id() as i32,
         prebuild: Mutex::new(req.prebuild),
         stopped: Default::default(),
+        claim: Mutex::default(),
         log: Mutex::default(),
         cv: Condvar::new(),
     });
@@ -2281,6 +2337,9 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
         }
         for (key, mut req, roots) in wanted {
             let cwd = PathBuf::from(&req.cwd);
+            if forget_if_gone(&mut dm.state.lock().unwrap().recent, &key, &cwd) {
+                continue;
+            }
             let (stamp, _) = source_stamp(&roots, &cwd, &req.env);
             // An unclaimed prebuild of older sources is useless now.
             cancel_stale_prebuild(dm, &key, &stamp);
@@ -2317,8 +2376,19 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
             req.env.retain(|(k, _)| k != "JCODE_SESSION_ID");
             req.env.retain(|(k, _)| k != GUESS_ENV);
             req.env.push((GUESS_ENV.into(), "1".into()));
+            // One prebuild of a command in a build directory at a time, over
+            // all daemons: wait for the other one, then find its units Fresh.
+            let claim = match dir().map(|d| prebuild_claim(&d.join("prebuild"), &req)) {
+                Ok(Err(Busy)) => {
+                    retry.push(key);
+                    continue;
+                }
+                Ok(Ok(f)) => f,
+                Err(_) => None,
+            };
             match start(&req, Some(stamp), &cwd) {
                 Ok(b) => {
+                    *b.claim.lock().unwrap() = claim;
                     *b.compile_only.lock().unwrap() = compile_only;
                     *b.units_key.lock().unwrap() = units;
                     // The pid ties this line to its exit line, the key to
@@ -2338,7 +2408,10 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
                     let (dm2, b2) = (dm.clone(), b.clone());
                     std::thread::spawn(move || reap(&dm2, &key, &b2));
                 }
-                Err(e) => log(&format!("prebuild failed to start: {e:#}")),
+                Err(e) => log(&format!(
+                    "prebuild failed to start in {}: {e:#}",
+                    cwd.display()
+                )),
             }
         }
     }
@@ -2353,6 +2426,8 @@ fn reap(dm: &Daemon, key: &str, b: &Arc<Build>) {
         }
         l.exit
     };
+    // The next prebuild of this command here may start.
+    b.claim.lock().unwrap().take();
     let mut st = dm.state.lock().unwrap();
     if st.builds.get(key).is_some_and(|x| Arc::ptr_eq(x, b)) {
         st.builds.remove(key);
@@ -2651,6 +2726,62 @@ mod tests {
         assert_ne!(k, request_key(&flags));
         assert_ne!(k, request_key(&filter));
         assert_ne!(k, request_key(&frontend));
+    }
+
+    #[test]
+    fn one_prebuild_of_a_command_in_a_directory_at_a_time_across_daemons() {
+        // Hosted runs 20261121-232520069-1051429-pre and
+        // 20261122-072519783-793907-pre: two daemons, same check, same
+        // directory, same instant.
+        let dir = std::env::temp_dir().join(format!("jr-claim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let req = |argv: &[&str], session: &str, port: &str| Request {
+            build: String::new(),
+            prebuild: true,
+            cwd: "/w".into(),
+            argv: argv.iter().map(|s| s.to_string()).collect(),
+            env: vec![
+                ("JUSTRUST_SLOT_SESSION".into(), session.into()),
+                ("UNRELATED".into(), port.into()),
+            ],
+        };
+        let held = prebuild_claim(&dir, &req(&["check"], "s", "1")).unwrap();
+        assert!(held.is_some());
+        // Another daemon (its own open file), or another key in this one.
+        assert_eq!(
+            prebuild_claim(&dir, &req(&["check"], "s", "2")).err(),
+            Some(Busy)
+        );
+        // Another command, or another session's slot, is not held back.
+        assert!(prebuild_claim(&dir, &req(&["test"], "s", "1")).is_ok());
+        assert!(prebuild_claim(&dir, &req(&["check"], "t", "1")).is_ok());
+        // The holder exited (or died: the lock goes with the file).
+        drop(held);
+        assert!(prebuild_claim(&dir, &req(&["check"], "s", "2")).is_ok());
+        // Nowhere to keep claims: prebuild anyway.
+        let file = dir.join("not-a-directory");
+        std::fs::write(&file, b"").unwrap();
+        assert_eq!(
+            prebuild_claim(&file, &req(&["check"], "s", "1")).map(|f| f.is_some()),
+            Ok(false)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_deleted_workspace_is_forgotten_instead_of_prebuilt() {
+        // Hosted daemon log 2026-11-27: 40 "prebuild failed to start: No
+        // such file or directory", after scratch workspaces were removed.
+        let dir = std::env::temp_dir().join(format!("jr-gone-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut recent = HashMap::from([("k".to_string(), 1), ("other".to_string(), 2)]);
+        assert!(!forget_if_gone(&mut recent, "k", &dir));
+        assert_eq!(recent.len(), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(forget_if_gone(&mut recent, "k", &dir));
+        assert_eq!(recent.keys().collect::<Vec<_>>(), ["other"]);
+        // Asked again for the same key: still skipped, nothing left to drop.
+        assert!(forget_if_gone(&mut recent, "k", &dir));
     }
 
     #[test]
@@ -3275,6 +3406,7 @@ mod tests {
             pid: 0,
             prebuild: Mutex::new(false),
             stopped: Default::default(),
+            claim: Mutex::default(),
             log: Mutex::default(),
             cv: Condvar::new(),
         }
