@@ -777,7 +777,9 @@ impl Options {
             }
         }
 
-        let edition = config::parse_crate_edition(early_dcx, matches, true);
+        // A merge-only invocation (`--read-doc-meta-dir` with no crate) has no
+        // source whose edition could matter, so it gets no default-edition note.
+        let edition = config::parse_crate_edition(early_dcx, matches, !matches.free.is_empty());
 
         let mut id_map = html::markdown::IdMap::new();
         let Some(external_html) = ExternalHtml::load(

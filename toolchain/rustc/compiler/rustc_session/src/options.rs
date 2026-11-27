@@ -2252,10 +2252,7 @@ options! {
     #[rustc_lint_opt_deny_field_access("use `Session::code_model` instead of this field")]
     code_model: Option<CodeModel> = (None, parse_code_model, [TRACKED],
         "choose the code model to use (`rustc --print code-models` for details)"),
-    // Tracked: `collect_and_partition_mono_items` is cached across sessions
-    // and its result depends on this, so an untracked change would reuse a
-    // partition (and artifact names) made for another unit count.
-    codegen_units: Option<usize> = (None, parse_opt_number, [TRACKED],
+    codegen_units: Option<usize> = (None, parse_opt_number, [UNTRACKED],
         "divide crate into N units to optimize in parallel"),
     collapse_macro_debuginfo: CollapseMacroDebuginfo = (CollapseMacroDebuginfo::Unspecified,
         parse_collapse_macro_debuginfo, [TRACKED],
@@ -2524,9 +2521,8 @@ options! {
         "exclude the pass number when dumping MIR (used in tests) (default: no)"),
     dump_mir_graphviz: bool = (false, parse_bool, [UNTRACKED],
         "in addition to `.mir` files, create graphviz `.dot` files (default: no)"),
-    // Tracked: written by the cached `collect_and_partition_mono_items`.
     dump_mono_stats: SwitchWithOptPath = (SwitchWithOptPath::Disabled,
-        parse_switch_with_opt_path, [TRACKED],
+        parse_switch_with_opt_path, [UNTRACKED],
         "output statistics about monomorphization collection"),
     dump_mono_stats_format: DumpMonoStatsFormat = (DumpMonoStatsFormat::Markdown, parse_dump_mono_stats, [UNTRACKED],
         "the format to use for -Z dump-mono-stats (`markdown` (default) or `json`)"),
@@ -2843,8 +2839,7 @@ options! {
         "print codegen statistics in JSON to a file (default: no)"),
     print_llvm_passes: bool = (false, parse_bool, [UNTRACKED],
         "print the LLVM optimization passes being run (default: no)"),
-    // Tracked: printed by the cached `collect_and_partition_mono_items`.
-    print_mono_items: bool = (false, parse_bool, [TRACKED],
+    print_mono_items: bool = (false, parse_bool, [UNTRACKED],
         "print the result of the monomorphization collection pass (default: no)"),
     print_type_sizes: bool = (false, parse_bool, [UNTRACKED],
         "print layout information for each type encountered (default: no)"),

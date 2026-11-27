@@ -605,6 +605,7 @@ fn test_codegen_options_tracking_hash() {
 
     // Make sure that changing an [UNTRACKED] option leaves the hash unchanged.
     // tidy-alphabetical-start
+    untracked!(codegen_units, Some(42));
     untracked!(default_linker_libraries, true);
     untracked!(dlltool, Some(PathBuf::from("custom_dlltool.exe")));
     untracked!(extra_filename, String::from("extra-filename"));
@@ -632,7 +633,6 @@ fn test_codegen_options_tracking_hash() {
     // Make sure that changing a [TRACKED] option changes the hash.
     // tidy-alphabetical-start
     tracked!(code_model, Some(CodeModel::Large));
-    tracked!(codegen_units, Some(42));
     tracked!(collapse_macro_debuginfo, CollapseMacroDebuginfo::Yes);
     tracked!(control_flow_guard, CFGuard::Checks);
     tracked!(debug_assertions, Some(true));
@@ -740,6 +740,7 @@ fn test_unstable_options_tracking_hash() {
     untracked!(dump_mir_exclude_alloc_bytes, true);
     untracked!(dump_mir_exclude_pass_number, true);
     untracked!(dump_mir_graphviz, true);
+    untracked!(dump_mono_stats, SwitchWithOptPath::Enabled(Some("mono-items-dir/".into())));
     untracked!(dump_mono_stats_format, DumpMonoStatsFormat::Json);
     untracked!(dylib_lto, true);
     untracked!(emit_stack_sizes, true);
@@ -765,6 +766,7 @@ fn test_unstable_options_tracking_hash() {
     untracked!(pre_link_args, vec![String::from("abc"), String::from("def")]);
     untracked!(print_codegen_stats, true);
     untracked!(print_llvm_passes, true);
+    untracked!(print_mono_items, true);
     untracked!(print_type_sizes, true);
     untracked!(proc_macro_backtrace, true);
     untracked!(proc_macro_execution_strategy, ProcMacroExecutionStrategy::CrossThread);
@@ -835,7 +837,6 @@ fn test_unstable_options_tracking_hash() {
     tracked!(dep_info_omit_d_target, true);
     tracked!(direct_access_external_data, Some(true));
     tracked!(dual_proc_macros, true);
-    tracked!(dump_mono_stats, SwitchWithOptPath::Enabled(Some("mono-items-dir/".into())));
     tracked!(dwarf_version, Some(5));
     tracked!(embed_metadata, false);
     tracked!(embed_source, true);
@@ -899,7 +900,6 @@ fn test_unstable_options_tracking_hash() {
     tracked!(plt, Some(true));
     tracked!(polonius, Polonius::Legacy);
     tracked!(precise_enum_drop_elaboration, false);
-    tracked!(print_mono_items, true);
     tracked!(profiler_runtime, "abc".to_string());
     tracked!(reg_struct_return, true);
     tracked!(regparm, Some(3));
