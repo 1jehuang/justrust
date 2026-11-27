@@ -1,16 +1,16 @@
-error[E0391]: cycle detected when finding trait impls of `Foo`
+error[E0391]: cycle detected when computing type of `<impl at $DIR/unknown-lifetime-ice-119827.rs:7:1: 7:26>`
+  --> $DIR/unknown-lifetime-ice-119827.rs:7:1
+   |
+LL | impl Foo for Box<dyn Foo> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: ...which requires finding trait impls of `Foo`...
   --> $DIR/unknown-lifetime-ice-119827.rs:1:1
    |
 LL | trait Foo {
    | ^^^^^^^^^
-   |
-note: ...which requires computing type of `<impl at $DIR/unknown-lifetime-ice-119827.rs:8:1: 8:26>`...
-  --> $DIR/unknown-lifetime-ice-119827.rs:8:1
-   |
-LL | impl Foo for Box<dyn Foo> {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: ...which again requires finding trait impls of `Foo`, completing the cycle
-   = note: cycle used when checking that `Foo` is well-formed
+   = note: ...which again requires computing type of `<impl at $DIR/unknown-lifetime-ice-119827.rs:7:1: 7:26>`, completing the cycle
+   = note: cycle used when checking that `<impl at $DIR/unknown-lifetime-ice-119827.rs:7:1: 7:26>` is well-formed
    = note: for more information, see <https://rustc-dev-guide.rust-lang.org/overview.html#queries> and <https://rustc-dev-guide.rust-lang.org/query.html>
 
 error: aborting due to 1 previous error

@@ -1708,9 +1708,37 @@ rustc_queries! {
     }
 
     /// Given a trait `trait_id`, return all known `impl` blocks.
+    ///
+    /// Changes whenever any impl of the trait is added or removed. Trait
+    /// selection must not read it: see `trait_impls_excluding_direct`.
     query trait_impls_of(trait_id: DefId) -> &'tcx ty::trait_def::TraitImpls {
         arena_cache
         desc { "finding trait impls of `{}`", tcx.def_path_str(trait_id) }
+    }
+
+    /// The impls of `trait_id` without the local impls whose self type names
+    /// an ADT directly (those are found through `local_direct_impls_of_adt`).
+    ///
+    /// Adding `#[derive(Debug)]` to one local type therefore leaves this
+    /// value for `Debug` unchanged, and candidate assembly for every other
+    /// type stays green. Reading `trait_impls_of` there re-ran type checking
+    /// of most of the crate after any edit that added an impl.
+    query trait_impls_excluding_direct(trait_id: DefId) -> &'tcx ty::trait_def::TraitImpls {
+        arena_cache
+        desc { "finding trait impls of `{}` that are not direct local ADT impls", tcx.def_path_str(trait_id) }
+    }
+
+    /// For each ADT, the local trait impls whose self type is a path that
+    /// resolves to that ADT, as `(trait, impl)`.
+    query local_direct_adt_impls(_: ()) -> &'tcx rustc_data_structures::fx::FxIndexMap<DefId, Vec<(DefId, DefId)>> {
+        arena_cache
+        desc { "indexing local trait impls by self ADT" }
+    }
+
+    /// The local trait impls whose self type is a path that resolves to the
+    /// ADT `adt`, as `(trait, impl)`. See `trait_impls_excluding_direct`.
+    query local_direct_impls_of_adt(adt: DefId) -> &'tcx [(DefId, DefId)] {
+        desc { "finding local trait impls for `{}`", tcx.def_path_str(adt) }
     }
 
     query specialization_graph_of(trait_id: DefId) -> Result<&'tcx specialization_graph::Graph, ErrorGuaranteed> {

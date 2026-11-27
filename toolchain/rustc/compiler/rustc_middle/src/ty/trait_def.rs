@@ -4,8 +4,8 @@ use rustc_attr_ir::find_attr;
 use rustc_data_structures::fx::FxIndexMap;
 use rustc_errors::ErrorGuaranteed;
 use rustc_hir as hir;
-use rustc_hir::def::DefKind;
-use rustc_hir::def_id::{DefId, LOCAL_CRATE};
+use rustc_hir::def::{DefKind, Res};
+use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_macros::{Decodable, Encodable, StableHash};
 use rustc_span::{Span, bug};
 use tracing::debug;
@@ -143,11 +143,21 @@ impl<'tcx> TyCtxt<'tcx> {
         mut f: impl FnMut(DefId) -> R,
     ) -> R {
         let tcx = self;
-        let trait_impls = tcx.trait_impls_of(trait_def_id);
+        // Not `trait_impls_of`: that changes whenever any impl of the trait
+        // is added. The two reads here change only when an impl that could
+        // apply to this self type does.
+        let trait_impls = tcx.trait_impls_excluding_direct(trait_def_id);
         let mut consider_impls_for_simplified_type = |simp| {
             if let Some(impls_for_type) = trait_impls.non_blanket_impls().get(&simp) {
                 for &impl_def_id in impls_for_type {
                     try_visit!(f(impl_def_id))
+                }
+            }
+            if let SimplifiedType::Adt(adt) = simp {
+                for &(impl_trait, impl_def_id) in tcx.local_direct_impls_of_adt(adt) {
+                    if impl_trait == trait_def_id {
+                        try_visit!(f(impl_def_id))
+                    }
                 }
             }
 
@@ -242,7 +252,8 @@ impl<'tcx> TyCtxt<'tcx> {
 
             // This is only for diagnostics and normally ty vars should be handled by the callers.
             ty::Infer(ty::TyVar(_)) => {
-                for &impl_def_id in trait_impls.non_blanket_impls().values().flatten() {
+                let all_impls = tcx.trait_impls_of(trait_def_id);
+                for &impl_def_id in all_impls.non_blanket_impls().values().flatten() {
                     try_visit!(f(impl_def_id));
                 }
             }
@@ -304,6 +315,55 @@ impl<'tcx> TyCtxt<'tcx> {
 
 /// Query provider for `trait_impls_of`.
 pub(super) fn trait_impls_of_provider(tcx: TyCtxt<'_>, trait_id: DefId) -> TraitImpls {
+    collect_trait_impls(tcx, trait_id, true)
+}
+
+/// Query provider for `trait_impls_excluding_direct`.
+pub(super) fn trait_impls_excluding_direct_provider(
+    tcx: TyCtxt<'_>,
+    trait_id: DefId,
+) -> TraitImpls {
+    collect_trait_impls(tcx, trait_id, false)
+}
+
+/// Query provider for `local_direct_adt_impls`.
+pub(super) fn local_direct_adt_impls_provider(
+    tcx: TyCtxt<'_>,
+    (): (),
+) -> FxIndexMap<DefId, Vec<(DefId, DefId)>> {
+    let mut index: FxIndexMap<DefId, Vec<(DefId, DefId)>> = FxIndexMap::default();
+    // Per trait in `local_trait_impls` order, so that the impls of one trait
+    // for one ADT keep the order `trait_impls_of` gives them.
+    for (&trait_id, impls) in tcx.all_local_trait_impls(()) {
+        for &impl_def_id in impls {
+            if let Some(adt) = impl_direct_self_adt(tcx, impl_def_id) {
+                index.entry(adt).or_default().push((trait_id, impl_def_id.to_def_id()));
+            }
+        }
+    }
+    index
+}
+
+/// The ADT that the self type of a local impl names directly: a plain path
+/// resolved to a struct, enum or union. Such a path always lowers to that
+/// ADT, so the impl's simplified self type is `SimplifiedType::Adt` of it.
+/// Read from HIR, without computing any type, so that indexing every local
+/// impl cannot depend on trait selection. `None` for everything else (type
+/// aliases, references, type parameters, ...): those impls stay in
+/// `trait_impls_excluding_direct`.
+fn impl_direct_self_adt(tcx: TyCtxt<'_>, impl_def_id: LocalDefId) -> Option<DefId> {
+    let hir::Node::Item(item) = tcx.hir_node_by_def_id(impl_def_id) else { return None };
+    let hir::ItemKind::Impl(impl_) = item.kind else { return None };
+    if let hir::TyKind::Path(hir::QPath::Resolved(None, path)) = impl_.self_ty.kind
+        && let Res::Def(DefKind::Struct | DefKind::Enum | DefKind::Union, adt) = path.res
+    {
+        Some(adt)
+    } else {
+        None
+    }
+}
+
+fn collect_trait_impls(tcx: TyCtxt<'_>, trait_id: DefId, include_direct: bool) -> TraitImpls {
     let mut impls = TraitImpls::default();
 
     // Traits defined in the current crate can't have impls in upstream
@@ -327,6 +387,9 @@ pub(super) fn trait_impls_of_provider(tcx: TyCtxt<'_>, trait_id: DefId) -> Trait
     }
 
     for &impl_def_id in tcx.local_trait_impls(trait_id) {
+        if !include_direct && impl_direct_self_adt(tcx, impl_def_id).is_some() {
+            continue;
+        }
         let impl_def_id = impl_def_id.to_def_id();
 
         let impl_self_ty = tcx.type_of(impl_def_id).instantiate_identity().skip_norm_wip();

@@ -2394,6 +2394,11 @@ pub fn provide(providers: &mut Providers) {
     super::util::bug::provide(providers);
     *providers = Providers {
         trait_impls_of: trait_def::trait_impls_of_provider,
+        trait_impls_excluding_direct: trait_def::trait_impls_excluding_direct_provider,
+        local_direct_adt_impls: trait_def::local_direct_adt_impls_provider,
+        local_direct_impls_of_adt: |tcx, adt| {
+            tcx.local_direct_adt_impls(()).get(&adt).map_or(&[], |impls| &impls[..])
+        },
         incoherent_impls: trait_def::incoherent_impls_provider,
         trait_impls_in_crate: trait_def::trait_impls_in_crate_provider,
         traits: trait_def::traits_provider,

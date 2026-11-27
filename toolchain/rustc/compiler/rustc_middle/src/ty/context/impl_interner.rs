@@ -544,7 +544,7 @@ impl<'tcx> Interner for TyCtxt<'tcx> {
         trait_def_id: DefId,
         mut f: impl FnMut(DefId) -> R,
     ) -> R {
-        let trait_impls = self.trait_impls_of(trait_def_id);
+        let trait_impls = self.trait_impls_excluding_direct(trait_def_id);
         for &impl_def_id in trait_impls.blanket_impls() {
             try_visit!(f(impl_def_id));
         }
