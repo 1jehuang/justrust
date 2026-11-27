@@ -657,7 +657,23 @@ fn fetch_release_on_machine(t: &Target) -> bool {
 /// Use the host's asset from the same release, not an unpublished crates.io
 /// package. Source builds still take the existing source-install fallback.
 fn cross_release_install_script(remote_arch: &str, version: Option<&str>) -> Option<String> {
+    release_install_script(remote_arch, version, false)
+}
+
+/// With `keep_fleet_copy` the verified executable is also kept under its
+/// version in [`FLEET_COPIES`], taken before the shared path is replaced so
+/// it is these bytes whoever replaces that path next.
+fn release_install_script(
+    remote_arch: &str,
+    version: Option<&str>,
+    keep_fleet_copy: bool,
+) -> Option<String> {
     let version = version?;
+    let keep = if keep_fleet_copy {
+        keep_fleet_copy_step(version)
+    } else {
+        String::new()
+    };
     let target = match remote_arch {
         "Linux x86_64" => "x86_64-unknown-linux-musl",
         "Linux aarch64" => "aarch64-unknown-linux-musl",
@@ -676,7 +692,7 @@ fn cross_release_install_script(remote_arch: &str, version: Option<&str>) -> Opt
          tar xzf \"$d/{asset}\" -C \"$d\"; \
          f=\"$d/justrust-{target}/justrust\"; \
          [ \"$(\"$f\" --version)\" = {expected_version} ]; \
-         mkdir -p ~/.cargo/bin; chmod +x \"$f\"; \
+         mkdir -p ~/.cargo/bin; chmod +x \"$f\"; {keep}\
          stage=$(mktemp ~/.cargo/bin/.justrust.upload.XXXXXX); \
          mv \"$f\" \"$stage\"; mv \"$stage\" ~/.cargo/bin/justrust",
         url = shell_quote(&url),
@@ -897,7 +913,7 @@ fn install_fleet_release(t: &Target, version: &str) -> bool {
         return false;
     };
     let arch = String::from_utf8_lossy(&arch.stdout).trim().to_string();
-    let Some(script) = cross_release_install_script(&arch, Some(version)) else {
+    let Some(script) = release_install_script(&arch, Some(version), true) else {
         return false;
     };
     t.command()
@@ -1129,18 +1145,91 @@ fn own_sha() -> Option<String> {
 /// directory per sha256 (created by [`ensure_session_executable`]).
 const OWN_COPIES: &str = "$HOME/.justrust/remote/session-executables";
 
+/// Where the machine keeps the fleet releases it was given, one directory
+/// per version. A fleet client runs its version from here: the shared path
+/// is replaced by every client that installs its own build.
+const FLEET_COPIES: &str = "$HOME/.justrust/remote/fleet-executables";
+
+/// Shell word for the executable in `dir` when the machine has it, else the
+/// shared path. Running it marks the copy as in use (see `prune_copies`).
+fn copy_or_shared(dir: &str) -> String {
+    format!(
+        "\"$(d=\"{dir}\"; b=\"$d/justrust\"; if [ -x \"$b\" ]; then touch \"$d\" 2>/dev/null; else b=\"$HOME/.cargo/bin/justrust\"; fi; echo \"$b\")\""
+    )
+}
+
+/// Shell that removes the copies under `$d` other than `keep` which nothing
+/// has used for two weeks and no process is still running (a durable
+/// session outlives its client).
+fn prune_copies(keep: &str) -> String {
+    format!(
+        "[ ! -d \"$d\" ] || find \"$d\" -mindepth 1 -maxdepth 1 -type d -mtime +14 ! -name {keep} 2>/dev/null | while IFS= read -r o; do \
+           ls -l /proc/[0-9]*/exe 2>/dev/null | grep -qF \"$o/\" || rm -rf \"$o\"; done"
+    )
+}
+
+/// Shell that keeps the verified release executable `$f` under `version`.
+fn keep_fleet_copy_step(version: &str) -> String {
+    format!(
+        "c=\"{FLEET_COPIES}/{version}\"; mkdir -p \"$c\"; cp \"$f\" \"$c/.justrust.new\"; \
+         chmod 500 \"$c/.justrust.new\"; mv -f \"$c/.justrust.new\" \"$c/justrust\"; "
+    )
+}
+
+/// The fleet version an install stamp records, when it records one.
+fn fleet_of_stamp(stamp: &str) -> Option<&str> {
+    let (_, v) = stamp.rsplit_once(" fleet ")?;
+    (!v.is_empty()
+        && v.len() <= 64
+        && v.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b".-".contains(&c)))
+    .then_some(v)
+}
+
+fn machine_justrust_from(stamp: Option<&str>, sha: Option<&str>) -> String {
+    match stamp.and_then(fleet_of_stamp) {
+        Some(v) => copy_or_shared(&format!("{FLEET_COPIES}/{v}")),
+        None => machine_justrust_for(sha),
+    }
+}
+
+/// Exit 0 when the machine holds fleet release `version` under its name.
+/// Marks it used and prunes the versions nothing uses any more.
+fn fleet_copy_script(version: &str) -> String {
+    format!(
+        "d=\"{FLEET_COPIES}\"; f=\"$d/{version}/justrust\"; \
+         [ ! -L \"$f\" ] && [ -f \"$f\" ] && [ -O \"$f\" ] && [ -x \"$f\" ] && [ \"$(\"$f\" --version 2>/dev/null)\" = {expected} ]; ok=$?; \
+         [ $ok != 0 ] || touch \"$d/{version}\"; \
+         {prune}; \
+         exit $ok",
+        expected = shell_quote(&format!("justrust {version}")),
+        prune = prune_copies(version),
+    )
+}
+
+/// Does the machine already hold this fleet release? Then nothing is
+/// installed and the shared path is left as it is.
+fn fleet_copy_on_machine(t: &Target, version: &str) -> bool {
+    t.command()
+        .arg(fleet_copy_script(version))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 fn machine_justrust_for(sha: Option<&str>) -> String {
     match sha {
-        // Running it marks the copy as in use (see `own_copy_script`).
-        Some(sha) => format!(
-            "\"$(d=\"{OWN_COPIES}/{sha}\"; b=\"$d/justrust\"; if [ -x \"$b\" ]; then touch \"$d\" 2>/dev/null; else b=\"$HOME/.cargo/bin/justrust\"; fi; echo \"$b\")\""
-        ),
+        Some(sha) => copy_or_shared(&format!("{OWN_COPIES}/{sha}")),
         None => "~/.cargo/bin/justrust".into(),
     }
 }
 
-/// Shell word for this client's justrust on the machine: its own exact-byte
-/// copy when the machine has one, else the shared `~/.cargo/bin/justrust`.
+/// Shell word for this client's justrust on the machine: the fleet release
+/// when that is what the install stamp records, else this client's own
+/// exact-byte copy. Either falls back to the shared `~/.cargo/bin/justrust`
+/// when the machine has no such copy.
 ///
 /// There is one shared path and any number of clients. Two versions in use
 /// at once (an installed release and a candidate run by explicit path) each
@@ -1148,7 +1237,10 @@ fn machine_justrust_for(sha: Option<&str>) -> String {
 /// second served the first one's artifact requests. A copy named by its
 /// digest is never anyone else's.
 pub fn machine_justrust() -> String {
-    machine_justrust_for(own_sha().as_deref())
+    let stamp = crate::remote::dir()
+        .ok()
+        .and_then(|d| std::fs::read_to_string(d.join("remote-justrust")).ok());
+    machine_justrust_from(stamp.as_deref(), own_sha().as_deref())
 }
 
 /// Exit 0 when the machine holds a valid own copy for `sha`. Marks it used,
@@ -1160,9 +1252,9 @@ fn own_copy_script(sha: &str) -> String {
          sha() {{ (sha256sum \"$1\" 2>/dev/null || shasum -a 256 \"$1\" 2>/dev/null) | awk '{{print $1}}'; }}; \
          [ ! -L \"$f\" ] && [ -f \"$f\" ] && [ -O \"$f\" ] && [ -x \"$f\" ] && [ \"$(sha \"$f\")\" = {sha} ]; ok=$?; \
          [ $ok != 0 ] || touch \"$d/{sha}\"; \
-         [ ! -d \"$d\" ] || find \"$d\" -mindepth 1 -maxdepth 1 -type d -mtime +14 ! -name {sha} 2>/dev/null | while IFS= read -r o; do \
-           ls -l /proc/[0-9]*/exe 2>/dev/null | grep -qF \"$o/\" || rm -rf \"$o\"; done; \
-         exit $ok"
+         {prune}; \
+         exit $ok",
+        prune = prune_copies(sha),
     )
 }
 
@@ -1211,12 +1303,8 @@ pub fn remote_justrust_intact(t: &Target) -> Option<bool> {
             "uname -sm; b={}; \
              (sha256sum \"$b\" 2>/dev/null || shasum -a 256 \"$b\" 2>/dev/null || echo -) | awk '{{print $1}}'; \
              \"$b\" --version 2>/dev/null || echo -; echo answered",
-            // A fleet stamp is about the shared path only.
-            if stamp.contains(" fleet ") {
-                machine_justrust_for(None)
-            } else {
-                machine_justrust()
-            }
+            // A fleet stamp is about the fleet release, wherever it runs from.
+            machine_justrust_from(Some(&stamp), own_sha().as_deref())
         ))
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -1257,6 +1345,15 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
             return Ok(());
         }
         let t0 = Instant::now();
+        if fleet_copy_on_machine(t, v) {
+            std::fs::write(&stamp, want)?;
+            crate::remote::log_event(&format!(
+                "fleet justrust {v} already on {}, nothing installed ({:.1}s)",
+                t.dest,
+                t0.elapsed().as_secs_f64()
+            ));
+            return Ok(());
+        }
         if install_fleet_release(t, v) {
             ensure_wild(t);
             std::fs::write(&stamp, want)?;
@@ -3878,6 +3975,126 @@ mod tests {
         assert!(!Path::new(&wrong_pin.path).exists());
     }
 
+    /// `sh -c script` with `home` as HOME. A script this process has just
+    /// written cannot be executed while another test thread is between fork
+    /// and exec with the write descriptor still open ("text file busy",
+    /// exit 126): that is this test binary's doing, so it is tried again.
+    #[cfg(unix)]
+    fn sh_at(home: &Path, script: &str) -> std::process::Output {
+        let mut tries = 0;
+        loop {
+            let out = Command::new("sh")
+                .args(["-c", script])
+                .env("HOME", home)
+                .output()
+                .unwrap();
+            tries += 1;
+            if out.status.code() != Some(126) || tries == 100 {
+                return out;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[cfg(unix)]
+    /// A fleet client (legacy transport) and a client that installs its own
+    /// build share one machine and one shared path.
+    #[test]
+    fn a_fleet_client_and_an_own_build_alternate_without_reinstalling() {
+        let home = std::env::temp_dir().join(format!("jr-fleet-copy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".cargo/bin")).unwrap();
+        let sh = |script: &str| sh_at(&home, script);
+        let shared = home.join(".cargo/bin/justrust");
+        let fleet = "#!/bin/sh\necho justrust 9.9.9\n";
+        let own = "#!/bin/sh\necho justrust 9.9.10-dev\n";
+        let staged = home.join("staged");
+        // What `release_install_script` does once its download is verified.
+        let install_fleet = || {
+            std::fs::write(&staged, fleet).unwrap();
+            crate::sys::set_mode(&staged, 0o755).unwrap();
+            let done = sh(&format!(
+                "set -e; f=\"$HOME/staged\"; {}mv \"$f\" ~/.cargo/bin/justrust",
+                keep_fleet_copy_step("9.9.9")
+            ));
+            assert!(done.status.success(), "{done:?}");
+        };
+        let install_own = || {
+            std::fs::write(&shared, own).unwrap();
+            crate::sys::set_mode(&shared, 0o755).unwrap();
+        };
+        let script = release_install_script("Linux x86_64", Some("9.9.9"), true).unwrap();
+        assert!(script.contains(&keep_fleet_copy_step("9.9.9")));
+        assert!(
+            script.find("fleet-executables").unwrap() < script.find("mv \"$stage\"").unwrap(),
+            "the copy is taken before the shared path is replaced"
+        );
+        assert!(
+            !cross_release_install_script("Linux x86_64", Some("9.9.9"))
+                .unwrap()
+                .contains("fleet-executables")
+        );
+        // One home, the stamp names the last installer.
+        let (fleet_stamp, own_stamp) = ("host:22 fleet 9.9.9", "host:22 sha256-abc");
+        let mut stamp = "";
+        let (mut before, mut after) = (0, 0);
+        for turn in [fleet_stamp, own_stamp, fleet_stamp, own_stamp, fleet_stamp] {
+            if stamp != turn {
+                stamp = turn;
+                if turn == fleet_stamp {
+                    before += 1;
+                    if !sh(&fleet_copy_script("9.9.9")).status.success() {
+                        after += 1;
+                        install_fleet();
+                    }
+                } else {
+                    // No own copy without a durable session: the shared path.
+                    install_own();
+                }
+            }
+            let run = sh(&machine_justrust_from(Some(turn), None));
+            assert_eq!(
+                String::from_utf8_lossy(&run.stdout).trim(),
+                if turn == fleet_stamp {
+                    "justrust 9.9.9"
+                } else {
+                    "justrust 9.9.10-dev"
+                },
+                "each client reaches its own justrust, whoever installed last"
+            );
+        }
+        assert_eq!(
+            (before, after),
+            (3, 1),
+            "fleet installs: every turn before, once now"
+        );
+        // A fleet version the machine was never given is not there, and its
+        // client falls back to the shared path until it is installed.
+        assert!(!sh(&fleet_copy_script("9.9.8")).status.success());
+        let run = sh(&machine_justrust_from(Some("host:22 fleet 9.9.8"), None));
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout).trim(),
+            "justrust 9.9.10-dev"
+        );
+        // A copy that is not the version its directory names does not count.
+        let forged = home.join(".justrust/remote/fleet-executables/9.9.8");
+        std::fs::create_dir_all(&forged).unwrap();
+        std::fs::write(forged.join("justrust"), fleet).unwrap();
+        crate::sys::set_mode(&forged.join("justrust"), 0o500).unwrap();
+        assert!(!sh(&fleet_copy_script("9.9.8")).status.success());
+        assert!(sh(&fleet_copy_script("9.9.9")).status.success());
+        // Only a well-formed fleet stamp selects a fleet copy.
+        assert_eq!(fleet_of_stamp("host:22 fleet 0.1.69"), Some("0.1.69"));
+        assert_eq!(fleet_of_stamp("host:22 sha256-abc"), None);
+        assert_eq!(fleet_of_stamp("host:22 fleet 1.0; rm -rf ~"), None);
+        assert_eq!(fleet_of_stamp("host:22 fleet "), None);
+        assert_eq!(
+            machine_justrust_from(Some("host:22 sha256-abc"), None),
+            "~/.cargo/bin/justrust"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
     #[cfg(unix)]
     #[test]
     fn two_client_versions_alternate_without_reinstalling() {
@@ -3886,13 +4103,7 @@ mod tests {
         let copies = home.join(".justrust/remote/session-executables");
         std::fs::create_dir_all(home.join(".cargo/bin")).unwrap();
         std::fs::create_dir_all(&copies).unwrap();
-        let sh = |script: &str| {
-            Command::new("sh")
-                .args(["-c", script])
-                .env("HOME", &home)
-                .output()
-                .unwrap()
-        };
+        let sh = |script: &str| sh_at(&home, script);
         let digest = |body: &str| {
             use sha2::Digest;
             sha2::Sha256::digest(body)
