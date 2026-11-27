@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -988,6 +988,134 @@ fn upload_patch(t: &Target) -> bool {
         .take()
         .is_some_and(|mut s| s.write_all(&out.stdout).is_ok());
     child.wait().is_ok_and(|s| s.success()) && wrote
+}
+
+/// What a build waiting in silence for its setup should do next.
+#[derive(Debug, PartialEq, Eq)]
+enum Silence {
+    Quiet,
+    Say,
+    GiveUp,
+}
+
+/// Notices at 10 s, 30 s, 60 s and every minute after. Only `connecting` is
+/// bounded: a sync lock or a first mirror can be long and still be progress,
+/// but a connect that long is a link that is not coming up.
+fn setup_silence(phase: &str, waited: Duration, notices: u32, bound: Option<Duration>) -> Silence {
+    if phase == "connecting" && bound.is_some_and(|b| waited >= b) {
+        return Silence::GiveUp;
+    }
+    let due = match notices {
+        0 => 10,
+        1 => 30,
+        n => 60 * (u64::from(n) - 1),
+    };
+    if waited >= Duration::from_secs(due) {
+        Silence::Say
+    } else {
+        Silence::Quiet
+    }
+}
+
+/// How long a build may sit in `connecting` before it is given back
+/// (`JUSTRUST_REMOTE_CONNECT_TIMEOUT` seconds, 0 for no bound).
+fn connect_bound() -> Option<Duration> {
+    let secs = std::env::var("JUSTRUST_REMOTE_CONNECT_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(300);
+    (secs > 0).then(|| Duration::from_secs(secs))
+}
+
+struct SetupState {
+    phase: String,
+    since: Instant,
+    notices: u32,
+    done: bool,
+    gave_up: Option<u64>,
+}
+
+/// Says on stderr that a build is still waiting for its setup, and what for.
+///
+/// Setup phases went only to the live status file. On 2026-11-27 builds sat
+/// up to 25 minutes at `justrust: remote` with nothing printed while the
+/// daemon reinstalled and reconnected over a failing link (one connect took
+/// 427 s, eleven builds queued behind it for up to 482 s).
+struct SetupWatch(Arc<(Mutex<SetupState>, Condvar)>);
+
+impl SetupWatch {
+    fn start(sock: Option<crate::sys::net::UnixStream>) -> SetupWatch {
+        let shared = Arc::new((
+            Mutex::new(SetupState {
+                phase: "waiting for the sync daemon".into(),
+                since: Instant::now(),
+                notices: 0,
+                done: false,
+                gave_up: None,
+            }),
+            Condvar::new(),
+        ));
+        let watch = shared.clone();
+        let bound = connect_bound();
+        let _ = std::thread::Builder::new()
+            .name("remote-setup-watch".into())
+            .spawn(move || {
+                let (lock, cv) = &*watch;
+                let mut st = lock.lock().unwrap();
+                while !st.done {
+                    st = cv.wait_timeout(st, Duration::from_secs(1)).unwrap().0;
+                    if st.done {
+                        break;
+                    }
+                    let waited = st.since.elapsed();
+                    match setup_silence(&st.phase, waited, st.notices, bound) {
+                        Silence::Quiet => {}
+                        Silence::Say => {
+                            st.notices += 1;
+                            eprintln!(
+                                "justrust remote: still {} after {}s (`justrust remote status`; JUSTRUST_REMOTE_CONNECT_TIMEOUT bounds connecting)",
+                                st.phase,
+                                waited.as_secs()
+                            );
+                        }
+                        Silence::GiveUp => {
+                            st.gave_up = Some(waited.as_secs());
+                            st.done = true;
+                            // Wakes the blocked read: the build is given back.
+                            if let Some(sock) = &sock {
+                                let _ = sock.shutdown(std::net::Shutdown::Both);
+                            }
+                        }
+                    }
+                }
+            });
+        SetupWatch(shared)
+    }
+
+    fn phase(&self, phase: &str) {
+        let mut st = self.0.0.lock().unwrap();
+        if st.phase != phase {
+            st.phase = phase.into();
+            st.since = Instant::now();
+            st.notices = 0;
+        }
+    }
+
+    /// Setup is over: the run started or a result frame arrived.
+    fn done(&self) {
+        self.0.0.lock().unwrap().done = true;
+        self.0.1.notify_all();
+    }
+
+    fn gave_up(&self) -> Option<u64> {
+        self.0.0.lock().unwrap().gave_up
+    }
+}
+
+impl Drop for SetupWatch {
+    fn drop(&mut self) {
+        self.done();
+    }
 }
 
 /// The sha256 of this client's executable when its build id is one.
@@ -2198,6 +2326,7 @@ fn run_remote_inner(
     }
     let mut w = BufWriter::new(sock.try_clone()?);
     let mut r = BufReader::new(sock);
+    let setup_watch = SetupWatch::start(r.get_ref().try_clone().ok());
     // Declared after `r` so it clears the registered fd before `r` closes it.
     let _cancel_sock = cancel_signal::ActiveSocket::register(r.get_ref());
     let mut full = vec![sub.to_string()];
@@ -2342,6 +2471,12 @@ fn run_remote_inner(
                     return Err(RemoteCancelled.into());
                 }
                 settle_overlap_admit!(true);
+                if let Some(secs) = setup_watch.gave_up() {
+                    diagnostic.failure_kind = "timeout";
+                    return infra(format!(
+                        "timed out connecting to the remote machine after {secs}s (JUSTRUST_REMOTE_CONNECT_TIMEOUT)"
+                    ));
+                }
                 diagnostic.failure_kind = match &failure {
                     Ok(None) => "connection_closed",
                     Err(error) => {
@@ -2357,6 +2492,14 @@ fn run_remote_inner(
                 return Err(RemoteConnectionLost.into());
             }
         };
+        match &frame.0 {
+            Msg::RunState {
+                may_have_started: false,
+                phase: Some(phase),
+                ..
+            } => setup_watch.phase(phase),
+            _ => setup_watch.done(),
+        }
         match frame {
             (
                 Msg::RunState {
@@ -3820,6 +3963,75 @@ mod tests {
         assert!(copies.join(digest(a)).join("justrust").exists());
         assert!(!copies.join(digest(b)).exists());
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_silent_setup_speaks_within_seconds_and_only_connecting_is_bounded() {
+        let s = Duration::from_secs;
+        let bound = Some(s(300));
+        assert_eq!(setup_silence("connecting", s(9), 0, bound), Silence::Quiet);
+        assert_eq!(setup_silence("connecting", s(10), 0, bound), Silence::Say);
+        assert_eq!(setup_silence("connecting", s(11), 1, bound), Silence::Quiet);
+        assert_eq!(setup_silence("connecting", s(30), 1, bound), Silence::Say);
+        assert_eq!(setup_silence("connecting", s(60), 2, bound), Silence::Say);
+        assert_eq!(
+            setup_silence("connecting", s(119), 3, bound),
+            Silence::Quiet
+        );
+        assert_eq!(setup_silence("connecting", s(120), 3, bound), Silence::Say);
+        assert_eq!(
+            setup_silence("connecting", s(300), 6, bound),
+            Silence::GiveUp
+        );
+        assert_eq!(
+            setup_silence("connecting", s(9000), 200, None),
+            Silence::Quiet
+        );
+        // A long lock wait or mirror is announced, never cut off.
+        for phase in ["waiting for sync lock", "syncing", "applying sources"] {
+            assert_eq!(setup_silence(phase, s(10), 0, bound), Silence::Say);
+            assert_eq!(setup_silence(phase, s(1500), 26, bound), Silence::Say);
+            assert_eq!(setup_silence(phase, s(1500), 27, bound), Silence::Quiet);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_connect_past_its_bound_wakes_the_blocked_read() {
+        use std::io::Read;
+        let (ours, _theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+        let watch = SetupWatch(Arc::new((
+            Mutex::new(SetupState {
+                phase: "connecting".into(),
+                since: Instant::now() - Duration::from_secs(400),
+                notices: 99,
+                done: false,
+                gave_up: None,
+            }),
+            Condvar::new(),
+        )));
+        // The same step the watch thread takes on its bound.
+        {
+            let mut st = watch.0.0.lock().unwrap();
+            assert_eq!(
+                setup_silence(
+                    &st.phase,
+                    st.since.elapsed(),
+                    st.notices,
+                    Some(Duration::from_secs(300))
+                ),
+                Silence::GiveUp
+            );
+            st.gave_up = Some(st.since.elapsed().as_secs());
+            ours.shutdown(std::net::Shutdown::Both).unwrap();
+        }
+        let mut byte = [0u8; 1];
+        assert_eq!((&ours).read(&mut byte).unwrap(), 0, "the read returns");
+        assert!(watch.gave_up().is_some_and(|secs| secs >= 400));
+        // A new phase restarts the clock and the notices.
+        watch.phase("syncing");
+        let st = watch.0.0.lock().unwrap();
+        assert!(st.since.elapsed() < Duration::from_secs(5) && st.notices == 0);
     }
 
     #[test]
