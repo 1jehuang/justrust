@@ -720,6 +720,7 @@ fn run_unit(
             unit.rmeta_secs = Some(unit.wall);
             unit.depcache = "local".into();
             unit.depcache_saved_secs = Some(hit.saved_secs);
+            let _ = crate::buildscript::wrap(&lp.out_dir, &lp.crate_name, &lp.extra);
             unit.cache_hit_overhead_secs = Some(hit_started.elapsed().as_secs_f64());
             write_unit_cost(args, hit.saved_secs, "wall");
             if let Ok(line) = serde_json::to_string(&unit) {
@@ -930,6 +931,10 @@ fn run_unit(
                 "stage": paths::now() - t, "staged": staged,
             });
             let _ = paths::append_line(&run_dir.join("localcache.jsonl"), &line.to_string());
+            // After staging, as for dependencies: the cache keeps the real
+            // binary, and cargo runs the wrapper that replays cached runs
+            // of a workspace build script (`buildscript.rs`).
+            let _ = crate::buildscript::wrap(&lp.out_dir, &lp.crate_name, &lp.extra);
         }
     }
     unit.start = start;

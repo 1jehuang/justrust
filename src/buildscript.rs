@@ -1,4 +1,5 @@
-//! Cached build-script *runs* for non-local packages.
+//! Cached build-script *runs*: registry and git packages, and workspace or
+//! path packages within one checkout (see `plan`).
 //!
 //! Cargo runs build scripts itself, never through `RUSTC`, so the shim cannot
 //! intercept a run directly. Instead, when the shim compiles (or restores) a
@@ -60,7 +61,7 @@ pub fn enabled() -> bool {
 }
 
 /// Replace a freshly compiled build-script binary with the caching wrapper.
-/// Called by the shim for non-local build scripts only.
+/// Called by the shim after it compiled or restored a build script.
 pub fn wrap(out_dir: &Path, crate_name: &str, extra: &str) -> Option<()> {
     if !enabled() {
         return None;
@@ -228,6 +229,29 @@ struct Plan {
     cwd: PathBuf,
     cargo_home: PathBuf,
     hermetic: bool,
+    /// A workspace or path package's script (not from the cargo home).
+    local: bool,
+    /// Checkout paths cargo's `[env]` hands every script but that are not in
+    /// the key (`depcache::workspace_config_env`). A run whose output names
+    /// one is not stored.
+    private: Vec<String>,
+}
+
+/// Cached runs for workspace and path packages too. Off with
+/// `JUSTRUST_BUILD_SCRIPT_CACHE_LOCAL=0`.
+fn local_enabled() -> bool {
+    !matches!(
+        std::env::var("JUSTRUST_BUILD_SCRIPT_CACHE_LOCAL").as_deref(),
+        Ok("0") | Ok("off") | Ok("false") | Ok("no")
+    )
+}
+
+/// A local run shorter than this is not stored: replaying costs about as
+/// much as running it.
+const LOCAL_MIN_SECS: f64 = 0.2;
+
+fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && hay.windows(needle.len()).any(|w| w == needle)
 }
 
 fn cargo_home() -> PathBuf {
@@ -317,10 +341,22 @@ fn plan(real: &Path, args: &[OsString]) -> Option<Plan> {
     let cwd = std::env::current_dir().ok()?;
     let cargo_home = cargo_home();
     let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR")?);
-    if !manifest.starts_with(&cargo_home) {
-        return None; // local package: always run
+    // A workspace or path package. Its script is keyed like a registry one,
+    // by the content of its binary (which pins its source and everything
+    // compiled into it), and its `rerun-if-changed` files are signed by
+    // content. Nothing here is a placeholder: the package dir and every
+    // checkout path stay in the key as they are, so a run is only replayed
+    // in the same checkout (another target dir or slot, a cleaned target
+    // dir, or an input that changed and changed back).
+    let local = !manifest.starts_with(&cargo_home);
+    if local && !local_enabled() {
+        return None;
     }
-    add_path_maps(&norm);
+    if !local {
+        // A local package's C objects keep their real paths: they are only
+        // replayed in this checkout, and a debugger must find its sources.
+        add_path_maps(&norm);
+    }
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     let package = std::env::var("CARGO_PKG_NAME").unwrap_or_default();
     if hermetic(&package)
@@ -381,7 +417,25 @@ fn plan(real: &Path, args: &[OsString]) -> Option<Plan> {
     }
     let mut env: Vec<(String, String)> = std::env::vars().filter(|(k, _)| keyed_env(k)).collect();
     env.sort();
+    let mut private = Vec::new();
     for (k, v) in &env {
+        if !local && depcache::workspace_config_env(k) {
+            // The checkout this registry script is built for, handed to every
+            // script by the project's `[env]` (Cargo's own repository sets
+            // `CARGO_RUSTC_CURRENT_DIR`). Keyed, it gave the script a new key
+            // in every checkout: on a build host in 24h, libgit2-sys (0 hits
+            // of 11 runs), curl-sys (0 of 11), libnghttp2-sys (0 of 10),
+            // openssl-sys and libsqlite3-sys (5 of 16) reran for it, and it
+            // was the only key part that differed between two checkouts of
+            // the same sources (66 scripts). A script that declares it
+            // (`rerun-if-env-changed`) has it in the result key; one whose
+            // output names the path is not stored (`Plan::store`).
+            let v = v.trim_end_matches('/');
+            if !v.is_empty() {
+                private.push(v.to_owned());
+            }
+            continue;
+        }
         if by_content(k) && Path::new(v).is_file() {
             field(k, &depcache::file_hash(Path::new(v), true)?);
         } else if k == "PATH" && hermetic_run {
@@ -407,6 +461,8 @@ fn plan(real: &Path, args: &[OsString]) -> Option<Plan> {
         cwd,
         cargo_home,
         hermetic: hermetic_run,
+        local,
+        private,
     })
 }
 
@@ -674,6 +730,17 @@ impl Plan {
         if changed.is_empty() && env_names.is_empty() {
             return None;
         }
+        if self.local && wall < LOCAL_MIN_SECS {
+            return None;
+        }
+        if self
+            .private
+            .iter()
+            .any(|p| stdout.contains(p.as_str()) || stderr.contains(p.as_str()))
+        {
+            return None;
+        }
+        let signing = std::time::Instant::now();
         let mut entry = Entry {
             inputs: Vec::new(),
             env: Vec::new(),
@@ -699,6 +766,11 @@ impl Plan {
             entry.env.push((k, v));
         }
         entry.out = h.hex();
+        // A local script may name a whole source tree. If reading it costs
+        // a large share of the run, replaying would not pay.
+        if self.local && signing.elapsed().as_secs_f64() > wall / 4.0 {
+            return None;
+        }
 
         let final_dir = self.root.join("o").join(&entry.out);
         if final_dir.exists() {
@@ -751,6 +823,10 @@ impl Plan {
                 }
                 let src = self.out_dir.join(&r);
                 let bytes = std::fs::read(&src).ok()?;
+                // Names a checkout that is not in the key.
+                if self.private.iter().any(|p| contains(&bytes, p.as_bytes())) {
+                    return None;
+                }
                 let text = !bytes.contains(&0) && std::str::from_utf8(&bytes).is_ok();
                 if text {
                     let s = std::str::from_utf8(&bytes).ok()?;
@@ -1208,6 +1284,8 @@ mod tests {
                 cwd: src.clone(),
                 cargo_home: dir.join("no-cargo-home"),
                 hermetic: false,
+                local: false,
+                private: Vec::new(),
             }
         };
         let p1 = mk("t1");
@@ -1247,6 +1325,37 @@ mod tests {
         bin.extend_from_slice(od1.as_bytes());
         std::fs::write(p3.out_dir.join("sub/lib.a"), bin).unwrap();
         assert!(p3.store(stdout.as_bytes(), b"", 1.0).is_none());
+
+        // A registry script whose output names the checkout it was built
+        // for (a path that is not in the key): not stored.
+        let ws = "/checkouts/one";
+        let p4 = Plan {
+            base: "d".repeat(32),
+            private: vec![ws.into()],
+            ..mk("t4")
+        };
+        let plain = "cargo:rerun-if-changed=in.txt\n";
+        let named = format!("{plain}cargo:rustc-env=ROOT={ws}/x\n");
+        assert!(p4.store(named.as_bytes(), b"", 1.0).is_none());
+        std::fs::write(p4.out_dir.join("gen.rs"), format!("// {ws}/src")).unwrap();
+        assert!(p4.store(plain.as_bytes(), b"", 1.0).is_none());
+        std::fs::write(p4.out_dir.join("gen.rs"), "// nothing").unwrap();
+        assert!(p4.store(plain.as_bytes(), b"", 1.0).is_some());
+
+        // A local script: stored and replayed, unless the run was too short
+        // to be worth replaying. An edited input misses.
+        let local = |t: &str| Plan {
+            base: "e".repeat(32),
+            local: true,
+            ..mk(t)
+        };
+        let p5 = local("t5");
+        assert!(p5.store(plain.as_bytes(), b"", 0.05).is_none());
+        assert!(local("t6").restore().is_none());
+        assert!(p5.store(plain.as_bytes(), b"", 2.0).is_some());
+        assert_eq!(local("t6").restore().expect("local hit").wall, 2.0);
+        std::fs::write(src.join("in.txt"), "v3").unwrap();
+        assert!(local("t6").restore().is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1358,6 +1467,8 @@ mod tests {
             cwd: src.clone(),
             cargo_home: dir.join("no-cargo-home"),
             hermetic: false,
+            local: false,
+            private: Vec::new(),
         };
         // rerun-if-changed on a missing path (cargo always reruns those).
         assert!(
