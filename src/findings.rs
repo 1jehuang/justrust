@@ -83,6 +83,17 @@ pub fn e2e_findings(s: &Summary) -> Vec<Finding> {
             ),
         ));
     }
+    let outage = seg("remote.link_outage");
+    if notable(outage) {
+        out.push(Finding::new(
+            "link_outage",
+            outage,
+            format!(
+                "{outage:.1}s with the connection to the build machine down. The build kept running \
+                 there and the session reattached: the network between this machine and it dropped"
+            ),
+        ));
+    }
     let artifacts = seg("remote.artifacts");
     if notable(artifacts) {
         out.push(Finding::new(
