@@ -916,6 +916,13 @@ fn wildcard(pattern: &str, name: &str) -> bool {
 /// local checkout has none and is stamped in full, because a local build can
 /// read an edit anywhere in it.
 ///
+/// The one local checkout that is stamped like a mirror is on a machine where
+/// local compiles are off (`justrust local off`): every build of it runs on a
+/// build machine, from a mirror that leaves the same paths out, so an edit
+/// there cannot reach any build. Here that was 380,000 of 385,000 files and
+/// 1.5 s before every build of this repository (104 requests, 184 s), and an
+/// edit under `toolchain/` stopped and restarted the client's prebuild.
+///
 /// A package of this build inside an excluded tree is mirrored as a root of
 /// its own (`remote_build::roots_of`), so the build does see edits to it:
 /// those directories (`MirrorIgnore::packages`), and the way down to them,
@@ -931,9 +938,9 @@ struct MirrorIgnore {
 }
 
 impl Prune {
-    fn of(root: &Path, cwd: &Path, configs: &[PathBuf]) -> Self {
+    fn of(root: &Path, cwd: &Path, configs: &[PathBuf], hosted_only: bool) -> Self {
         Self {
-            mirror: MirrorIgnore::of(root, cwd, configs),
+            mirror: MirrorIgnore::of(root, cwd, configs, hosted_only),
         }
     }
 
@@ -951,16 +958,24 @@ impl Prune {
 }
 
 impl MirrorIgnore {
-    fn of(root: &Path, cwd: &Path, configs: &[PathBuf]) -> Option<Self> {
+    fn of(root: &Path, cwd: &Path, configs: &[PathBuf], hosted_only: bool) -> Option<Self> {
         #[cfg(test)]
         if tests::STAMP_EVERYTHING.with(|on| on.get()) {
             return None;
         }
         // The nearest mirror root at or above: a workspace below its
-        // repository's root is mirrored with the repository.
+        // repository's root is mirrored with the repository. Where every
+        // build is hosted, the checkout's repository is what gets mirrored
+        // (`remote_build::roots_of`); outside git the whole workspace is,
+        // and nothing is left out.
         let mirror = root
             .ancestors()
-            .find(|a| a.join(crate::remote_checkpoint::TOKEN_FILE).is_file())?;
+            .find(|a| a.join(crate::remote_checkpoint::TOKEN_FILE).is_file())
+            .or_else(|| {
+                hosted_only
+                    .then(|| root.ancestors().find(|a| a.join(".git").exists()))
+                    .flatten()
+            })?;
         if !mirror.join(".justrustignore").is_file() {
             return None;
         }
@@ -986,6 +1001,15 @@ impl MirrorIgnore {
                 .iter()
                 .any(|p| path.starts_with(p) || (is_dir && p.starts_with(path)))
     }
+}
+
+/// Whether no build of this request's sources can compile on this machine.
+fn hosted_only(env: &[(String, String)]) -> bool {
+    #[cfg(test)]
+    if tests::LOCAL_OFF.with(|on| on.get()) {
+        return true;
+    }
+    crate::nolocal::disabled_in(env)
 }
 
 /// Hash of the source state under `roots`: every file's path, size, mtime
@@ -1106,8 +1130,9 @@ fn stamp_walk(
         configs.push(ch.join("config.toml"));
         configs.push(ch.join("config"));
     }
+    let hosted_only = hosted_only(env);
     for r in roots {
-        walk(r, &Prune::of(r, cwd, &configs), &mut |p, m| {
+        walk(r, &Prune::of(r, cwd, &configs, hosted_only), &mut |p, m| {
             files += 1;
             add(p, m);
         });
@@ -2502,6 +2527,9 @@ mod tests {
         /// The stamp before mirrors were recognised, for the paired profile.
         pub(super) static STAMP_EVERYTHING: std::cell::Cell<bool> =
             const { std::cell::Cell::new(false) };
+        /// `justrust local off` on the machine under test.
+        pub(super) static LOCAL_OFF: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
     }
 
     #[test]
@@ -3789,6 +3817,49 @@ mod tests {
         // A build started inside an excluded tree reads that tree: the sync
         // mirrors it as a root of its own, and the stamp covers it.
         assert_eq!(count(&repo.join("tool")), 2);
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn checkout_whose_builds_are_all_hosted_is_stamped_like_its_mirror() {
+        let (t, ws, env) = ignored_trees("local-off", "\"gen/*\"");
+        let roots = source_roots(&ws);
+        let stamp = || source_stamp(&roots, &ws, &env);
+        let edit = |rel: &str| {
+            let p = ws.join(rel);
+            let mut text = std::fs::read_to_string(&p).unwrap();
+            text.push_str("# edited\n");
+            std::fs::write(p, text).unwrap();
+        };
+        LOCAL_OFF.with(|on| on.set(true));
+        // Outside git the sync mirrors the whole workspace: all stamped.
+        assert_eq!(stamp().1, 13);
+        // In a repository the mirror follows `.justrustignore`, and so does
+        // the stamp: what no build can read does not change it.
+        std::fs::create_dir_all(ws.join(".git")).unwrap();
+        let (s0, n) = stamp();
+        assert_eq!(n, 10);
+        for rel in ["vendor/big/x.rs", "data/a", "gen/notes.txt"] {
+            edit(rel);
+            assert_eq!(stamp().0, s0, "{rel}");
+        }
+        // What a hosted build compiles does, inside an excluded tree or not.
+        let mut last = s0;
+        for rel in [
+            "src/lib.rs",
+            "vendor/dep/src/lib.rs",
+            "gen/m/src/lib.rs",
+            "vendor/patched/src/lib.rs",
+            ".justrustignore",
+        ] {
+            edit(rel);
+            let (next, _) = stamp();
+            assert_ne!(next, last, "{rel}");
+            last = next;
+        }
+        // A machine that may compile here reads all of it again.
+        LOCAL_OFF.with(|on| on.set(false));
+        assert_eq!(stamp().1, 13);
         let _ = std::fs::remove_dir_all(&t);
     }
 

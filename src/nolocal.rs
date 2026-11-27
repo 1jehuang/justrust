@@ -85,6 +85,22 @@ pub fn disabled() -> bool {
     policy() == Policy::Off
 }
 
+/// `disabled()` for a request that carries its own environment, as the
+/// build daemon's do: the request's `JUSTRUST_LOCAL` decides, not the
+/// daemon's.
+pub fn disabled_in(env: &[(String, String)]) -> bool {
+    let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    if cfg!(test)
+        || get(crate::route::ON_AGENT).is_some()
+        || std::env::var_os(crate::route::ON_AGENT).is_some()
+    {
+        return false;
+    }
+    let home = home();
+    let has = |name: &str| home.as_ref().is_some_and(|h| h.join(name).exists());
+    policy_from(get("JUSTRUST_LOCAL"), has(OFF_FILE), has(ON_FILE)) == Policy::Off
+}
+
 pub fn reason() -> Option<String> {
     let text = std::fs::read_to_string(home()?.join(OFF_FILE)).ok()?;
     let t = text.trim();
