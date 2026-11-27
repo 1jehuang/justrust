@@ -211,6 +211,62 @@ fn validate_rel(rel: &str) -> Option<Kind> {
 
 type InflightGate = Arc<(Mutex<bool>, Condvar)>;
 
+/// The mirror directory of the proxy this process started, for
+/// [`note_toolchain`].
+static MIRROR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+/// Compilers noted before the proxy started (an agent's first build picks
+/// its compiler before it starts the proxy).
+static NOTED_EARLY: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Tell the proxy which compiler the next build runs. The first time this
+/// machine sees a compiler, its copy of the index predates every unit the
+/// fleet built with it, however recently it was refreshed: mark it too old
+/// to serve, so the next request refetches it before answering. After a
+/// toolchain release this replaces up to `INDEX_TTL_SECS` of builds that
+/// compile dependencies the store already has. One refetch per compiler,
+/// not a shorter TTL for everyone.
+pub fn note_toolchain(id: &str) {
+    match MIRROR.get() {
+        Some(dir) => {
+            note_toolchain_in(dir, id);
+        }
+        None => {
+            if let Ok(mut early) = NOTED_EARLY.lock()
+                && early.len() < 16
+            {
+                early.push(id.to_owned());
+            }
+        }
+    }
+}
+
+fn note_toolchain_in(dir: &Path, id: &str) -> bool {
+    let ok = !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_'));
+    if !ok {
+        return false;
+    }
+    let seen = dir.join("toolchains-seen");
+    let text = std::fs::read_to_string(&seen).unwrap_or_default();
+    if text.lines().any(|l| l == id) {
+        return false;
+    }
+    if crate::paths::append_line(&seen, id).is_err() {
+        return false;
+    }
+    // Aged, not removed: it is still the answer if no upstream responds.
+    if let Ok(f) = std::fs::File::options()
+        .write(true)
+        .open(dir.join("v1/index"))
+    {
+        let _ = f.set_modified(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1));
+    }
+    true
+}
+
 struct State {
     upstreams: Vec<Upstream>,
     cache_dir: PathBuf,
@@ -249,6 +305,14 @@ pub fn start_with(sources: Vec<Source>, cache_dir: PathBuf) -> Option<String> {
     let _ = std::fs::create_dir_all(cache_dir.join("v1/m"));
     let _ = std::fs::create_dir_all(cache_dir.join("v1/o"));
     let _ = std::fs::create_dir_all(cache_dir.join("v1/s"));
+    #[cfg(not(test))]
+    if MIRROR.set(cache_dir.clone()).is_ok()
+        && let Ok(mut early) = NOTED_EARLY.lock()
+    {
+        for id in early.drain(..) {
+            note_toolchain_in(&cache_dir, &id);
+        }
+    }
 
     let config = ureq::Agent::config_builder()
         .max_idle_connections(WORKER_THREADS)
@@ -1281,13 +1345,74 @@ mod tests {
 
     #[test]
     fn old_index_is_served_when_no_upstream_answers() {
+        offline_index_is_served("old-index-offline", |dir| {
+            old_index(
+                dir,
+                &format!("{}\n", key(1)).into_bytes(),
+                Duration::from_secs(86_400),
+            );
+        });
+    }
+
+    #[test]
+    fn a_compiler_seen_for_the_first_time_refetches_a_fresh_index_once() {
+        let new = format!("{}\n{}\n", key(1), key(2)).into_bytes();
+        let (store, hits) = fake_store(vec![("/v1/index".into(), new.clone())], Duration::ZERO);
+        let dir = test_dir("new-compiler");
+        // Refreshed a minute ago, before the fleet published for jr-new.
+        let before = format!("{}\n", key(1)).into_bytes();
+        old_index(&dir, &before, Duration::from_secs(60));
+        let base = start(store, dir.clone()).unwrap();
+        let get = |name: &str| {
+            let dst = dir.join(name);
+            assert!(matches!(
+                depcache_prebuilt::get(&base, "index", &dst, 5, 1 << 20),
+                depcache_prebuilt::Got::Ok
+            ));
+            std::fs::read(&dst).unwrap()
+        };
+        // A known situation first: fresh copy, no upstream request.
+        assert_eq!(get("a"), before);
+        assert_eq!(hits.load(Ordering::Relaxed), 0);
+
+        assert!(note_toolchain_in(&dir, "jr-new"));
+        assert_eq!(get("b"), new);
+        assert_eq!(hits.load(Ordering::Relaxed), 1);
+
+        // The same compiler again changes nothing, and neither does a name
+        // that could not be a toolchain id.
+        assert!(!note_toolchain_in(&dir, "jr-new"));
+        assert!(!note_toolchain_in(&dir, "../escape"));
+        assert!(!note_toolchain_in(&dir, "two\nlines"));
+        assert_eq!(get("c"), new);
+        assert_eq!(hits.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("toolchains-seen")).unwrap(),
+            "jr-new\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn index_aged_for_a_new_compiler_is_served_when_no_upstream_answers() {
+        offline_index_is_served("new-compiler-offline", |dir| {
+            old_index(
+                dir,
+                &format!("{}\n", key(1)).into_bytes(),
+                Duration::from_secs(60),
+            );
+            assert!(note_toolchain_in(dir, "jr-new"));
+        });
+    }
+
+    fn offline_index_is_served(tag: &str, prepare: impl Fn(&Path)) {
         // Bound and immediately closed: connections are refused.
         let dead = TcpListener::bind("127.0.0.1:0").unwrap();
         let store = format!("http://{}", dead.local_addr().unwrap());
         drop(dead);
-        let dir = test_dir("old-index-offline");
+        let dir = test_dir(tag);
         let body = format!("{}\n", key(1)).into_bytes();
-        old_index(&dir, &body, Duration::from_secs(86_400));
+        prepare(&dir);
         let base = start(store, dir.clone()).unwrap();
         let dst = dir.join("got");
         assert!(matches!(
