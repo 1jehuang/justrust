@@ -59,6 +59,11 @@ debug = "line-tables-only"
 [profile.dev.package.miniz_oxide]
 opt-level = 3
 
+# A debug client hashes its own 174 MB executable to name its build: 1.33 s
+# unoptimized, once per new binary now that the digest is remembered.
+[profile.dev.package.sha2]
+opt-level = 3
+
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1.2.1"
 windows-sys = { version = "0.61", features = [

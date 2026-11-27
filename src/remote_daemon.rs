@@ -66,9 +66,114 @@ pub fn build_id() -> String {
         let executable = crate::procfs::running_executable();
         #[cfg(not(unix))]
         let executable = std::env::current_exe().and_then(std::fs::File::open);
-        binary_identity(executable.and_then(binary_digest))
+        let cache = crate::paths::home().ok().map(|home| home.join("build-id"));
+        binary_identity(executable.and_then(|file| file_digest(cache.as_deref(), file)))
     })
     .clone()
+}
+
+/// Digest of an open executable, remembered across processes: every process
+/// that names its build used to read its whole executable first (1.33 s for
+/// the 174 MB debug client, 11 ms for the 20 MB release one).
+///
+/// The stored digest is only used for the same file in the same state:
+/// device, inode, size, and modification and status-change times in
+/// nanoseconds. Rewriting a file in place moves its status-change time even
+/// when the modification time is put back, and an installer's replacement is
+/// another inode. Anything else (no cache directory, no entry, another key,
+/// a damaged entry) hashes the bytes, as before.
+fn file_digest(cache: Option<&Path>, file: std::fs::File) -> std::io::Result<String> {
+    let Some((cache, key)) = cache.zip(digest_key(&file)) else {
+        return binary_digest(file);
+    };
+    let entry = cache.join(key.split(' ').take(2).collect::<Vec<_>>().join("-"));
+    if let Some(digest) = stored_digest(&entry, &key) {
+        return Ok(digest);
+    }
+    let digest = binary_digest(&file)?;
+    // The file may have been written while it was read: only remember a
+    // digest of a state that held from before the read until after it.
+    if digest_key(&file).as_deref() == Some(&key) {
+        store_digest(cache, &entry, &key, &digest);
+    }
+    Ok(digest)
+}
+
+/// `<device> <inode> <size> <mtime ns> <ctime ns>` of an open file.
+#[cfg(unix)]
+fn digest_key(file: &std::fs::File) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let m = file.metadata().ok()?;
+    Some(format!(
+        "{} {} {} {}.{:09} {}.{:09}",
+        m.dev(),
+        m.ino(),
+        m.size(),
+        m.mtime(),
+        m.mtime_nsec(),
+        m.ctime(),
+        m.ctime_nsec()
+    ))
+}
+
+#[cfg(not(unix))]
+fn digest_key(_: &std::fs::File) -> Option<String> {
+    None
+}
+
+fn stored_digest(entry: &Path, key: &str) -> Option<String> {
+    let text = std::fs::read_to_string(entry).ok()?;
+    let (stored_key, digest) = text.strip_suffix('\n')?.rsplit_once(' ')?;
+    let hex = digest.strip_prefix("sha256-")?;
+    let valid = hex.len() == 64
+        && hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    (stored_key == key && valid).then(|| digest.to_owned())
+}
+
+/// Best effort: a digest that cannot be stored is computed again next time.
+fn store_digest(cache: &Path, entry: &Path, key: &str, digest: &str) {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    if std::fs::create_dir_all(cache).is_err() {
+        return;
+    }
+    let tmp = cache.join(format!(
+        ".tmp-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    // Readers see the old entry or the whole new one, never a partial line.
+    if std::fs::write(&tmp, format!("{key} {digest}\n")).is_err()
+        || std::fs::rename(&tmp, entry).is_err()
+    {
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    prune_digests(cache, entry, 256, Duration::from_secs(7 * 24 * 3600));
+}
+
+/// Every relinked development binary is a new inode with its own entry:
+/// past `keep` entries, drop the ones not written for `older_than`.
+fn prune_digests(cache: &Path, mine: &Path, keep: usize, older_than: Duration) {
+    let Ok(rd) = std::fs::read_dir(cache) else {
+        return;
+    };
+    let entries: Vec<_> = rd.flatten().collect();
+    if entries.len() <= keep {
+        return;
+    }
+    for e in entries {
+        let old = e
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age >= older_than);
+        if old && e.path() != mine {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 fn binary_digest(mut reader: impl Read) -> std::io::Result<String> {
@@ -3819,6 +3924,89 @@ mod tests {
             std::fs::metadata(&copy).unwrap().modified().unwrap()
         );
         assert_ne!(identity(&first), identity(&copy));
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stored_digest_is_used_only_for_the_same_file_state() {
+        let base = std::env::temp_dir().join(format!("jr-digest-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let cache = base.join("build-id");
+        let exe = base.join("exe");
+        let digest =
+            |path: &Path| file_digest(Some(&cache), std::fs::File::open(path).unwrap()).unwrap();
+        let plain = |path: &Path| binary_digest(std::fs::File::open(path).unwrap()).unwrap();
+        let entries = || -> Vec<PathBuf> {
+            std::fs::read_dir(&cache)
+                .map(|rd| rd.flatten().map(|e| e.path()).collect())
+                .unwrap_or_default()
+        };
+
+        std::fs::write(&exe, vec![1u8; 150_000]).unwrap();
+        let first = digest(&exe);
+        assert_eq!(first, plain(&exe));
+        let stored = entries();
+        assert_eq!(stored.len(), 1, "one entry and no temporary file");
+
+        // Proof the entry is what answers: a planted digest under the same
+        // key is returned without reading the file.
+        let key = digest_key(&std::fs::File::open(&exe).unwrap()).unwrap();
+        let planted = format!("sha256-{}", "ab".repeat(32));
+        std::fs::write(&stored[0], format!("{key} {planted}\n")).unwrap();
+        assert_eq!(digest(&exe), planted);
+
+        // A damaged entry is ignored and replaced.
+        std::fs::write(&stored[0], format!("{key} sha256-short\n")).unwrap();
+        assert_eq!(digest(&exe), first);
+        std::fs::write(&stored[0], format!("{key} {first}")).unwrap();
+        assert_eq!(digest(&exe), first);
+        assert_eq!(stored_digest(&stored[0], &key), Some(first.clone()));
+
+        // Same inode, size and modification time, other bytes: the planted
+        // digest of the old state must not answer.
+        let mtime = std::fs::metadata(&exe).unwrap().modified().unwrap();
+        std::fs::write(&stored[0], format!("{key} {planted}\n")).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(&exe, vec![2u8; 150_000]).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&exe)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(mtime))
+            .unwrap();
+        assert_eq!(std::fs::metadata(&exe).unwrap().modified().unwrap(), mtime);
+        let second = digest(&exe);
+        assert_eq!(second, plain(&exe));
+        assert_ne!(second, first);
+
+        // An installer's replacement is another inode with its own entry.
+        let next = base.join("next");
+        std::fs::write(&next, vec![3u8; 150_000]).unwrap();
+        std::fs::rename(&next, &exe).unwrap();
+        assert_eq!(digest(&exe), plain(&exe));
+
+        // Old entries go once there are many, the one just written stays.
+        let kept = entries().len();
+        assert!(kept >= 2);
+        let mine = entries().into_iter().next().unwrap();
+        prune_digests(&cache, &mine, kept, Duration::ZERO);
+        assert_eq!(entries().len(), kept, "nothing goes below the limit");
+        prune_digests(&cache, &mine, 1, Duration::ZERO);
+        assert_eq!(entries(), vec![mine]);
+
+        // No usable cache directory: hash, and say nothing.
+        let blocked = base.join("file");
+        std::fs::write(&blocked, b"not a directory").unwrap();
+        assert_eq!(
+            file_digest(Some(&blocked), std::fs::File::open(&exe).unwrap()).unwrap(),
+            plain(&exe)
+        );
+        assert_eq!(
+            file_digest(None, std::fs::File::open(&exe).unwrap()).unwrap(),
+            plain(&exe)
+        );
         std::fs::remove_dir_all(base).unwrap();
     }
 
