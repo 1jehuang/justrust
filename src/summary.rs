@@ -85,6 +85,38 @@ pub struct Summary {
     /// First-principles theoretical optimal wall-time floor for this run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theoretical_floor: Option<crate::theoretical::TheoreticalFloor>,
+    /// The build daemon's prebuild that compiled this run's units first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prebuild: Option<PrebuildReuse>,
+}
+
+/// A compile-only prebuild whose units this run found Fresh (`buildd`). The
+/// run itself reports nothing compiled: the work, and the time the request
+/// waited for it, are here.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct PrebuildReuse {
+    /// The prebuild's own run (`justrust show <id>`).
+    pub run_id: String,
+    /// Seconds the build daemon held this request back until it finished.
+    /// Zero when it had finished before the request arrived.
+    pub wait_secs: f64,
+    /// Whether the prebuild's record was readable; the rest is zero if not.
+    #[serde(default)]
+    pub recorded: bool,
+    /// rustc invocations the prebuild ran, and how many were workspace crates.
+    #[serde(default)]
+    pub compiled: usize,
+    #[serde(default)]
+    pub local: usize,
+    /// Wall time of the prebuild with a compiler running.
+    #[serde(default)]
+    pub compile_secs: f64,
+    /// Sum of its units' wall times.
+    #[serde(default)]
+    pub rustc_wall_sum: f64,
+    /// The prebuild's whole wall time.
+    #[serde(default)]
+    pub wall: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -175,6 +207,10 @@ pub struct UnitStats {
     pub rustc_cpu_secs: f64,
     /// Sum of unit wall times (exceeds compile phase when units overlap).
     pub rustc_wall_sum: f64,
+    /// Crates whose compiler was still running when the run was killed: they
+    /// have no unit record, so they are in none of the counts above.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cut: Vec<String>,
     pub with_pass_timings: usize,
     /// Compiler phases summed over every unit with phase data. Seconds of
     /// rustc main-thread time, so parallel units add up past wall time.
@@ -812,6 +848,53 @@ fn parse_test_result(l: &str) -> Option<(u64, u64, u64, u64, f64)> {
     ))
 }
 
+/// Exit codes of a run ended by a signal (HUP, INT, KILL, TERM): it did not
+/// finish, so its wall time is not the time its build takes.
+pub fn signal_exit(exit: i32) -> bool {
+    matches!(exit, 129 | 130 | 137 | 143)
+}
+
+/// How long after its last sample a compiler may have lived for it to count
+/// as running until the run ended.
+const CUT_SAMPLE_SLACK: f64 = 1.5;
+
+/// Compilers the sampler saw that never wrote a unit record and were still
+/// alive when the run ended at `end`: (crate, first seen, end).
+fn cut_compiles(procs: &[ProcRecord], units: &[Unit], end: f64) -> Vec<(String, f64, f64)> {
+    let mut cut: Vec<(String, f64, f64)> = Vec::new();
+    for p in procs {
+        if p.kind != "rustc"
+            || !p.first_seen.is_finite()
+            || !p.last_seen.is_finite()
+            || p.last_seen + CUT_SAMPLE_SLACK < end
+        {
+            continue;
+        }
+        let mut words = p.cmdline.split_whitespace();
+        let Some(name) = words
+            .by_ref()
+            .find(|w| *w == "--crate-name")
+            .and_then(|_| words.next())
+        else {
+            continue;
+        };
+        // The same crate compiles more than once (lib, test): one that
+        // finished after this process started is this process's record.
+        if units
+            .iter()
+            .any(|u| u.crate_name == name && u.end >= p.first_seen)
+        {
+            continue;
+        }
+        // The shim and the compiler it runs are two processes of one unit.
+        match cut.iter_mut().find(|c| c.0 == name) {
+            Some(c) => c.1 = c.1.min(p.first_seen),
+            None => cut.push((name.to_owned(), p.first_seen, end)),
+        }
+    }
+    cut
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build(
     meta: &Meta,
@@ -851,6 +934,24 @@ pub fn build(
     let first_unit = intervals.iter().map(|i| i.0).fold(f64::INFINITY, f64::min);
     let last_unit = intervals.iter().map(|i| i.1).fold(0.0, f64::max);
     let (shares, compile_covered) = share_time(&intervals, 0.0, wall);
+    // A run ended by a signal took its compilers with it: they wrote no unit
+    // record. The process sampler saw them, and that time was compiling.
+    let cut = if signal_exit(exit) {
+        cut_compiles(procs, units, end)
+    } else {
+        Vec::new()
+    };
+    let (first_unit, last_unit, compile_covered) = if cut.is_empty() {
+        (first_unit, last_unit, compile_covered)
+    } else {
+        let mut all = intervals.clone();
+        all.extend(cut.iter().map(|c| (rel(c.1), rel(c.2))));
+        (
+            all.iter().map(|i| i.0).fold(f64::INFINITY, f64::min),
+            all.iter().map(|i| i.1).fold(0.0, f64::max),
+            share_time(&all, 0.0, wall).1,
+        )
+    };
 
     // Lock waits: from "Blocking waiting for file lock" to the next output line.
     // Consecutive Blocking lines are one wait.
@@ -1123,6 +1224,7 @@ pub fn build(
         opt_level: observed_opt_level(units.iter().map(|u| u.opt_level.as_str()))
             .map(str::to_owned),
         compiled: units.len(),
+        cut: cut.iter().map(|c| c.0.clone()).collect(),
         local: units.iter().filter(|u| u.local && !u.build_script).count(),
         dependencies: units.iter().filter(|u| !u.local && !u.build_script).count(),
         build_scripts: units.iter().filter(|u| u.build_script).count(),
@@ -1387,6 +1489,7 @@ pub fn build(
         early: None,
         e2e: None,
         theoretical_floor,
+        prebuild: None,
     }
 }
 
@@ -1447,6 +1550,92 @@ fn observed_opt_level<'a>(levels: impl Iterator<Item = &'a str>) -> Option<&'a s
     } else {
         first
     })
+}
+
+#[cfg(test)]
+#[test]
+fn a_run_that_reused_a_prebuild_names_it_and_is_estimated_as_a_build() {
+    let mut pre = Summary {
+        id: "20261127-001850999-119917-pre".into(),
+        subcommand: "test".into(),
+        wall: 5.1,
+        ..Default::default()
+    };
+    pre.units.compiled = 2;
+    pre.units.local = 2;
+    pre.units.fresh = 182;
+    pre.units.rustc_wall_sum = 6.0;
+    pre.phases.compile = 4.4;
+    let fresh = || {
+        let mut s = Summary {
+            subcommand: "test".into(),
+            ..Default::default()
+        };
+        s.units.fresh = 184;
+        s.theoretical_floor = Some(crate::theoretical::compute(
+            &s.subcommand,
+            &s.args,
+            &s.git,
+            &s.units,
+            &s.phases,
+            &s.tests,
+        ));
+        s
+    };
+    let mut s = fresh();
+    let before = s.theoretical_floor.clone().unwrap().optimistic_est_secs;
+    s.credit_prebuild(&pre.id, 3.53, Some(&pre));
+    let p = s.prebuild.clone().unwrap();
+    assert_eq!((p.compiled, p.local, p.recorded), (2, 2, true));
+    assert_eq!((p.wait_secs, p.compile_secs, p.wall), (3.53, 4.4, 5.1));
+    // The run's own units stay what it measured: nothing compiled here.
+    assert_eq!((s.units.compiled, s.units.fresh), (0, 184));
+    // Estimated as the incremental build the request was, not as a no-op.
+    let after = s.theoretical_floor.clone().unwrap().optimistic_est_secs;
+    assert!(before < 0.2 && after > 0.6, "{before} {after}");
+    let footer = s.agent_footer(&Default::default());
+    assert!(
+        footer.contains(
+            "  prebuilt prebuild 20261127-001850999-119917-pre compiled 2 units (2 local) \
+             in 4.4s for this request; this run waited 3.5s for it"
+        ),
+        "{footer}"
+    );
+    // An unreadable prebuild record: named, the wait kept, estimate untouched.
+    let mut s = fresh();
+    s.credit_prebuild("gone-pre", 0.0, None);
+    assert!(!s.prebuild.as_ref().unwrap().recorded);
+    assert_eq!(
+        s.theoretical_floor.as_ref().unwrap().optimistic_est_secs,
+        before
+    );
+    assert!(
+        s.agent_footer(&Default::default())
+            .contains("prebuild gone-pre compiled these units; it had finished before this run")
+    );
+    // A run that compiled for itself keeps its own estimate.
+    let mut s = fresh();
+    s.units.compiled = 1;
+    s.units.local = 1;
+    let own = crate::theoretical::compute(
+        &s.subcommand,
+        &s.args,
+        &s.git,
+        &s.units,
+        &s.phases,
+        &s.tests,
+    );
+    s.theoretical_floor = Some(own.clone());
+    s.credit_prebuild(&pre.id, 1.0, Some(&pre));
+    assert_eq!(s.theoretical_floor, Some(own));
+    // Old records read as before.
+    let old: Summary = serde_json::from_str(&serde_json::to_string(&fresh()).unwrap()).unwrap();
+    assert!(old.prebuild.is_none());
+    assert!(
+        !serde_json::to_string(&fresh())
+            .unwrap()
+            .contains("prebuild")
+    );
 }
 
 #[cfg(test)]
@@ -1540,6 +1729,64 @@ pub(crate) fn recorded_toolchain_label(pin: &str) -> String {
 }
 
 impl Summary {
+    /// This run waited for, or followed, the prebuild `run_id` of its units
+    /// (`pre`: that run's record, when readable). Name it, and estimate the
+    /// request as the build it was: the units had to be compiled for it,
+    /// whichever process ran the compiler.
+    pub fn credit_prebuild(&mut self, run_id: &str, wait_secs: f64, pre: Option<&Summary>) {
+        let mut reuse = PrebuildReuse {
+            run_id: run_id.to_owned(),
+            wait_secs,
+            ..Default::default()
+        };
+        if let Some(p) = pre {
+            reuse.recorded = true;
+            reuse.compiled = p.units.compiled;
+            reuse.local = p.units.local;
+            reuse.compile_secs = p.phases.compile;
+            reuse.rustc_wall_sum = p.units.rustc_wall_sum;
+            reuse.wall = p.wall;
+            if self.units.compiled == 0 && p.units.compiled > 0 {
+                let mut units = self.units.clone();
+                units.compiled = p.units.compiled;
+                units.local = p.units.local;
+                units.dependencies = p.units.dependencies;
+                units.build_scripts = p.units.build_scripts;
+                units.fresh = p.units.fresh;
+                units.depcache_misses = p.units.depcache_misses;
+                units.full_rebuild_lines = p.units.full_rebuild_lines;
+                units.opt_level = p.units.opt_level.clone().or(units.opt_level);
+                self.theoretical_floor = Some(crate::theoretical::compute(
+                    &self.subcommand,
+                    &self.args,
+                    &self.git,
+                    &units,
+                    &self.phases,
+                    &self.tests,
+                ));
+            }
+        }
+        self.prebuild = Some(reuse);
+    }
+
+    /// The report line for [`Summary::prebuild`].
+    fn prebuild_line(&self) -> Option<String> {
+        let p = self.prebuild.as_ref()?;
+        let waited = if p.wait_secs >= 0.05 {
+            format!("this run waited {:.1}s for it", p.wait_secs)
+        } else {
+            "it had finished before this run".to_owned()
+        };
+        Some(if !p.recorded {
+            format!("prebuild {} compiled these units; {waited}", p.run_id)
+        } else {
+            format!(
+                "prebuild {} compiled {} units ({} local) in {:.1}s for this request; {waited}",
+                p.run_id, p.compiled, p.local, p.compile_secs
+            )
+        })
+    }
+
     /// Class and short reason of a failed run, as reported to run history.
     pub fn failure_wire(&self) -> Option<crate::failure::Wire> {
         self.diagnostics
@@ -1574,12 +1821,18 @@ impl Summary {
                 )
                 .into(),
             ),
-            theoretical_floor_secs: self.theoretical_floor.as_ref().map(|f| f.total_secs),
+            // A run ended by a signal did not do the build the estimate is
+            // for: there is nothing to score it against.
+            theoretical_floor_secs: self
+                .theoretical_floor
+                .as_ref()
+                .map(|f| f.total_secs)
+                .filter(|_| !signal_exit(self.exit)),
             optimistic_est_secs: self
                 .theoretical_floor
                 .as_ref()
                 .map(|f| f.optimistic_est_secs)
-                .filter(|&v| v > 0.0),
+                .filter(|&v| v > 0.0 && !signal_exit(self.exit)),
         }
     }
 
@@ -1608,7 +1861,15 @@ impl Summary {
                 self.tests.passed + self.tests.failed
             )
         } else if self.exit != 0 {
-            format!("FAILED (exit {})", self.exit)
+            match self.units.cut.as_slice() {
+                [] => format!("FAILED (exit {})", self.exit),
+                [one] => format!("FAILED (exit {}), killed while compiling {one}", self.exit),
+                [one, rest @ ..] => format!(
+                    "FAILED (exit {}), killed while compiling {one} and {} more",
+                    self.exit,
+                    rest.len()
+                ),
+            }
         } else if self.tests.has_results() {
             let mut v = format!(
                 "ok: {} test{} passed",
@@ -1738,6 +1999,9 @@ impl Summary {
                 .map(|r| format!(". Rebuilt because: {r}"))
                 .unwrap_or_default()
         );
+        if let Some(l) = self.prebuild_line() {
+            let _ = writeln!(o, "  prebuilt {l}");
+        }
         if u.compiled > u.with_pass_timings {
             let _ = writeln!(
                 o,
@@ -2663,6 +2927,106 @@ mod tests {
         assert!(footer.contains("ok: 2 tests passed"), "{footer}");
         assert!(footer.contains("2 passed, 0 failed"), "{footer}");
         assert!(footer.contains("binary timing unavailable"), "{footer}");
+    }
+
+    #[test]
+    fn a_compile_cut_by_a_kill_is_compile_time_and_the_run_is_not_scored() {
+        // Replay of 20261126-161149786-229306: jcode_base finished at 37.3s,
+        // jcode_app_core's compiler ran from 37.4s until SIGTERM at 57.1s.
+        let proc = |cmdline: &str, first_seen, last_seen| ProcRecord {
+            pid: 1,
+            cpu_secs: 0.0,
+            comm: "rustc".into(),
+            cmdline: cmdline.into(),
+            kind: "rustc".into(),
+            first_seen,
+            last_seen,
+            max_rss_mb: 0.0,
+        };
+        let procs = [
+            proc(
+                "/shim/rustc --crate-name jcode_base --edition=2024",
+                25.4,
+                37.18,
+            ),
+            proc(
+                "/tc/bin/rustc --crate-name jcode_base --edition=2024",
+                25.6,
+                37.18,
+            ),
+            proc(
+                "/shim/rustc --crate-name jcode_app_core --edition=2024",
+                37.39,
+                57.04,
+            ),
+            proc(
+                "/tc/bin/rustc --crate-name jcode_app_core --edition=2024",
+                37.59,
+                57.04,
+            ),
+            // Gone long before the kill: whatever it was, the kill did not cut it.
+            proc("/tc/bin/rustc --crate-name probe -", 0.5, 0.6),
+        ];
+        let units = [Unit {
+            crate_name: "jcode_base".into(),
+            local: true,
+            start: 25.42,
+            end: 37.3,
+            wall: 11.88,
+            ..Default::default()
+        }];
+        let make = |exit| {
+            build(
+                &Meta::default(),
+                GitInfo::default(),
+                0.0,
+                57.09,
+                exit,
+                0.0,
+                &[],
+                &[],
+                &procs,
+                &units,
+                &[],
+            )
+        };
+        let s = make(143);
+        assert_eq!(s.units.cut, ["jcode_app_core"]);
+        assert_eq!(s.units.compiled, 1);
+        assert!(s.phases.tail < 1e-9, "{:?}", s.phases);
+        assert!(
+            (s.phases.compile - (11.88 + 19.7)).abs() < 1e-6,
+            "{:?}",
+            s.phases
+        );
+        assert!((s.phases.build_gaps - 0.09).abs() < 1e-6, "{:?}", s.phases);
+        let footer = s.agent_footer(&crate::agent_output::Hidden::default());
+        assert!(
+            footer.contains("FAILED (exit 143), killed while compiling jcode_app_core"),
+            "{footer}"
+        );
+        let entry = s.index_entry();
+        assert!(s.theoretical_floor.is_some());
+        assert_eq!(
+            (entry.optimistic_est_secs, entry.theoretical_floor_secs),
+            (None, None)
+        );
+        for exit in [129, 130, 137] {
+            assert_eq!(make(exit).units.cut.len(), 1, "{exit}");
+        }
+        // A run that ended by itself is measured as before: a process still
+        // sampled at the end is not evidence of a compile.
+        for exit in [0, 101] {
+            let s = make(exit);
+            assert!(s.units.cut.is_empty(), "{exit}");
+            assert!(
+                (s.phases.tail - (57.09 - 37.3)).abs() < 1e-6,
+                "{:?}",
+                s.phases
+            );
+            assert!(s.index_entry().optimistic_est_secs.is_some());
+            assert!(!serde_json::to_string(&s.units).unwrap().contains("cut"));
+        }
     }
 
     #[test]

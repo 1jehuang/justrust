@@ -360,6 +360,9 @@ pub fn main(args: Vec<OsString>) -> ! {
 /// Record `cargo <args>` and exit with cargo's exit code.
 pub fn run(args: Vec<OsString>, opts: Options) -> ! {
     crate::e2e::mark("routed");
+    // The build daemon's note is for this process only: out of the
+    // environment before cargo or a compiler can inherit it.
+    crate::buildd::waited_prebuild();
     let mut trace = PhaseTrace::new();
     if !should_record(&args) {
         exec_cargo(&args);
@@ -1203,6 +1206,14 @@ fn finish(
     );
     s.sched = sched;
     s.savings = crate::savings::from_dir(run_dir);
+    if let Some((pre_id, waited)) = crate::buildd::waited_prebuild() {
+        // Its record is next to this run's: it exited before this run began.
+        let pre = run_dir
+            .parent()
+            .and_then(|runs| std::fs::read(runs.join(&pre_id).join("summary.json")).ok())
+            .and_then(|b| serde_json::from_slice::<summary::Summary>(&b).ok());
+        s.credit_prebuild(&pre_id, waited, pre.as_ref());
+    }
     if let Some(mut e) = early {
         let root = crate::early::workspace_root(Path::new(&meta.cwd))
             .unwrap_or_else(|| PathBuf::from(&meta.cwd));

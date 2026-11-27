@@ -296,6 +296,9 @@ pub struct RemoteTimes {
     pub host_wall: f64,
     /// Identical-request wait inside slots::acquire, before record_baseline.
     pub slot_wait: f64,
+    /// Seconds the build daemon held the request back for a prebuild of its
+    /// units (`Summary::prebuild`), before the host recorder started.
+    pub prebuild_wait: f64,
     /// What the host's own recorder measured around cargo.
     pub host_own: HostOwn,
     pub host_phases: crate::summary::Phases,
@@ -418,19 +421,27 @@ pub fn remote(m: &Marks, now: f64, r: &RemoteTimes) -> E2e {
             0.0
         };
         host.insert(1, ("host.slot_wait".into(), wait));
+        // The daemon waited before it started the host recorder, so this is
+        // in nobody's phases: it comes out of the same unmarked remainder.
+        let prebuild_wait = if r.prebuild_wait.is_finite() {
+            r.prebuild_wait.clamp(0.0, residual - wait)
+        } else {
+            0.0
+        };
+        host.insert(2, ("host.prebuild_wait".into(), prebuild_wait));
         // The host recorder measured its own time around cargo. It never
         // exceeds what the agent saw: scale it into what is left.
         let own = r.host_own;
         let setup = (own.setup - wait).max(0.0);
-        let left = residual - wait;
+        let left = residual - wait - prebuild_wait;
         let known = own.toolchain + setup + own.report;
         let scale = if known > left && known > 0.0 {
             left / known
         } else {
             1.0
         };
-        host.insert(2, ("host.toolchain".into(), own.toolchain * scale));
-        host.insert(3, ("host.setup".into(), setup * scale));
+        host.insert(3, ("host.toolchain".into(), own.toolchain * scale));
+        host.insert(4, ("host.setup".into(), setup * scale));
         host.push(("host.report".into(), own.report * scale));
         // This remainder has no start/end marks of its own. Keep the historical
         // key for saved profiles, but do not attribute it to recorder work.
@@ -558,6 +569,7 @@ pub fn label(key: &str) -> &str {
         "host.prepare" => "agent preflight, protection",
         "host.recorder" => "unattributed host execution",
         "host.slot_wait" => "wait for identical build",
+        "host.prebuild_wait" => "wait for prebuild of these units",
         "host.finalize" => "activity finalization, GC",
         "host.records" => "pack, send run records",
         "remote.artifacts" => "artifacts back",
@@ -936,6 +948,40 @@ mod tests {
         let e = remote(&marks, 11.86, &times);
         assert!((get(&e, "host.slot_wait") - 0.005).abs() < 1e-9);
         assert!((get(&e, "host.setup") - 0.007).abs() < 1e-9);
+
+        // The daemon's wait for a prebuild of these units is named, out of
+        // the remainder nobody marked: the whole stays the same, and it
+        // never exceeds what is left.
+        let mut waited = RemoteTimes {
+            host_own: HostOwn::default(),
+            prebuild_wait: 3.53,
+            ..times.clone()
+        };
+        let e = remote(&marks, 11.86, &waited);
+        assert!((get(&e, "host.prebuild_wait") - 3.53).abs() < 1e-9);
+        assert!((get(&e, "host.slot_wait") - 0.005).abs() < 1e-9);
+        assert!((get(&e, "host.recorder") - (11.588 - 0.005 - 3.53)).abs() < 1e-9);
+        assert!((sum(&e) - sum(&without)).abs() < 1e-9);
+        assert!(render(&e).contains("wait for prebuild of these units"));
+        for (said, shown) in [(1e9, 11.583), (f64::NAN, 0.0), (-1.0, 0.0)] {
+            waited.prebuild_wait = said;
+            let e = remote(&marks, 11.86, &waited);
+            assert!(
+                (get(&e, "host.prebuild_wait") - shown).abs() < 1e-9,
+                "{said}"
+            );
+            assert!((sum(&e) - sum(&without)).abs() < 1e-9);
+        }
+        // It happened before the host recorder started, so the recorder's
+        // own measurements share only what it leaves.
+        waited = RemoteTimes {
+            prebuild_wait: 3.53,
+            ..times.clone()
+        };
+        let e = remote(&marks, 11.86, &waited);
+        assert!((get(&e, "host.prebuild_wait") - 3.53).abs() < 1e-9);
+        assert!(get(&e, "host.toolchain") < 11.588 - 3.53);
+        assert!((sum(&e) - sum(&without)).abs() < 1e-9);
 
         // A host that reports more than the agent measured is scaled down,
         // never past the residual.

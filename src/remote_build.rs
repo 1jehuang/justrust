@@ -2722,6 +2722,7 @@ fn record_remote(
             run: run_timing,
             host_wall: s.wall,
             slot_wait: s.slot.as_ref().map_or(0.0, |slot| slot.join_wait_secs),
+            prebuild_wait: s.prebuild.as_ref().map_or(0.0, |p| p.wait_secs),
             host_own,
             host_phases: s.phases.clone(),
             link_outage: crate::e2e::noted("link_outage"),
