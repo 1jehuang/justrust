@@ -1346,6 +1346,7 @@ fn event_agent() -> ureq::Agent {
         .new_agent()
 }
 
+#[cfg(test)]
 fn send_event_native(agent: &ureq::Agent, c: &Creds, path: &str, body: &Value) -> Result<u16> {
     send_event_reply(agent, c, path, body).map(|(code, _)| code)
 }
