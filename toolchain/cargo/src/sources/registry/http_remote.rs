@@ -438,6 +438,8 @@ impl<'gctx> HttpBackend<'gctx> {
         }
         self.fetch_started.set(true);
 
+        #[cfg(target_os = "linux")]
+        crate::jr_daemon::server_must_not("update a registry index");
         if !self.quiet.get() {
             self.gctx
                 .shell()

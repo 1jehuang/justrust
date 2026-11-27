@@ -251,6 +251,8 @@ impl<'gctx> GitRegistry<'gctx> {
         let _path = self
             .gctx
             .assert_package_cache_locked(CacheLockMode::DownloadExclusive, &self.index_path);
+        #[cfg(target_os = "linux")]
+        crate::jr_daemon::server_must_not("update a registry index");
         if !self.quiet {
             self.gctx
                 .shell()

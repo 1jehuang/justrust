@@ -579,12 +579,16 @@ impl<'gctx> RegistrySource<'gctx> {
                         tracing::warn!("unrecognized .cargo-ok content, clearing cache: {ok}");
                     }
                     // See comment of `unpack_package` about why removing all stuff.
+                    #[cfg(target_os = "linux")]
+                    crate::jr_daemon::server_must_not("clear an unpacked crate");
                     paths::remove_dir_all(dst.as_path_unlocked())?;
                 }
             },
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => anyhow::bail!("unable to read .cargo-ok file at {path:?}: {e}"),
         }
+        #[cfg(target_os = "linux")]
+        crate::jr_daemon::server_must_not("unpack a crate");
         dst.create_dir()?;
 
         let bytes_written = unpack(self.gctx, tarball, unpack_dir, &|_| true)?;

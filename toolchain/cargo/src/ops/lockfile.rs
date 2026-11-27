@@ -53,6 +53,9 @@ pub fn write_pkg_lockfile(ws: &Workspace<'_>, resolve: &mut Resolve) -> CargoRes
         }
     }
 
+    #[cfg(target_os = "linux")]
+    crate::jr_daemon::server_must_not("write Cargo.lock");
+
     if let Some(locked_flag) = ws.gctx().locked_flag() {
         let lockfile_path = lock_root.as_path_unlocked().join(LOCKFILE_NAME);
         let action = if lockfile_path.exists() {

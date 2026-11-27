@@ -1061,11 +1061,12 @@ fn changing_rustflags_is_cached() {
 
 "#]])
         .run();
+    // A linker flag cannot change what an rlib contains, so it is neither in
+    // the unit hash nor in the fingerprint: nothing is rebuilt.
     p.cargo("build -v")
         .env("RUSTFLAGS", "-C linker=cc")
         .with_stderr_data(str![[r#"
-[COMPILING] foo v0.0.1 ([ROOT]/foo)
-[RUNNING] `rustc [..]
+[FRESH] foo v0.0.1 ([ROOT]/foo)
 [FINISHED] `dev` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
 
 "#]])

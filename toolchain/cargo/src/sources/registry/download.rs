@@ -57,6 +57,9 @@ pub(super) fn download(
         }
     }
 
+    #[cfg(target_os = "linux")]
+    crate::jr_daemon::server_must_not("download a crate");
+
     let url = crate_url(
         &registry_config.dl,
         &*pkg.name(),

@@ -1916,8 +1916,12 @@ fn unremap_file_for_all_bin_types() {
 
     // Unit test, integration test, and example binaries are all root units
     // and receive unremap files.
-    assert_eq!(p.glob("target/**/foo-*.trim-paths.json").count(), 1);
-    assert_eq!(p.glob("target/**/it-*.trim-paths.json").count(), 1);
+    // Each test executable has one next to its private output and one next
+    // to the copy published in `deps`, where a debugger looks for it.
+    assert_eq!(p.glob("target/debug/deps/foo-*.trim-paths.json").count(), 1);
+    assert_eq!(p.glob("target/debug/deps/it-*.trim-paths.json").count(), 1);
+    assert_eq!(p.glob("target/**/foo-*.trim-paths.json").count(), 2);
+    assert_eq!(p.glob("target/**/it-*.trim-paths.json").count(), 2);
     assert_eq!(p.glob("target/debug/examples/*.trim-paths.json").count(), 1);
 }
 

@@ -139,6 +139,23 @@ pub fn is_child() -> bool {
     CHILD_CONN.load(Ordering::Relaxed) >= 0
 }
 
+/// A server that is still starting is about to do `what`, which a user
+/// would see or wait for (a network update, a rewritten `Cargo.lock`). That
+/// belongs to the user's own next command, with its messages: the server
+/// exits instead. A no-op in every other process, including a server's
+/// forked child, which is a user's command.
+pub fn server_must_not(what: &str) {
+    let Some((sock, _)) = SERVING.get() else {
+        return;
+    };
+    if is_child() || PARKED.load(Ordering::SeqCst) {
+        return;
+    }
+    eprintln!("jr-cargo daemon: not parking: a server does not {what}");
+    let _ = std::fs::remove_file(starting_marker(sock));
+    std::process::exit(0);
+}
+
 /// Start of the client's request, for "Finished in" and timings.
 pub fn child_start() -> Option<Instant> {
     CHILD_START.get().copied()
@@ -165,6 +182,11 @@ fn subcommand(args: &[OsString]) -> Option<&str> {
         return Some(a);
     }
     None
+}
+
+/// Whether fork servers may be running for this user's builds.
+pub fn enabled() -> bool {
+    !std::env::var_os(ENABLE_ENV).is_some_and(|v| v == "0")
 }
 
 /// The socket for this invocation, if it may use the daemon.
@@ -268,6 +290,81 @@ fn request(sock: &Path) -> io::Result<Reply> {
 
 fn nopark_marker(sock: &Path) -> PathBuf {
     sock.with_extension("nopark")
+}
+
+/// Pids holding an flock on the file with inode `ino`, from the text of
+/// `/proc/locks` (`1: FLOCK  ADVISORY  WRITE 1234 fd:01:5678 0 EOF`; lines
+/// with `->` are waiters, not holders).
+fn flock_holders(locks: &str, ino: u64) -> Vec<i32> {
+    let mut pids = Vec::new();
+    for line in locks.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() < 6 || f[1] != "FLOCK" {
+            continue;
+        }
+        let holds = f[5].rsplit(':').next().and_then(|i| i.parse().ok()) == Some(ino);
+        if let (true, Ok(pid)) = (holds, f[4].parse::<i32>()) {
+            if pid > 0 && !pids.contains(&pid) {
+                pids.push(pid);
+            }
+        }
+    }
+    pids
+}
+
+/// A cargo blocked on the lock file `path`. Kills every holder that is a
+/// jr-cargo server (it has `JUSTRUST_CARGO_SERVE` in its environment; a
+/// parked server holds no cache lock, so a holder is one still starting)
+/// and waits for the kernel to release its locks. Returns whether any was
+/// stopped. A server killed here did no build and is respawned by the next
+/// client that falls back; cargo's cache tolerates a killed cargo.
+pub fn stop_starting_servers_holding(path: &Path) -> bool {
+    if SERVING.get().is_some() || is_child() {
+        return false;
+    }
+    let (Ok(meta), Ok(locks)) = (
+        std::fs::metadata(path),
+        std::fs::read_to_string("/proc/locks"),
+    ) else {
+        return false;
+    };
+    let serve = format!("{SERVE_ENV}=");
+    let trace = std::env::var_os("JUSTRUST_CARGO_DAEMON_TRACE").is_some();
+    let mut stopped = false;
+    for pid in flock_holders(&locks, meta.ino()) {
+        let Ok(env) = std::fs::read(format!("/proc/{pid}/environ")) else {
+            if trace {
+                eprintln!("jr-cargo daemon: holder {pid}: environment unreadable");
+            }
+            continue;
+        };
+        if trace {
+            let cmd = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+            eprintln!(
+                "jr-cargo daemon: {} is held by pid {pid}: {}",
+                path.display(),
+                String::from_utf8_lossy(&cmd).replace('\0', " ")
+            );
+        }
+        let Some(sock) = env
+            .split(|b| *b == 0)
+            .find_map(|v| v.strip_prefix(serve.as_bytes()))
+        else {
+            continue;
+        };
+        if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
+            continue;
+        }
+        stopped = true;
+        // Its start attempt is over: let the next client spawn a new one.
+        let sock = PathBuf::from(std::ffi::OsString::from_vec(sock.to_vec()));
+        let _ = std::fs::remove_file(starting_marker(&sock));
+        let gone = Instant::now() + Duration::from_millis(500);
+        while Path::new(&format!("/proc/{pid}")).exists() && Instant::now() < gone {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    stopped
 }
 
 fn starting_marker(sock: &Path) -> PathBuf {
@@ -830,6 +927,70 @@ mod tests {
             Some("build")
         );
         assert_eq!(subcommand(&a(&["cargo", "--version"])), None);
+    }
+
+    #[test]
+    fn flock_holders_reads_proc_locks() {
+        let locks = "1: FLOCK  ADVISORY  WRITE 4242 fd:01:777 0 EOF\n\
+                     1: -> FLOCK  ADVISORY  WRITE 4300 fd:01:777 0 EOF\n\
+                     2: POSIX  ADVISORY  WRITE 4400 fd:01:777 0 EOF\n\
+                     3: FLOCK  ADVISORY  READ 4500 fd:01:778 0 EOF\n\
+                     4: FLOCK  ADVISORY  READ 4600 fd:01:777 0 EOF\n";
+        assert_eq!(flock_holders(locks, 777), vec![4242, 4600]);
+        assert_eq!(flock_holders(locks, 778), vec![4500]);
+        assert!(flock_holders(locks, 1).is_empty());
+    }
+
+    /// A process that holds the lock and carries the server variable is
+    /// stopped and its start marker removed. One without the variable (any
+    /// other cargo) is left alone.
+    #[test]
+    fn stops_only_servers_holding_the_lock() {
+        use std::process::{Command, Stdio};
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join(".package-cache");
+        let sock = dir.path().join("k.sock");
+        std::fs::write(starting_marker(&sock), b"").unwrap();
+        let hold = |server: bool| {
+            let mut cmd = Command::new("flock");
+            cmd.arg("-o").arg(&lock).args(["sleep", "20"]);
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .env_remove(SERVE_ENV);
+            if server {
+                cmd.env(SERVE_ENV, &sock);
+            }
+            cmd.spawn().ok()
+        };
+        let held = |pid: u32| {
+            let ino = std::fs::metadata(&lock).map(|m| m.ino()).unwrap_or(0);
+            let locks = std::fs::read_to_string("/proc/locks").unwrap_or_default();
+            flock_holders(&locks, ino).contains(&(pid as i32))
+        };
+        let wait_held = |pid: u32| {
+            let end = Instant::now() + Duration::from_secs(10);
+            while !held(pid) && Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            held(pid)
+        };
+        // No flock(1) on this machine: nothing to test with.
+        let Some(mut other) = hold(false) else {
+            return;
+        };
+        assert!(wait_held(other.id()));
+        assert!(!stop_starting_servers_holding(&lock));
+        assert!(held(other.id()));
+        other.kill().unwrap();
+        other.wait().unwrap();
+
+        let mut server = hold(true).unwrap();
+        assert!(wait_held(server.id()));
+        assert!(stop_starting_servers_holding(&lock));
+        server.wait().unwrap();
+        assert!(!held(server.id()));
+        assert!(!starting_marker(&sock).exists());
     }
 
     #[test]

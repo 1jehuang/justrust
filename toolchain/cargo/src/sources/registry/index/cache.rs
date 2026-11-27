@@ -273,6 +273,8 @@ impl<'gctx> CacheManager<'gctx> {
     }
 
     fn put_inner(&self, cache_path: &PathBuf, value: &[u8]) -> std::io::Result<()> {
+        #[cfg(target_os = "linux")]
+        crate::jr_daemon::server_must_not("write a registry index cache file");
         fs::create_dir_all(cache_path.parent().unwrap())?;
         let path = Filesystem::new(cache_path.clone());
         self.gctx

@@ -334,6 +334,9 @@ fn clean_specs(
                             }
                         }
                         let path_dash = format!("{}-", crate_name);
+                        dirs_to_clean.mark_utf(&artifact_dir.dest().join("deps"), |filename| {
+                            is_published_test_output(filename, &crate_name)
+                        });
 
                         dirs_to_clean.mark_utf(layout.build_dir().incremental(), |filename| {
                             filename.starts_with(&path_dash)
@@ -425,6 +428,9 @@ fn clean_specs(
                             }
                         }
                         let unhashed_dep_info = format!("{}.d", crate_name);
+                        dirs_to_clean.mark_utf(&artifact_dir.dest().join("deps"), |filename| {
+                            is_published_test_output(filename, &crate_name)
+                        });
                         dirs_to_clean.mark_utf(dir, |filename| filename == unhashed_dep_info);
 
                         dirs_to_clean.mark_utf(dir, |filename| {
@@ -456,6 +462,20 @@ fn clean_specs(
     clean_ctx.rm_rf_all(dirs_to_clean)?;
 
     Ok(())
+}
+
+/// Whether `filename` is a test executable of `crate_name`, or a file next to
+/// it, that `uplift_to` published to the hashed `deps` path of the artifact
+/// directory: `<crate_name>-<16 hex digits>` and an optional extension.
+fn is_published_test_output(filename: &str, crate_name: &str) -> bool {
+    let Some(rest) = filename
+        .strip_prefix(crate_name)
+        .and_then(|rest| rest.strip_prefix('-'))
+    else {
+        return false;
+    };
+    let hash = rest.split('.').next().unwrap_or(rest);
+    hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[derive(Default)]

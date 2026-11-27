@@ -429,6 +429,26 @@ fn acquire(
         return Ok(());
     }
 
+    // justrust: a jr-cargo fork server that is still starting (resolving, to
+    // park after `create_bcx`) holds the package cache lock like any cargo.
+    // It is speculative work for a later request; this is a request now.
+    // Stop it instead of waiting behind it. A server also takes the lock for
+    // moments at a time (a resolve of a small workspace is a few ms), so look
+    // again for a short while before announcing a wait.
+    #[cfg(target_os = "linux")]
+    for round in 0..100 {
+        let stopped = crate::jr_daemon::stop_starting_servers_holding(path);
+        if try_acquire(path, lock_try)? {
+            return Ok(());
+        }
+        if !stopped && !crate::jr_daemon::enabled() {
+            break;
+        }
+        if round > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
     let msg = if gctx.extra_verbose() {
         format!("waiting for file lock on {} ({})", msg, path.display())
     } else {

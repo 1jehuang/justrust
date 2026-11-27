@@ -88,6 +88,15 @@ pub fn disabled() -> bool {
         return false;
     }
 
+    // The owned toolchain ships the host's standard library only. Without
+    // one for the alternate target nothing here can run, and that is a
+    // property of the toolchain, not a problem with this machine: skip, and
+    // say so, instead of failing one test per process.
+    if !alternate_std_installed(&cross_target) {
+        eprintln!("cross tests skipped: this toolchain has no standard library for {cross_target}");
+        return true;
+    }
+
     // We can't compile a simple cross project. We want to warn the user
     // by failing a single test and having the remainder of the cross tests
     // pass. We don't use `std::sync::Once` here because panicking inside its
@@ -188,4 +197,24 @@ pub fn can_run_on_host() -> bool {
     }
     assert!(CAN_RUN_ON_HOST.load(Ordering::SeqCst));
     return true;
+}
+
+/// Whether the compiler in use has a standard library for `target`.
+fn alternate_std_installed(target: &str) -> bool {
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    Command::new(rustc)
+        .args(["--print", "target-libdir", "--target", target])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .is_some_and(|dir| {
+            std::fs::read_dir(dir.trim()).is_ok_and(|entries| {
+                entries.flatten().any(|entry| {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    name.starts_with("libstd-") && name.ends_with(".rlib")
+                })
+            })
+        })
 }

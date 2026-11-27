@@ -1922,12 +1922,20 @@ fn calculate_normal(
     // Fill out a bunch more information that we'll be tracking typically
     // hashed to take up less space on disk as we just need to know when things
     // change.
-    let mut extra_flags = if unit.mode.is_doc() || unit.mode.is_doc_scrape() {
-        &unit.rustdocflags
+    // The unit hash leaves out flags that cannot change this unit's outputs
+    // (`filter_inert_rustflags_for_unit_hash`). The fingerprint has to leave
+    // out the same ones: with one set of files for both flag sets, comparing
+    // the raw flags rebuilds the unit in place on every flip.
+    let mut extra_flags: Vec<String> = if unit.mode.is_doc() || unit.mode.is_doc_scrape() {
+        unit.rustdocflags.to_vec()
+    } else if super::build_runner::has_remap_path_prefix(&unit.rustflags) {
+        unit.rustflags.to_vec()
     } else {
-        &unit.rustflags
-    }
-    .to_vec();
+        super::build_runner::filter_inert_rustflags_for_unit_hash(unit)
+            .into_iter()
+            .map(String::from)
+            .collect()
+    };
 
     if let Some(flag) = super::jr_frontend::flag(build_runner, unit) {
         extra_flags.push(flag);

@@ -30,6 +30,9 @@ use super::{BuildContext, Compilation, CompileKind, CompileMode, Executor, FileF
 mod compilation_files;
 use self::compilation_files::CompilationFiles;
 pub use self::compilation_files::{Metadata, OutputFile, UnitHash};
+pub(crate) use self::compilation_files::{
+    filter_inert_rustflags_for_unit_hash, has_remap_path_prefix,
+};
 
 /// Collection of all the stuff that is needed to perform a build.
 ///

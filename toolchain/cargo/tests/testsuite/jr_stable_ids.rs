@@ -71,6 +71,19 @@ fn lineage_rustc(p: &Project) -> PathBuf {
     path
 }
 
+/// The real compiler without the lineage capability, whatever `rustc` on
+/// `PATH` advertises (jr-rustc does).
+fn plain_rustc(p: &Project) -> PathBuf {
+    let path = p.root().join("plain-rustc");
+    std::fs::write(
+        &path,
+        "#!/bin/sh\nif [ \"$1\" = \"-vV\" ]; then\n  out=$(rustc -vV) || exit $?\n  printf '%s\\n' \"$out\" | grep -v '^jr-incr-lineage:'\nelse\n  exec rustc \"$@\"\nfi\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
 /// The (`-C metadata`, `-C extra-filename`) of every `mid` compilation in a
 /// verbose build log, sorted.
 fn mid_ids(log: &str) -> Vec<(String, String)> {
@@ -98,9 +111,9 @@ fn mid_ids(log: &str) -> Vec<(String, String)> {
 fn build(p: &Project, rustc: Option<&PathBuf>, args: &str, env: &[(&str, &str)]) -> String {
     let mut cmd = p.cargo(&format!("build -v {args}"));
     cmd.env("CARGO_INCREMENTAL", "1");
-    if let Some(rustc) = rustc {
-        cmd.env("RUSTC", rustc);
-    }
+    // Without a lineage compiler the build must not see the capability.
+    let plain = plain_rustc(p);
+    cmd.env("RUSTC", rustc.unwrap_or(&plain));
     for (key, value) in env {
         cmd.env(key, value);
     }
@@ -148,9 +161,8 @@ fn units_that_differ_only_in_dependencies_keep_distinct_ids_in_one_build() {
 
 #[cargo_test]
 fn local_crate_keeps_its_id_across_a_version_bump() {
-    let manifest = |version: &str| {
-        format!("[package]\nname='mid'\nversion='{version}'\nedition='2021'\n")
-    };
+    let manifest =
+        |version: &str| format!("[package]\nname='mid'\nversion='{version}'\nedition='2021'\n");
     let p = project()
         .file("Cargo.toml", "[workspace]\nmembers=['a','mid']\n")
         .file("mid/Cargo.toml", &manifest("0.1.0"))

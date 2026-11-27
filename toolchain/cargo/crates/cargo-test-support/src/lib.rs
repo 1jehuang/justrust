@@ -1431,10 +1431,13 @@ pub trait TestEnvCommandExt: Sized {
             // under the package cache lock, so the test's next command can
             // print `[BLOCKING] waiting for file lock on package cache`, and
             // every test leaves files in the shared runtime directory.
-            // `JUSTRUST_TEST_CARGO_DAEMON=1` runs the suite through it.
+            // `JUSTRUST_TEST_CARGO_DAEMON=1` runs the suite through it, and so
+            // does `JUSTRUST_CARGO_DAEMON=test`, which a hosted run forwards.
             .env(
                 "JUSTRUST_CARGO_DAEMON",
-                if env::var_os("JUSTRUST_TEST_CARGO_DAEMON").is_some_and(|v| v == "1") {
+                if env::var_os("JUSTRUST_TEST_CARGO_DAEMON").is_some_and(|v| v == "1")
+                    || env::var_os("JUSTRUST_CARGO_DAEMON").is_some_and(|v| v == "test")
+                {
                     "1"
                 } else {
                     "0"

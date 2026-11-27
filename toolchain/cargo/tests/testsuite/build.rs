@@ -1710,10 +1710,8 @@ fn crate_env_vars() {
                     let tmpdir: PathBuf = tmp.unwrap().into();
 
                     let exe: PathBuf = env::current_exe().unwrap().into();
+                    // Test executables run from `target/<profile>/deps`.
                     let mut expected: PathBuf = exe.parent().unwrap()
-                        .parent().unwrap()
-                        .parent().unwrap()
-                        .parent().unwrap()
                         .parent().unwrap()
                         .parent().unwrap()
                         .into();

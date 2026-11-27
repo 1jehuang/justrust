@@ -1023,7 +1023,7 @@ fn shared_metadata_hasher(
 /// justrust: filter out rustflags that are empirically bit-for-bit inert for
 /// this unit's outputs so `-C extra-filename` (`unit_id`) stays identical across
 /// `-Zthreads=N` and (for non-linked `lib`/`rlib` or `check` units) linker flags.
-fn filter_inert_rustflags_for_unit_hash(unit: &Unit) -> Vec<&str> {
+pub(crate) fn filter_inert_rustflags_for_unit_hash(unit: &Unit) -> Vec<&str> {
     let crate_types = unit.target.rustc_crate_types();
     let rlib_only = !crate_types.is_empty()
         && crate_types
@@ -1074,7 +1074,7 @@ fn filter_inert_rustflags_for_unit_hash(unit: &Unit) -> Vec<&str> {
 /// Instead, we use this to avoid hashing rustflags if it might be present to avoid the risk of taking
 /// a flag that is trying to make things reproducible and making things less reproducible by the
 /// `-Cextra-filename` showing up in the rlib, even with `split-debuginfo`.
-fn has_remap_path_prefix(args: &[String]) -> bool {
+pub(crate) fn has_remap_path_prefix(args: &[String]) -> bool {
     args.iter()
         .any(|s| s.starts_with("--remap-path-prefix=") || s == "--remap-path-prefix")
 }

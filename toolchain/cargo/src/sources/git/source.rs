@@ -228,6 +228,8 @@ impl<'gctx> GitSource<'gctx> {
                     } else {
                         "repository"
                     };
+                    #[cfg(target_os = "linux")]
+                    crate::jr_daemon::server_must_not("update a git source");
                     self.gctx
                         .shell()
                         .status("Updating", format!("git {scope} `{}`", self.remote.url()))?;
