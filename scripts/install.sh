@@ -3,8 +3,10 @@
 #
 # Environment:
 #   JUSTRUST_INSTALL_DIR  install directory (default: ~/.local/bin)
-#   JUSTRUST_BASE_URL     release asset base URL
-#                         (default: https://github.com/1jehuang/justrust/releases/latest/download)
+#   JUSTRUST_BASE_URL     release asset base URL. Unset, the installer asks
+#                         JUSTRUST_RELEASE_URL (build.jcode.sh) for the newest
+#                         release published for this platform, and falls back
+#                         to https://github.com/1jehuang/justrust/releases/latest/download
 #   JUSTRUST_NO_LOGIN     if set, skip running `justrust login`
 #   JUSTRUST_INSTALL_TOKEN  one-time token from the signed-in install command
 #                         on jcode.sh/rust (rust.sh?t=...). Exchanged once for
@@ -23,6 +25,7 @@
 set -eu
 
 BASE_URL="${JUSTRUST_BASE_URL:-https://github.com/1jehuang/justrust/releases/latest/download}"
+RELEASE_URL="${JUSTRUST_RELEASE_URL:-https://build.jcode.sh/v1/release/latest}"
 INSTALL_DIR="${JUSTRUST_INSTALL_DIR:-$HOME/.local/bin}"
 EVENT_URL="${JUSTRUST_INSTALL_EVENT_URL:-https://build.jcode.sh/v1/install/event}"
 STAGE=start
@@ -171,6 +174,30 @@ fetch() {
     esac
 }
 
+# The base URL of the newest release published for this platform, from the
+# service's per-platform pointer. GitHub's single "latest" release moves only
+# when every platform has published, so one late platform would otherwise
+# hold every other platform on an old client.
+platform_base() {
+    [ -z "${JUSTRUST_BASE_URL:-}" ] || return 1
+    command -v curl >/dev/null 2>&1 || return 1
+    resp=$(curl -fsS -m 10 "$RELEASE_URL?target=$1&version=0.0.0" 2>/dev/null) || return 1
+    tag=$(printf '%s' "$resp" | sed -n 's/.*"tag"[[:space:]]*:[[:space:]]*"\(v[0-9][0-9A-Za-z.-]*\)".*/\1/p')
+    [ -n "$tag" ] || return 1
+    printf 'https://github.com/1jehuang/justrust/releases/download/%s' "$tag"
+}
+
+# download_release TARGET ASSET: the archive and its checksum into $tmp, from
+# this platform's release, else from the latest complete release.
+download_release() {
+    if base=$(platform_base "$1") \
+        && fetch "$base/$2" "$tmp/$2" 2>/dev/null \
+        && fetch "$base/$2.sha256" "$tmp/$2.sha256" 2>/dev/null; then
+        return 0
+    fi
+    fetch "$BASE_URL/$2" "$tmp/$2" && fetch "$BASE_URL/$2.sha256" "$tmp/$2.sha256"
+}
+
 sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" | cut -d ' ' -f 1
@@ -200,7 +227,7 @@ main() {
         asset="justrust-${target}.tar.gz"
         say "downloading $asset"
         STAGE=download
-        if fetch "$BASE_URL/$asset" "$tmp/$asset" && fetch "$BASE_URL/$asset.sha256" "$tmp/$asset.sha256"; then
+        if download_release "$target" "$asset"; then
             STAGE=verify
             expected=$(cut -d ' ' -f 1 "$tmp/$asset.sha256")
             actual=$(sha256_of "$tmp/$asset")
