@@ -1177,7 +1177,9 @@ pub fn build(
                 .unwrap_or(last_unit),
         )
     };
-    let startup = if units.is_empty() {
+    // A run killed in its first compile has no unit record, but it was
+    // compiling from when the sampler first saw that compiler.
+    let startup = if units.is_empty() && cut.is_empty() {
         build_end
     } else {
         first_unit.min(build_end)
@@ -3046,6 +3048,30 @@ mod tests {
         for exit in [129, 130, 137] {
             assert_eq!(make(exit).units.cut.len(), 1, "{exit}");
         }
+        // Killed in its only compile, so no unit record at all (hosted run
+        // 20261127-015524445-2949563-pre): that time was compiling, not
+        // Cargo starting.
+        let only = [proc(
+            "/tc/bin/rustc --crate-name justrust --edition=2024",
+            0.05,
+            2.08,
+        )];
+        let s = build(
+            &Meta::default(),
+            GitInfo::default(),
+            0.0,
+            2.27,
+            143,
+            0.0,
+            &[],
+            &[],
+            &only,
+            &[],
+            &[],
+        );
+        assert_eq!(s.units.cut, ["justrust"]);
+        assert!((s.phases.startup - 0.05).abs() < 1e-6, "{:?}", s.phases);
+        assert!((s.phases.compile - 2.22).abs() < 1e-6, "{:?}", s.phases);
         // A run that ended by itself is measured as before: a process still
         // sampled at the end is not evidence of a compile.
         for exit in [0, 101] {
