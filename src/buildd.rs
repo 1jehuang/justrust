@@ -122,6 +122,36 @@ fn dropped_guess(b: &Build, l: &Log) -> bool {
     l.exit == Some(GUESS_DROPPED) && *b.prebuild.lock().unwrap()
 }
 
+/// Exit codes of a process ended by SIGHUP, SIGINT, SIGKILL or SIGTERM.
+const SIGNAL_EXITS: [i32; 4] = [129, 130, 137, 143];
+
+/// The daemon stopped this build (a wrong guess, older sources, nobody left
+/// waiting). Marked before the signal, so that no request can take a build
+/// that is about to die for one that is running.
+fn stop(b: &Build) {
+    b.stopped.store(true, std::sync::atomic::Ordering::SeqCst);
+    // Never pid 0: that is this process's own group.
+    if b.pid > 0 {
+        crate::sys::terminate_group(b.pid, false);
+    }
+}
+
+fn stopped(b: &Build) -> bool {
+    b.stopped.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Not the outcome of building these sources, whatever its exit code says:
+/// a guess that declined to run, a build the daemon stopped, or a prebuild
+/// nobody had asked for that a signal ended. A kill says nothing about the
+/// sources, so the request builds for itself.
+fn no_result(b: &Build, l: &Log) -> bool {
+    dropped_guess(b, l)
+        || stopped(b)
+        || (*b.prebuild.lock().unwrap()
+            && !l.claimed
+            && l.exit.is_some_and(|c| SIGNAL_EXITS.contains(&c)))
+}
+
 /// This process is a prebuild: started on a guess, with nobody waiting.
 pub fn is_guess() -> bool {
     std::env::var_os(GUESS_ENV).is_some()
@@ -1110,6 +1140,8 @@ struct Build {
     finished: Mutex<Option<Instant>>,
     pid: i32,
     prebuild: Mutex<bool>,
+    /// The daemon terminated it ([`stop`]): its exit is not a result.
+    stopped: std::sync::atomic::AtomicBool,
     log: Mutex<Log>,
     cv: Condvar,
 }
@@ -1393,6 +1425,7 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
         // Before the wrong guesses are stopped: this one is not wrong.
         let same_units = claim_same_units(dm, &req, &key, &stamp);
         cancel_wrong_guess(dm, &key, &session_of(&req));
+        await_stopped(dm, &key);
         settle_compile_only(dm, &key, &stamp);
         if let Some(b) = same_units {
             log(&format!(
@@ -1425,6 +1458,7 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
             .get(&key)
             .filter(|b| {
                 b.stamp.as_deref() == Some(&*stamp)
+                    && !stopped(b)
                     && b.log.lock().unwrap().exit.is_none()
                     && !*b.compile_only.lock().unwrap()
             })
@@ -1437,6 +1471,7 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
                 b.stamp.as_deref() == Some(&*stamp)
                     && b.started.elapsed() < FINISHED_MAX_AGE
                     && !*b.compile_only.lock().unwrap()
+                    && !no_result(b, &b.log.lock().unwrap())
             })
         };
         remember_request(&mut st, &req, &key, &roots);
@@ -1590,7 +1625,7 @@ fn serve_build(
         // Everyone who asked is gone (killed or timed out): stop the build
         // like their Ctrl+C or kill would have without the daemon.
         log(&format!("no clients left, stopping pid {}", build.pid));
-        crate::sys::terminate_group(build.pid, false);
+        stop(&build);
     }
     res
 }
@@ -1669,6 +1704,11 @@ fn stream(
             if dropped_guess(build, &build.log.lock().unwrap()) {
                 // Nothing was printed: the client builds for itself.
                 write_msg(s, b'F', b"the prebuild declined to run")?;
+                return Ok(());
+            }
+            if stopped(build) {
+                // Its exit code is the daemon's signal, not a verdict.
+                write_msg(s, b'F', b"the build daemon stopped this build")?;
                 return Ok(());
             }
             let x = Exit {
@@ -1779,6 +1819,7 @@ fn start(req: &Request, stamp: Option<String>, cwd: &Path) -> Result<Arc<Build>>
         finished: Mutex::default(),
         pid: child.id() as i32,
         prebuild: Mutex::new(req.prebuild),
+        stopped: Default::default(),
         log: Mutex::default(),
         cv: Condvar::new(),
     });
@@ -1867,7 +1908,7 @@ fn cancel_stale_prebuild(dm: &Daemon, key: &str, stamp: &str) {
         },
         b.pid
     ));
-    crate::sys::terminate_group(b.pid, false);
+    stop(&b);
     let mut l = b.log.lock().unwrap();
     let t = Instant::now();
     while l.exit.is_none() && t.elapsed() < Duration::from_secs(10) {
@@ -2040,9 +2081,35 @@ fn cancel_wrong_guess(dm: &Daemon, key: &str, session: &str) {
             "agent asked for another build, stopping prebuild pid {}",
             b.pid
         ));
-        crate::sys::terminate_group(b.pid, false);
+        stop(&b);
     }
 }
+
+/// A build of this request that the daemon stopped has not exited yet. It
+/// still holds the slot and the target directory, and its exit is not a
+/// result: wait for it to go, then the request starts its own build.
+fn await_stopped(dm: &Daemon, key: &str) {
+    let dying = {
+        let st = dm.state.lock().unwrap();
+        st.builds.get(key).filter(|b| stopped(b)).cloned()
+    };
+    let Some(b) = dying else { return };
+    log(&format!("waiting for stopped build pid {} to exit", b.pid));
+    let mut l = b.log.lock().unwrap();
+    let t = Instant::now();
+    while l.exit.is_none() && t.elapsed() < STOP_WAIT {
+        l = b.cv.wait_timeout(l, Duration::from_millis(100)).unwrap().0;
+    }
+    drop(l);
+    // `reap` forgets it; make sure it is gone before `key` is looked up.
+    let mut st = dm.state.lock().unwrap();
+    if st.builds.get(key).is_some_and(|x| Arc::ptr_eq(x, &b)) {
+        st.builds.remove(key);
+    }
+}
+
+/// How long a request waits for a build the daemon stopped to exit.
+const STOP_WAIT: Duration = Duration::from_secs(10);
 
 fn prune_recent(recent: &mut HashMap<String, Recent>) {
     recent.retain(|_, r| r.used.elapsed() < RECENT_MAX_AGE);
@@ -2219,7 +2286,7 @@ fn reap(dm: &Daemon, key: &str, b: &Arc<Build>) {
     // Nobody saw it: keep it for the request it was started for.
     let l = b.log.lock().unwrap();
     let (claimed, early_served) = (l.claimed, l.early_served);
-    let dropped = dropped_guess(b, &l);
+    let dropped = no_result(b, &l);
     drop(l);
     if b.stamp.is_some() && !dropped && ((!claimed && *b.prebuild.lock().unwrap()) || early_served)
     {
@@ -2922,6 +2989,108 @@ mod tests {
         }
     }
 
+    fn bare_daemon() -> Daemon {
+        Daemon {
+            state: Mutex::default(),
+            watcher: None,
+            watched: Mutex::default(),
+            sock: (PathBuf::new(), (0, 0)),
+            exe: None,
+            draining: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// The clippy prebuild that a `test` request stopped exited 143; the
+    /// clippy request that followed must build, not get 143 as its result.
+    #[test]
+    fn a_build_the_daemon_stopped_is_never_kept_or_answered() {
+        let dm = bare_daemon();
+        for (prebuild, claimed, code) in [(true, false, 143), (true, true, 0), (false, true, 143)] {
+            let b = fake_build();
+            *b.prebuild.lock().unwrap() = prebuild;
+            {
+                let mut l = b.log.lock().unwrap();
+                l.claimed = claimed;
+                // It answered early, which alone would keep its verdict.
+                l.early_served = true;
+                l.chunks.push((b'E', b"Checking a".to_vec()));
+            }
+            // A fake build has pid 0, which `stop` never signals.
+            stop(&b);
+            b.log.lock().unwrap().exit = Some(code);
+            let b = Arc::new(b);
+            reap(&dm, "key", &b);
+            assert!(dm.state.lock().unwrap().finished.is_empty(), "exit {code}");
+            let frames = client_frames(&b);
+            let (kind, why) = frames.last().unwrap();
+            assert_eq!(*kind, b'F', "exit {code}");
+            assert!(String::from_utf8_lossy(why).contains("stopped"));
+            assert!(frames.iter().all(|(k, _)| *k != b'X'));
+        }
+    }
+
+    #[test]
+    fn a_request_waits_for_a_stopped_build_to_exit_and_never_attaches() {
+        let dm = Arc::new(bare_daemon());
+        let b = Arc::new(fake_build());
+        *b.prebuild.lock().unwrap() = true;
+        dm.state
+            .lock()
+            .unwrap()
+            .builds
+            .insert("key".into(), b.clone());
+        // Running and not stopped: nothing to wait for, it stays attachable.
+        await_stopped(&dm, "key");
+        assert!(dm.state.lock().unwrap().builds.contains_key("key"));
+        stop(&b);
+        let exits = {
+            let b = b.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(150));
+                b.log.lock().unwrap().exit = Some(143);
+                b.cv.notify_all();
+            })
+        };
+        let t = Instant::now();
+        await_stopped(&dm, "key");
+        assert!(t.elapsed() >= Duration::from_millis(140));
+        assert_eq!(b.log.lock().unwrap().exit, Some(143));
+        // Gone before the request looks its key up: it starts its own build.
+        assert!(dm.state.lock().unwrap().builds.is_empty());
+        exits.join().unwrap();
+    }
+
+    #[test]
+    fn an_unclaimed_prebuild_ended_by_a_signal_is_never_kept() {
+        let dm = bare_daemon();
+        for code in SIGNAL_EXITS {
+            for early in [false, true] {
+                let b = fake_build();
+                *b.prebuild.lock().unwrap() = true;
+                {
+                    let mut l = b.log.lock().unwrap();
+                    l.exit = Some(code);
+                    l.early_served = early;
+                }
+                let b = Arc::new(b);
+                assert!(no_result(&b, &b.log.lock().unwrap()));
+                reap(&dm, "key", &b);
+                let st = dm.state.lock().unwrap();
+                assert!(st.finished.is_empty(), "exit {code}");
+            }
+        }
+        // A compile error or a pass is a result, and so is the build an
+        // agent was attached to when it was interrupted.
+        for (code, claimed) in [(0, false), (101, false), (130, true)] {
+            let b = fake_build();
+            *b.prebuild.lock().unwrap() = true;
+            let mut l = b.log.lock().unwrap();
+            l.exit = Some(code);
+            l.claimed = claimed;
+            assert!(!no_result(&b, &l), "exit {code}");
+        }
+    }
+
     fn fake_build() -> Build {
         Build {
             stamp: Some("s".into()),
@@ -2933,6 +3102,7 @@ mod tests {
             finished: Mutex::default(),
             pid: 0,
             prebuild: Mutex::new(false),
+            stopped: Default::default(),
             log: Mutex::default(),
             cv: Condvar::new(),
         }
