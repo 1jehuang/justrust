@@ -376,6 +376,9 @@ pub fn command(days: f64, here: bool, top: usize, json: bool) -> Result<()> {
     let mut cascade = (0.0f64, 0usize);
     let mut rows_all: Vec<Vec<Row>> = Vec::new();
     for entry in std::fs::read_dir(&dir)?.flatten() {
+        if entry.file_type().is_ok_and(|t| t.is_symlink()) {
+            continue;
+        }
         let path = entry.path();
         let Ok(raw) = std::fs::read(path.join("summary.json")) else {
             continue;

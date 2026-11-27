@@ -12,9 +12,38 @@ pub fn load_index() -> Vec<IndexEntry> {
     let Ok(s) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
-    s.lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect()
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for entry in s
+        .lines()
+        .rev()
+        .filter_map(|l| serde_json::from_str::<IndexEntry>(l).ok())
+    {
+        if seen.insert(entry.id.clone()) {
+            out.push(entry);
+        }
+    }
+    out.reverse();
+    out
+}
+
+/// True if `id` already appears in the tail of `index.jsonl`. Used when an
+/// attached remote run receives the shared run's summary so it does not append
+/// a second index row for the same run id.
+pub(crate) fn index_has_recent_id(path: &std::path::Path, id: &str) -> bool {
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut checked = 0usize;
+    read_recent_entries(&mut f, 1, |e| {
+        if e.id == id {
+            return true;
+        }
+        checked += 1;
+        false
+    })
+    .is_ok_and(|v| !v.is_empty())
+        && checked < usize::MAX
 }
 
 /// The last parseable index entry, reading only the file's tail. The index
@@ -173,11 +202,15 @@ pub fn classify_saved(id: &str) -> Option<crate::failure::Failure> {
 
 pub fn list(limit: usize, here: bool, json: bool, filter: FailFilter) -> Result<()> {
     let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
+    let mut seen = std::collections::HashSet::new();
     let runs = paths::index_file()
         .ok()
         .and_then(|p| std::fs::File::open(p).ok())
         .and_then(|mut f| {
             read_recent_entries(&mut f, limit, |r| {
+                if !seen.insert(r.id.clone()) {
+                    return false;
+                }
                 if here && !r.cwd.starts_with(&cwd) {
                     return false;
                 }

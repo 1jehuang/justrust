@@ -160,6 +160,9 @@ pub fn load(root: &Path, days: f64) -> Result<Vec<Summary>> {
     let mut added = String::new();
     if let Ok(rd) = std::fs::read_dir(paths::runs_dir()?) {
         for e in rd.flatten() {
+            if e.file_type().is_ok_and(|t| t.is_symlink()) {
+                continue;
+            }
             let id = e.file_name().to_string_lossy().into_owned();
             if seen.contains(&id) || id.get(..8).is_some_and(|d| d < oldest.as_str()) {
                 continue;

@@ -1071,11 +1071,12 @@ fn number(value: &Value) -> f64 {
 }
 
 fn index_rows(tail: &str) -> Vec<RunRow> {
+    let mut seen = std::collections::HashSet::new();
     tail.lines()
         .rev()
         .take(INDEX_ROWS)
         .filter_map(|line| serde_json::from_str::<crate::summary::IndexEntry>(line).ok())
-        .filter(|entry| valid_id(&entry.id))
+        .filter(|entry| valid_id(&entry.id) && seen.insert(entry.id.clone()))
         .map(|entry| RunRow {
             id: entry.id,
             toolchain_version: entry.toolchain_version,

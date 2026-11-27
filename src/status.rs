@@ -459,6 +459,9 @@ fn scan_run_ids(runs: &Path) -> Vec<String> {
     let mut overrides = Vec::new();
     if let Ok(entries) = std::fs::read_dir(runs) {
         for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|t| t.is_symlink()) {
+                continue;
+            }
             let Ok(id) = entry.file_name().into_string() else {
                 continue;
             };

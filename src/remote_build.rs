@@ -3106,6 +3106,7 @@ fn record_remote(
     // Hints are local state: attach them here, not on the remote machine
     // (which mirrors the workspace at the same absolute path).
     crate::split_index::attach(&mut s);
+    let attached = !s.id.is_empty() && s.id != run_id;
     let _ = std::fs::write(
         dir.join("summary.json"),
         serde_json::to_vec_pretty(&s).unwrap_or_default(),
@@ -3113,14 +3114,17 @@ fn record_remote(
     if let (Ok(idx), Ok(line)) = (
         crate::paths::index_file(),
         serde_json::to_string(&s.index_entry()),
-    ) {
+    ) && (!attached || !crate::runs::index_has_recent_id(&idx, &s.id))
+    {
         let _ = crate::paths::append_line(&idx, &line);
     }
     crate::split_index::record(&s);
     crate::split_index::maybe_refresh(&s);
     crate::test_reuse::store(&s, wall);
-    crate::telemetry::record_run(&s, true);
-    crate::export::upload_run(&s);
+    if !attached {
+        crate::telemetry::record_run(&s, true);
+        crate::export::upload_run(&s);
+    }
     crate::telemetry::maybe_spawn_background();
     // The machine printed its own report, which cannot see the client's side
     // of the wait (sync, admission, artifacts) or this machine's history.
@@ -3539,6 +3543,55 @@ mod tests {
             None,
             0.0
         ));
+    }
+
+    #[test]
+    fn attached_remote_run_does_not_duplicate_index_entry() {
+        let _guard = crate::test_env::ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("JUSTRUST_HOME");
+        unsafe { std::env::set_var("JUSTRUST_HOME", home.path()) };
+        let summary = crate::summary::Summary {
+            id: "20261126-180033110-1442668".into(),
+            subcommand: "test".into(),
+            args: vec!["test".into(), "--lib".into()],
+            cwd: "/tmp/proj".into(),
+            wall: 5.0,
+            ..Default::default()
+        };
+        let bytes = serde_json::to_vec(&summary).unwrap();
+        assert!(record_remote(
+            "20261126-180033110-1442668",
+            &bytes,
+            &[],
+            "hosted",
+            "hosted",
+            10.0,
+            None,
+            None,
+            5.1,
+        ));
+        assert!(record_remote(
+            "20261126-180033989-1442833",
+            &bytes,
+            &[],
+            "hosted",
+            "hosted",
+            10.0,
+            None,
+            None,
+            4.2,
+        ));
+        let index = std::fs::read_to_string(home.path().join("index.jsonl")).unwrap();
+        assert_eq!(
+            index.lines().count(),
+            1,
+            "attached run must not append a duplicate index line: {index}"
+        );
+        match prev {
+            Some(v) => unsafe { std::env::set_var("JUSTRUST_HOME", v) },
+            None => unsafe { std::env::remove_var("JUSTRUST_HOME") },
+        }
     }
     #[test]
     fn ambiguous_submission_never_falls_back_but_confirmed_rejection_can() {
