@@ -1380,6 +1380,8 @@ mod relay_tests {
             first_bundle_end: Option<Instant>,
             bundles: usize,
             frames: usize,
+            /// Data frames sent when the first bundle was complete.
+            first_bundle_frames: usize,
         }
 
         fn endpoint(
@@ -1417,7 +1419,10 @@ mod relay_tests {
                     }
                     if let Some(t) = final_timing.as_mut() {
                         t.bundles += 1;
-                        t.first_bundle_end.get_or_insert_with(Instant::now);
+                        if t.first_bundle_end.is_none() {
+                            t.first_bundle_end = Some(Instant::now());
+                            t.first_bundle_frames = t.frames;
+                        }
                     }
                     true
                 } else {
@@ -1441,7 +1446,8 @@ mod relay_tests {
         fn foreground_yield_transport_acceptance() {
             let source = Cache::new();
             let next = source.populate();
-            let mut measured = Vec::new();
+            // Data frames the source had sent when the pull returned.
+            let mut sent = Vec::new();
             for legacy in [true, false] {
                 let local = Cache::new();
                 let idle = Arc::new(AtomicBool::new(true));
@@ -1460,6 +1466,19 @@ mod relay_tests {
                         t.frames >= t.bundles * 3,
                         "fixture must span multiple chunks"
                     );
+                    if !legacy {
+                        // The claim, in what was sent rather than how long it
+                        // took: once the foreground arrived, the pull returned
+                        // with the bundle in flight and asked for nothing more.
+                        // The source sends a frame only when asked, so this
+                        // count cannot move with machine load. It used to be
+                        // `wait <= residual + 100ms`, which a descheduled
+                        // receiver thread fails with the whole suite running.
+                        assert_eq!(
+                            t.frames, t.first_bundle_frames,
+                            "frames were sent after the in-flight bundle"
+                        );
+                    }
                     (
                         done.duration_since(t.arrival.unwrap()),
                         t.first_bundle_end
@@ -1474,12 +1493,6 @@ mod relay_tests {
                 let missing = wanted(&local.0, &journal_since(&source.0, 0).0);
                 assert_eq!(missing.len(), if legacy { 0 } else { ENTRIES - 1 });
                 if !legacy {
-                    // Scheduler/decompression overhead is allowed, but no extra bundle
-                    // latency may be charged after the in-flight bundle completes.
-                    assert!(
-                        wait <= residual + Duration::from_millis(100),
-                        "wait={wait:?}, in-flight residual={residual:?}"
-                    );
                     let resumed = client.pull_new_while(first.2, || true);
                     assert_eq!((resumed.0, resumed.2), (ENTRIES - 1, next));
                     assert_eq!(timing.lock().unwrap().bundles, ENTRIES);
@@ -1503,7 +1516,7 @@ mod relay_tests {
                     frames,
                     first.0
                 );
-                measured.push(wait);
+                sent.push(frames);
                 // Darwin can report ENOTCONN once shutting down the first
                 // endpoint has already disconnected its peer. That is the
                 // intended terminal state, not a failed cache transfer.
@@ -1515,9 +1528,11 @@ mod relay_tests {
                 client_reader.join().unwrap();
                 server_reader.join().unwrap();
             }
+            // Every data frame costs the foreground PACE on this transport, so
+            // the control's cost is the frames of the bundles it did not skip.
             assert!(
-                measured[0] > measured[1] + PACE * 3,
-                "control must pay for subsequent bundles: {measured:?}"
+                sent[0] >= sent[1] + (ENTRIES - 1) * 3,
+                "control must pay for subsequent bundles: {sent:?} data frames"
             );
         }
     }

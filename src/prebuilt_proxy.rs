@@ -851,15 +851,46 @@ mod tests {
         assert!(!ups[1].is_benched());
     }
 
+    /// A proxy state without the listener and worker threads, so a test can
+    /// read the latency estimates the routing decisions were made from.
+    fn state_for(sources: Vec<Source>, cache_dir: PathBuf) -> State {
+        // Nothing here goes stale, so nothing is ever queued for refresh.
+        let (refresh_tx, _) = mpsc::sync_channel(1);
+        State {
+            upstreams: sources.into_iter().map(Upstream::new).collect(),
+            cache_dir,
+            agent: ureq::Agent::new_with_config(
+                ureq::Agent::config_builder()
+                    .http_status_as_error(false)
+                    .build(),
+            ),
+            inflight: Mutex::new(HashMap::new()),
+            missing: Mutex::new(HashMap::new()),
+            refreshing: Mutex::new(HashSet::new()),
+            refresh_tx,
+            seq: AtomicU64::new(0),
+            requests: AtomicU64::new(0),
+        }
+    }
+
+    /// Each request goes to the upstream the proxy has measured as fastest.
+    /// The claim is checked against the proxy's own estimates, not against a
+    /// fixed split of the requests: this used to assert "1 to the slow store,
+    /// 11 to the fast one", which holds only while the fast store's measured
+    /// time stays under the slow one's 60 ms. With the whole suite running, a
+    /// first sample of the loopback store can take longer than that (connect
+    /// plus a descheduled thread), and the proxy then correctly prefers the
+    /// other store until the next exploration.
     #[test]
     fn requests_move_to_the_faster_upstream() {
+        const SLOW: Duration = Duration::from_millis(60);
         let objects: Vec<(String, Vec<u8>)> = (0..12)
             .map(|i| (format!("/v1/o/{}.jrdc", key(i)), vec![i as u8; 8]))
             .collect();
-        let (slow, slow_hits) = fake_store(objects.clone(), Duration::from_millis(60));
+        let (slow, slow_hits) = fake_store(objects.clone(), SLOW);
         let (fast, fast_hits) = fake_store(objects, Duration::ZERO);
         let tmp = test_dir("rank");
-        let base = start_with(
+        let state = state_for(
             vec![
                 Source {
                     base: slow,
@@ -871,22 +902,54 @@ mod tests {
                 },
             ],
             tmp.clone(),
-        )
-        .unwrap();
+        );
+        let served = || {
+            [
+                slow_hits.load(Ordering::Relaxed),
+                fast_hits.load(Ordering::Relaxed),
+            ]
+        };
+        let estimate = |i: usize| state.upstreams[i].ttfb_us.load(Ordering::Relaxed);
+        let mut routed = Vec::new();
         for i in 0..12 {
-            let dst = tmp.join(format!("out{i}"));
-            assert!(matches!(
-                depcache_prebuilt::get(&base, &format!("o/{}.jrdc", key(i)), &dst, 5, 1024),
-                depcache_prebuilt::Got::Ok
-            ));
-            assert_eq!(std::fs::read(&dst).unwrap(), vec![i as u8; 8]);
+            let rel = format!("o/{}.jrdc", key(i));
+            let before = served();
+            let estimates = [estimate(0), estimate(1)];
+            let FetchResult::Hit(path) = fetch_cached(&state, &rel, validate_rel(&rel).unwrap())
+            else {
+                panic!("object {i} was not served");
+            };
+            assert_eq!(std::fs::read(&path).unwrap(), vec![i as u8; 8]);
+            let after = served();
+            let to = match [after[0] - before[0], after[1] - before[1]] {
+                [1, 0] => 0,
+                [0, 1] => 1,
+                other => panic!("request {i} reached the stores {other:?} times"),
+            };
+            match i {
+                // Unmeasured upstreams are measured first, one request each.
+                0 => assert_eq!(to, 0),
+                1 => assert_eq!(to, 1),
+                // From then on, the one measured faster when the request left
+                // (a tie goes to the first, as in `upstream_order`).
+                _ => assert_eq!(
+                    to,
+                    if estimates[0] <= estimates[1] { 0 } else { 1 },
+                    "request {i} with estimates {estimates:?} us, routed so far {routed:?}"
+                ),
+            }
+            routed.push(to);
         }
-        // One request to measure the slow one, the rest to the fast one.
-        assert_eq!(slow_hits.load(Ordering::Relaxed), 1);
-        assert_eq!(fast_hits.load(Ordering::Relaxed), 11);
+        // The slow store cannot have been measured faster than it answers.
+        assert!(estimate(0) >= SLOW.as_micros() as u64, "{}", estimate(0));
+        assert!(estimate(1) > 0);
+        // The proxy's own counts agree with what the stores saw.
+        let [slow_n, fast_n] = served();
+        assert_eq!(slow_n + fast_n, 12);
+        assert_eq!(state.upstreams[0].hits.load(Ordering::Relaxed), slow_n);
+        assert_eq!(state.upstreams[1].hits.load(Ordering::Relaxed), fast_n);
         let stats = std::fs::read_to_string(tmp.join("upstreams")).unwrap();
         assert_eq!(stats.lines().count(), 2, "{stats}");
-        assert!(stats.contains("hits=1 "), "{stats}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

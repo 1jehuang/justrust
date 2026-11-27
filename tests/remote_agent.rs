@@ -1418,6 +1418,10 @@ fn sleep_run(id: u64, secs: &str) -> Msg {
     }
 }
 
+/// Whether a process with this command line exists anywhere on the machine.
+/// The machine runs other copies of this test binary (other agents, other
+/// checkouts), so `pattern` must be one only this process can have produced:
+/// see `own_sleep_secs`.
 fn running(pattern: &str) -> bool {
     Command::new("pgrep")
         .args(["-f", pattern])
@@ -1426,16 +1430,32 @@ fn running(pattern: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// A sleep duration of about 30s that no other test process on this machine
+/// uses, so a search for `sleep <it>` finds this fixture's children only.
+fn own_sleep_secs() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    format!("30.{}{nanos:09}", std::process::id())
+}
+
+/// Cancel stops the cancelled run's process and leaves the other run and the
+/// connection alone.
+///
+/// The cancelled run reports that it is running before anything else is
+/// sent, and holds a file lock for as long as its process lives. The test
+/// used to send both runs and cancel the long one as soon as the 0.3s one
+/// had finished, which assumes the long one was spawned within those 0.3s.
+/// With the whole suite running it sometimes was not, and the agent then
+/// answered, correctly, "run cancelled before starting" (that path has its
+/// own test below). "It is gone" was also `pgrep -f "sleep 30.101"` over the
+/// whole machine, which finds the same sleeper of any other copy of this
+/// test running there (build hosts run several agents' suites at once).
 #[test]
 fn cancel_interrupts_a_run_and_others_continue() {
     let mut a = Agent::start("cancel");
-    a.send(
-        Msg::Mkdir {
-            path: "/proj".into(),
-        },
-        &[],
-    );
-    a.send(sleep_run(1, "30.101"), &[]);
+    let lock = start_locked_sleeper(&mut a);
     a.send(sleep_run(2, "0.3"), &[]);
     // Writes and barriers are not blocked by runs in flight.
     a.send(
@@ -1450,7 +1470,7 @@ fn cancel_interrupts_a_run_and_others_continue() {
     a.send(Msg::Cancel { id: 1 }, &[]);
     let (_, code) = a.wait_run(1);
     assert_eq!(code, 128 + libc_sigint());
-    assert!(!running("sleep 30.101"));
+    assert_sleeper_stopped(&lock);
 }
 
 #[test]
@@ -1462,13 +1482,14 @@ fn immediate_pipeline_cancel_is_not_lost_before_pid_registration() {
         },
         &[],
     );
+    let secs = own_sleep_secs();
     for id in 100..112 {
         let start = std::time::Instant::now();
         a.send(
             Msg::RunSync {
                 id,
                 cwd: "/proj".into(),
-                args: vec!["cargo".into(), "30.404".into()],
+                args: vec!["cargo".into(), secs.clone()],
                 env: fake_cargo_env("sleep"),
                 roots: vec![],
                 start: false,
@@ -1506,7 +1527,7 @@ fn immediate_pipeline_cancel_is_not_lost_before_pid_registration() {
             "Cancel must not wait for sleep to finish"
         );
     }
-    assert!(!running("sleep 30.404"));
+    assert!(!running(&format!("sleep {secs}")));
     a.send(Msg::Ping, &[]);
     assert!(matches!(a.recv().0, Msg::Pong { active: 0, .. }));
 }

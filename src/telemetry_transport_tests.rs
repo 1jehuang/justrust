@@ -305,27 +305,48 @@ fn native_post_bounds_chunked_response_without_content_length() {
     assert_outcome(outcome, Delivery::Retry, Some(200));
 }
 
+/// The request timeout also ends a response whose body never finishes.
+///
+/// The store holds the body back until the client has returned, so "returned
+/// while the body was still withheld" is the claim itself and not a bound on
+/// elapsed time. The earlier form slept 400ms in the fixture and gave the
+/// client 100ms for everything: with the whole suite running, the headers
+/// could miss those 100ms, and the request then failed before any status
+/// (`http_status: None`), which is the timeout test above, not this one.
+/// Such an attempt proves nothing about draining and is taken again.
 #[test]
 fn native_post_timeout_also_bounds_response_body_drain() {
-    let server = listener();
-    let url = format!("http://{}/", server.local_addr().unwrap());
-    let fixture = thread::spawn(move || {
-        let mut stream = accept(&server);
-        request(&mut stream);
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nx")
-            .unwrap();
-        thread::sleep(Duration::from_millis(400));
-    });
-    let started = Instant::now();
-    let outcome = post_native(&agent(Duration::from_millis(100)), &url, "{}", None);
-    let elapsed = started.elapsed();
-    fixture.join().unwrap();
-    assert_outcome(outcome, Delivery::Retry, Some(200));
-    assert!(
-        elapsed < Duration::from_secs(2),
-        "body drain took {elapsed:?}"
-    );
+    const ATTEMPTS: usize = 8;
+    for attempt in 1..=ATTEMPTS {
+        let server = listener();
+        let url = format!("http://{}/", server.local_addr().unwrap());
+        let (returned, wait) = std::sync::mpsc::channel::<()>();
+        let fixture = thread::spawn(move || {
+            let mut stream = accept(&server);
+            request(&mut stream);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nx")
+                .unwrap();
+            // Keep the connection open with 99 bytes owed until the client
+            // has given up. `true` when it gave up on its own.
+            wait.recv_timeout(Duration::from_secs(60)).is_ok()
+        });
+        let outcome = post_native(&agent(Duration::from_millis(250)), &url, "{}", None);
+        returned.send(()).unwrap();
+        assert!(
+            fixture.join().unwrap(),
+            "the client was still draining a body that never ends"
+        );
+        assert_eq!(outcome.delivery, Delivery::Retry);
+        assert_eq!(outcome.curl_exit, None);
+        match outcome.http_status {
+            // The status of a response whose body timed out is still reported.
+            Some(200) => return,
+            // Timed out before the headers arrived: no drain was attempted.
+            None if attempt < ATTEMPTS => continue,
+            other => panic!("attempt {attempt}: status {other:?}"),
+        }
+    }
 }
 
 #[test]
