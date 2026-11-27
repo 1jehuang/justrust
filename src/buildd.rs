@@ -130,6 +130,12 @@ const IGNORED_ENV: &[&str] = &[
     "SHLVL",
     "_",
     "JUSTRUST_SLOT_SESSION",
+    // The connection a hosted client arrived on, source port included: it
+    // differs for every client and after every reconnect of the same one,
+    // and says nothing about the build.
+    "SSH_CLIENT",
+    "SSH_CONNECTION",
+    "SSH_TTY",
     // Benchmarks pin run ids; an attached request links its id to the
     // shared run instead (`Exit::run_id`).
     "JUSTRUST_RUN_ID_OVERRIDE",
@@ -2315,10 +2321,14 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
                 Ok(b) => {
                     *b.compile_only.lock().unwrap() = compile_only;
                     *b.units_key.lock().unwrap() = units;
+                    // The pid ties this line to its exit line, the key to
+                    // the request it was guessed from.
                     log(&format!(
-                        "prebuild {} in {} (stamp {})",
+                        "prebuild {} in {} (pid {}, key {}, stamp {})",
                         req.argv.join(" "),
                         req.cwd,
+                        b.pid,
+                        key.get(..8).unwrap_or(&key),
                         b.stamp.as_deref().map(|s| &s[..8]).unwrap_or("native")
                     ));
                     if let Some(r) = st.recent.get_mut(&key) {
@@ -2641,6 +2651,41 @@ mod tests {
         assert_ne!(k, request_key(&flags));
         assert_ne!(k, request_key(&filter));
         assert_ne!(k, request_key(&frontend));
+    }
+
+    #[test]
+    fn the_connection_a_hosted_client_came_in_on_does_not_split_requests() {
+        // Two release jobs, or one client before and after its link dropped:
+        // the same build, so a prebuild of it is attached to, not raced for
+        // the build directory (20261127-002034387-2928 waited 25.8s there).
+        let argv = [
+            "build",
+            "--release",
+            "--target",
+            "aarch64-unknown-linux-musl",
+        ];
+        let first = req(
+            &[
+                ("PATH", "/bin"),
+                ("SSH_CLIENT", "50.189.71.253 34608 22"),
+                ("SSH_CONNECTION", "50.189.71.253 34608 100.64.1.2 22"),
+            ],
+            &argv,
+        );
+        let second = req(
+            &[
+                ("PATH", "/bin"),
+                ("SSH_CLIENT", "20.1.2.3 51022 22"),
+                ("SSH_CONNECTION", "20.1.2.3 51022 100.64.1.2 22"),
+                ("SSH_TTY", "/dev/pts/3"),
+            ],
+            &argv,
+        );
+        assert_eq!(request_key(&first), request_key(&second));
+        assert_eq!(
+            request_key(&first),
+            request_key(&req(&[("PATH", "/bin")], &argv))
+        );
     }
 
     #[test]
