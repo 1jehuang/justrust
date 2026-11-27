@@ -3,11 +3,26 @@
 //! between roots to builds already waiting for that owner.
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LockResult, Mutex, MutexGuard, TryLockResult};
+use std::time::{Duration, Instant};
+
+/// A failed connect this long is handed to the builds that waited behind it
+/// instead of being repeated by each of them. A quick failure is cheap to
+/// retry and may have been a blip.
+const SHARE_FAILURE_AFTER: Duration = Duration::from_secs(10);
+
+/// The connect the lock holder is making, and how the last one ended.
+#[derive(Default)]
+struct Connect {
+    since: Option<Instant>,
+    /// When the last failed attempt ended, how long it took, and why.
+    failed: Option<(Instant, Duration, String)>,
+}
 
 pub(super) struct SyncQueue<T> {
     inner: Mutex<T>,
     foreground_epoch: AtomicUsize,
     foreground_waiters: AtomicUsize,
+    connect: Mutex<Connect>,
 }
 
 impl<T> SyncQueue<T> {
@@ -16,7 +31,68 @@ impl<T> SyncQueue<T> {
             inner: Mutex::new(value),
             foreground_epoch: AtomicUsize::new(0),
             foreground_waiters: AtomicUsize::new(0),
+            connect: Mutex::default(),
         }
+    }
+
+    /// The lock holder starts a network connect.
+    pub(super) fn connect_began(&self) -> Instant {
+        let now = Instant::now();
+        if let Ok(mut c) = self.connect.lock() {
+            c.since = Some(now);
+        }
+        now
+    }
+
+    /// The lock holder's connect ended, with `error` when it failed.
+    pub(super) fn connect_ended(&self, began: Instant, error: Option<String>) {
+        if let Ok(mut c) = self.connect.lock() {
+            c.since = None;
+            c.failed = error.map(|why| (Instant::now(), began.elapsed(), why));
+        }
+    }
+
+    /// How long the lock holder has been connecting.
+    pub(super) fn connecting_for(&self) -> Option<Duration> {
+        self.connect
+            .lock()
+            .ok()
+            .and_then(|c| c.since.map(|t| t.elapsed()))
+    }
+
+    /// The failure of a slow connect that ended while a build waiting since
+    /// `waiting_since` was queued behind it: that build's answer too.
+    pub(super) fn shared_failure(&self, waiting_since: Instant) -> Option<String> {
+        self.shared_failure_after(waiting_since, SHARE_FAILURE_AFTER)
+    }
+
+    fn shared_failure_after(&self, waiting_since: Instant, slow: Duration) -> Option<String> {
+        let c = self.connect.lock().ok()?;
+        let (ended, took, why) = c.failed.as_ref()?;
+        (*ended >= waiting_since && *took >= slow).then(|| why.clone())
+    }
+
+    /// `foreground_lock` that asks `keep_waiting` while the lock is held by
+    /// someone else, and returns `None` once it says no.
+    pub(super) fn foreground_lock_while(
+        &self,
+        mut keep_waiting: impl FnMut() -> bool,
+    ) -> Option<LockResult<MutexGuard<'_, T>>> {
+        use std::sync::TryLockError;
+        self.foreground_waiters.fetch_add(1, Ordering::SeqCst);
+        let got = loop {
+            match self.inner.try_lock() {
+                Ok(guard) => break Some(Ok(guard)),
+                Err(TryLockError::Poisoned(e)) => break Some(Err(e)),
+                Err(TryLockError::WouldBlock) if !keep_waiting() => break None,
+                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(2)),
+            }
+        };
+        if got.is_some() {
+            self.foreground_epoch.fetch_add(1, Ordering::SeqCst);
+        }
+        self.foreground_waiters.fetch_sub(1, Ordering::SeqCst);
+        got
     }
 
     #[cfg(test)]
@@ -77,6 +153,76 @@ mod tests {
     use super::*;
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
+
+    /// 2026-11-27: one connect held the lock for 427 s and eleven builds
+    /// queued behind it for up to 482 s, each then free to try it again.
+    #[test]
+    fn builds_behind_a_stuck_connect_share_its_end_instead_of_queueing_for_their_own() {
+        let queue = Arc::new(SyncQueue::new(0u32));
+        let holder = queue.foreground_lock().unwrap();
+        let began = queue.connect_began();
+        let bound = Duration::from_millis(150);
+        let slow = Duration::from_millis(50);
+        // Eleven builds arrive while the connect is stuck. Five outlive the
+        // bound and are given back, six are still waiting when it fails.
+        let waiters: Vec<_> = (0..11)
+            .map(|i| {
+                let queue = queue.clone();
+                std::thread::spawn(move || {
+                    let asked = Instant::now();
+                    let patient = i >= 5;
+                    let got = queue.foreground_lock_while(|| {
+                        patient || queue.connecting_for().is_none_or(|age| age < bound)
+                    });
+                    match got {
+                        None => ("gave up", asked.elapsed()),
+                        Some(guard) => {
+                            let mut guard = guard.unwrap();
+                            match queue.shared_failure_after(asked, slow) {
+                                Some(_) => ("shared", asked.elapsed()),
+                                None => {
+                                    *guard += 1;
+                                    ("connected itself", asked.elapsed())
+                                }
+                            }
+                        }
+                    }
+                })
+            })
+            .collect();
+        std::thread::sleep(Duration::from_millis(400));
+        queue.connect_ended(began, Some("handshake timed out".into()));
+        drop(holder);
+        let ends: Vec<_> = waiters.into_iter().map(|w| w.join().unwrap()).collect();
+        let count = |what| ends.iter().filter(|(w, _)| *w == what).count();
+        assert_eq!(
+            (count("gave up"), count("shared"), count("connected itself")),
+            (5, 6, 0),
+            "{ends:?}"
+        );
+        // Nobody waited for a second attempt after the first one ended.
+        assert!(
+            ends.iter().all(|(_, t)| *t < Duration::from_secs(5)),
+            "{ends:?}"
+        );
+        assert_eq!(queue.foreground_waiters.load(Ordering::SeqCst), 0);
+        // A build that asks after the failure makes its own attempt, and a
+        // quick failure or a success is nobody else's answer.
+        assert_eq!(queue.shared_failure_after(Instant::now(), slow), None);
+        let asked = Instant::now();
+        let began = queue.connect_began();
+        queue.connect_ended(began, Some("blip".into()));
+        assert_eq!(queue.shared_failure_after(asked, slow), None);
+        assert_eq!(
+            queue.shared_failure_after(asked, Duration::ZERO),
+            Some("blip".into())
+        );
+        let began = queue.connect_began();
+        assert!(queue.connecting_for().is_some());
+        queue.connect_ended(began, None);
+        assert_eq!(queue.connecting_for(), None);
+        assert_eq!(queue.shared_failure_after(asked, Duration::ZERO), None);
+    }
 
     #[test]
     fn queued_foreground_precedes_remaining_background_roots() {

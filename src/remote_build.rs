@@ -1019,7 +1019,7 @@ fn setup_silence(phase: &str, waited: Duration, notices: u32, bound: Option<Dura
 
 /// How long a build may sit in `connecting` before it is given back
 /// (`JUSTRUST_REMOTE_CONNECT_TIMEOUT` seconds, 0 for no bound).
-fn connect_bound() -> Option<Duration> {
+pub(crate) fn connect_bound() -> Option<Duration> {
     let secs = std::env::var("JUSTRUST_REMOTE_CONNECT_TIMEOUT")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())

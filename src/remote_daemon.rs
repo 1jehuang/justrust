@@ -2193,6 +2193,21 @@ fn stop_unless_greeted(pid: i32, greeted: &AtomicBool, timeout: Duration) -> boo
 /// reading frames. Invalidate known roots: only roots needed by a build are
 /// mirrored before that build, so an unrelated old workspace cannot delay it.
 fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
+    if let Some(l) = &st.link
+        && l.alive()
+    {
+        return Ok(l.clone());
+    }
+    // Builds queued on the sync lock watch this attempt: they stop waiting
+    // at its bound and take a slow failure as their own answer.
+    let began = d.sync.connect_began();
+    let res = connect_link(d, st, start);
+    d.sync
+        .connect_ended(began, res.as_ref().err().map(|e| format!("{e:#}")));
+    res
+}
+
+fn connect_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     if let Some(l) = &st.link {
         if l.alive() {
             return Ok(l.clone());
@@ -3544,8 +3559,38 @@ fn run(
             Ok(())
         };
         setup_phase(w, "waiting for sync lock")?;
-        let mut st = d.sync.foreground_lock().unwrap();
+        // The holder may be connecting. One stuck connect once kept eleven
+        // builds here for up to 482 s: wait for it no longer than a build
+        // may spend connecting itself, and say that is what the wait is.
+        let bound = crate::remote_build::connect_bound();
+        let mut told = false;
+        let mut overdue = None;
+        let got = d.sync.foreground_lock_while(|| {
+            let Some(age) = d.sync.connecting_for() else {
+                return true;
+            };
+            if !told {
+                told = true;
+                let _ = setup_phase(w, "connecting");
+            }
+            if bound.is_some_and(|b| age >= b) {
+                overdue = Some(age);
+            }
+            overdue.is_none()
+        });
+        let Some(st) = got else {
+            bail!(
+                "remote connect made for another build has not finished after {}s",
+                overdue.unwrap_or_default().as_secs()
+            );
+        };
+        let mut st = st.unwrap();
         let locked = t.elapsed();
+        if !st.link.as_ref().is_some_and(|l| l.alive())
+            && let Some(why) = d.sync.shared_failure(t)
+        {
+            bail!("remote connect failed while this build waited for it: {why}");
+        }
         if d.draining.load(Ordering::SeqCst) {
             bail!("sync daemon transport policy changed; reconnect before starting a build");
         }
