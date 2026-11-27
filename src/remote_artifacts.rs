@@ -56,6 +56,10 @@ struct Request {
     /// Client understands aligned 8 KiB residual blocks with an output digest.
     #[serde(default)]
     prediction_v1: bool,
+    /// Client also understands recipes whose unchanged runs are copy records
+    /// and checks the digest against the file it wrote, read back.
+    #[serde(default)]
+    prediction_v2: bool,
 }
 
 /// An artifact the client already has.
@@ -87,6 +91,8 @@ enum Frame {
         patch: bool,
         #[serde(default)]
         prediction_v1: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        prediction_v2: bool,
         len: u64,
         /// Delta base: an earlier file of this stream (its name), when there
         /// is no previous copy of this one. Test binaries of one crate share
@@ -767,11 +773,14 @@ fn produce_files(
         };
         // Older zstd versions and memory-constrained hosts keep the existing
         // compatible encoder. No frame is emitted until compression succeeds.
-        let predicted = enough_memory
-            && req.prediction_v1
-            && m.len() <= prediction::MAX
+        let predictable = enough_memory && req.prediction_v1 && m.len() <= prediction::MAX;
+        let predicted_v2 = predictable
+            && req.prediction_v2
+            && prediction::compress_v2(&sent, &snap, m.len(), &zst).is_ok();
+        let predicted = !predicted_v2
+            && predictable
             && prediction::compress(&sent, &snap, m.len(), &zst).is_ok();
-        if !predicted && !encode(dense)? && (!dense || !encode(false)?) {
+        if !predicted && !predicted_v2 && !encode(dense)? && (!dense || !encode(false)?) {
             bail!("zstd failed on {name}");
         }
         let data = std::fs::File::open(&zst)?;
@@ -785,6 +794,7 @@ fn produce_files(
                 size: m.len(),
                 patch,
                 prediction_v1: predicted,
+                prediction_v2: predicted_v2,
                 len,
                 base: base.map(|(n, _, _)| n.clone()),
             },
@@ -1142,6 +1152,7 @@ fn apply(
 enum Basis<'a> {
     Zstd(&'a Path),
     Predicted(&'a Path),
+    PredictedV2(&'a Path),
 }
 
 fn apply_frame(
@@ -1165,7 +1176,7 @@ fn apply_frame(
         bail!("selected test destination escapes target directory");
     }
     let file = dst.file_name().context("no file name")?.to_string_lossy();
-    let scratch = matches!(from, Some(Basis::Predicted(_)))
+    let scratch = matches!(from, Some(Basis::Predicted(_) | Basis::PredictedV2(_)))
         .then(|| TestScratch::new(parent))
         .transpose()?;
     let tmp = scratch.as_ref().map_or_else(
@@ -1179,7 +1190,12 @@ fn apply_frame(
     }
     let res = (|| {
         let receiving = Instant::now();
-        if let Some(Basis::Predicted(old)) = from {
+        // The whole-file digest check of a version 2 recipe is verification.
+        let mut checked = 0.0;
+        if let Some(Basis::PredictedV2(old)) = from {
+            checked = prediction::expand_v2(old, size, frame, &tmp)
+                .context("could not decode artifact (delta)")?;
+        } else if let Some(Basis::Predicted(old)) = from {
             let file = std::fs::File::create_new(&tmp)?;
             prediction::expand(old, size, frame, file)
                 .context("could not decode artifact (delta)")?;
@@ -1212,7 +1228,10 @@ fn apply_frame(
             bail!("{name}: {got} bytes, expected {size}");
         }
         // Decoding is streamed: it ends when the last payload byte arrived.
-        crate::e2e::note("artifacts.receive", receiving.elapsed().as_secs_f64());
+        crate::e2e::note(
+            "artifacts.receive",
+            (receiving.elapsed().as_secs_f64() - checked).max(0.0),
+        );
         let verifying = Instant::now();
         crate::sys::set_mode(&tmp, mode)?;
         match validation {
@@ -1235,7 +1254,10 @@ fn apply_frame(
             Validation::NativeBuild => (),
         }
         std::fs::rename(&tmp, &dst)?;
-        crate::e2e::note("artifacts.verify", verifying.elapsed().as_secs_f64());
+        crate::e2e::note(
+            "artifacts.verify",
+            verifying.elapsed().as_secs_f64() + checked,
+        );
         Ok(())
     })();
     if res.is_err() {
@@ -1409,6 +1431,7 @@ fn fetch_inner(
         test_run: test_run.map(str::to_owned),
         prediction_v1: !FORCE_FULL.load(std::sync::atomic::Ordering::Relaxed)
             && crate::procfs::meminfo().is_some_and(|mem| mem.available_mb >= 1024),
+        prediction_v2: !FORCE_FULL.load(std::sync::atomic::Ordering::Relaxed),
         anchors: !FORCE_FULL.load(std::sync::atomic::Ordering::Relaxed),
     };
     let command = artifact_command(std::env::var("JUSTRUST_TOOLCHAIN").ok().as_deref());
@@ -1517,6 +1540,7 @@ fn fetch_inner(
                     size,
                     patch,
                     prediction_v1,
+                    prediction_v2,
                     len,
                     base,
                 } => {
@@ -1556,8 +1580,13 @@ fn fetch_inner(
                         (None, true) => Some(dir.join(&name)),
                         (None, false) => None,
                     };
-                    if prediction_v1
-                        && (!req.prediction_v1
+                    if (prediction_v1 || prediction_v2)
+                        && ((prediction_v1 && prediction_v2)
+                            || !(if prediction_v2 {
+                                req.prediction_v2
+                            } else {
+                                req.prediction_v1
+                            })
                             || !patch
                             || base.is_some()
                             || !req.have.iter().any(|h| h.name == name && h.id.is_some()))
@@ -1570,7 +1599,9 @@ fn fetch_inner(
                         mode,
                         size,
                         from.as_deref().map(|p| {
-                            if prediction_v1 {
+                            if prediction_v2 {
+                                Basis::PredictedV2(p)
+                            } else if prediction_v1 {
                                 Basis::Predicted(p)
                             } else {
                                 Basis::Zstd(p)
@@ -2324,6 +2355,7 @@ mod tests {
                 have,
                 test_run: None,
                 prediction_v1: false,
+                prediction_v2: false,
                 anchors: true,
             };
             let mut out = Vec::new();
@@ -2344,6 +2376,7 @@ mod tests {
                         size,
                         patch,
                         prediction_v1: _,
+                        prediction_v2: _,
                         len,
                         base,
                     } => {
@@ -2415,6 +2448,7 @@ mod tests {
             test_run: Some("fixture".into()),
             anchors: true,
             prediction_v1: false,
+            prediction_v2: false,
         };
         let run = |names: &[&str], req: &Request, mixed: bool| {
             let scratch = TestScratch::new(&root.0).unwrap();
@@ -2526,6 +2560,7 @@ mod tests {
             have: vec![],
             test_run: None,
             prediction_v1: false,
+            prediction_v2: false,
             anchors: true,
         };
         let mut out = Vec::new();
