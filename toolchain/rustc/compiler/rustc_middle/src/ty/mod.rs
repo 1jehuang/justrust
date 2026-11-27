@@ -2399,6 +2399,10 @@ pub fn provide(providers: &mut Providers) {
         local_direct_impls_of_adt: |tcx, adt| {
             tcx.local_direct_adt_impls(()).get(&adt).map_or(&[], |impls| &impls[..])
         },
+        crate_source_is_rlib_or_rmeta: |tcx, cnum| {
+            let source = tcx.used_crate_source(cnum);
+            source.rlib.is_some() || source.rmeta.is_some()
+        },
         incoherent_impls: trait_def::incoherent_impls_provider,
         trait_impls_in_crate: trait_def::trait_impls_in_crate_provider,
         traits: trait_def::traits_provider,

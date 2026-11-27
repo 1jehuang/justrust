@@ -2473,6 +2473,16 @@ rustc_queries! {
         separate_provide_extern
     }
 
+    /// Whether the crate was loaded from an rlib or rmeta file.
+    ///
+    /// A projection of `used_crate_source` without the file paths. Code
+    /// generation asks this for every codegen unit of a leaf crate (for the
+    /// gdb scripts section), and the paths change whenever the same build
+    /// runs in another target directory, which made every unit re-run.
+    query crate_source_is_rlib_or_rmeta(cnum: CrateNum) -> bool {
+        desc { "checking whether a crate was loaded from an rlib or rmeta" }
+    }
+
     /// Returns the debugger visualizers defined for this crate.
     /// NOTE: This query has to be marked `eval_always` because it reads data
     ///       directly from disk that is not tracked anywhere else. I.e. it
