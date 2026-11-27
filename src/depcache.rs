@@ -1090,11 +1090,11 @@ pub(crate) fn key_args_with(
             key_codegen(v, norm, cwd, h)?;
         } else if a == "-L" {
             h.field(b"-L");
-            key_lib_dir(next?, norm, cwd, h)?;
+            key_lib_dir(next?, norm, cwd, !meta_only, h)?;
             i += 1;
         } else if let Some(v) = a.strip_prefix("-L") {
             h.field(b"-L");
-            key_lib_dir(v, norm, cwd, h)?;
+            key_lib_dir(v, norm, cwd, !meta_only, h)?;
         } else {
             h.field(norm.norm(a).as_bytes());
         }
@@ -1455,8 +1455,21 @@ fn key_codegen(v: &str, norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
 
 /// Native library dirs inside the target dir (build-script output such as a
 /// `cc`-built `libfoo.a`) get bundled into rlibs, so their content is keyed.
-pub(crate) fn key_lib_dir(v: &str, norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
+/// Metadata-only builds (`--emit=dep-info,metadata`, i.e. `cargo check` /
+/// `clippy`) never bundle native archives into `.rmeta`, so `hash_files` is
+/// false for them: otherwise crates like `ring` and `wayland-backend` miss
+/// across machines whenever `cc` produces different `.a` bytes.
+pub(crate) fn key_lib_dir(
+    v: &str,
+    norm: &Norm,
+    cwd: &Path,
+    hash_files: bool,
+    h: &mut H128,
+) -> Option<()> {
     h.field(norm.norm(v).as_bytes());
+    if !hash_files {
+        return Some(());
+    }
     let (kind, path) = v.split_once('=').unwrap_or(("all", v));
     if kind == "dependency" {
         return Some(());
@@ -3393,6 +3406,44 @@ mod tests {
         p3.root = blocker.join("root");
         assert!(p3.store(0.0, 1.0, &[]).is_none());
         assert!(p3.restore(&mut Vec::new()).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn metadata_only_ignores_native_archive_bytes() {
+        let dir = std::env::temp_dir().join(format!("jr-meta-native-{}", std::process::id()));
+        let target = dir.join("target");
+        let native_dir = target.join("debug/build/ring-1234567890abcdef/out");
+        std::fs::create_dir_all(&native_dir).unwrap();
+        let archive = native_dir.join("libring_core.a");
+        let norm = Norm::new(&target.join("debug")).unwrap();
+        let key_for = |emit: &str| {
+            let args = vec![
+                format!("--emit={emit}"),
+                "-L".into(),
+                format!("native={}", native_dir.display()),
+            ];
+            let mut h = H128::new();
+            key_args_with(&args, &norm, &dir, &mut h, &|_| Some("x".into())).unwrap();
+            h.hex()
+        };
+
+        std::fs::write(&archive, b"archive-bytes-from-fleet").unwrap();
+        let meta_a = key_for("dep-info,metadata");
+        let link_a = key_for("dep-info,metadata,link");
+
+        std::fs::write(&archive, b"archive-bytes-from-host-cc").unwrap();
+        let meta_b = key_for("dep-info,metadata");
+        let link_b = key_for("dep-info,metadata,link");
+
+        assert_eq!(
+            meta_a, meta_b,
+            "metadata-only key must ignore native .a bytes"
+        );
+        assert_ne!(
+            link_a, link_b,
+            "linked rlib key must include native .a bytes"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

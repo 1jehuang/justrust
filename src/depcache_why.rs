@@ -97,6 +97,7 @@ fn parts(plan: &Plan, real: &Path, args: &[OsString]) -> Option<Parts> {
     let meta_only = depcache::metadata_only(&args);
     let no_link = meta_only || depcache::no_link_invoked(&args);
     let mut native = H128::new();
+    let hash_native = !meta_only;
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
@@ -131,13 +132,13 @@ fn parts(plan: &Plan, real: &Path, args: &[OsString]) -> Option<Parts> {
         } else if a == "-L" || a == "-C" {
             let v = next?;
             if a == "-L" {
-                depcache::key_lib_dir(v, &plan.norm, &plan.cwd, &mut native)?;
+                depcache::key_lib_dir(v, &plan.norm, &plan.cwd, hash_native, &mut native)?;
             }
             p.args.push(format!("{a} {}", plan.norm.norm(v)));
             i += 1;
         } else {
             if let Some(v) = a.strip_prefix("-L") {
-                depcache::key_lib_dir(v, &plan.norm, &plan.cwd, &mut native)?;
+                depcache::key_lib_dir(v, &plan.norm, &plan.cwd, hash_native, &mut native)?;
             }
             p.args.push(plan.norm.norm(a));
         }
