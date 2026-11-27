@@ -52,6 +52,13 @@ pub struct Part {
     /// What was measured (`ready`, `receive`).
     pub what: String,
     pub secs: f64,
+    /// Payload bytes that crossed the link during this part, when counted.
+    #[serde(default, skip_serializing_if = "is_zero_bytes")]
+    pub bytes: u64,
+}
+
+fn is_zero_bytes(n: &u64) -> bool {
+    *n == 0
 }
 
 /// Lives with the wire protocol (`Flushed`), which is also compiled alone.
@@ -167,6 +174,7 @@ impl Waterfall {
                     of: of.to_owned(),
                     what: (*what).to_owned(),
                     secs,
+                    bytes: 0,
                 });
             }
         }
@@ -309,6 +317,8 @@ pub struct ArtifactTimes {
     pub receive: f64,
     /// Checking each decoded file and moving it into place.
     pub verify: f64,
+    /// Encoded payload bytes received (what crossed the link).
+    pub bytes: u64,
 }
 
 impl ArtifactTimes {
@@ -319,6 +329,7 @@ impl ArtifactTimes {
             encode: noted("artifacts.encode"),
             receive: noted("artifacts.receive"),
             verify: noted("artifacts.verify"),
+            bytes: noted("artifacts.bytes") as u64,
         }
     }
 }
@@ -451,6 +462,13 @@ pub fn remote(m: &Marks, now: f64, r: &RemoteTimes) -> E2e {
             ("verify", r.artifacts.verify),
         ],
     );
+    if let Some(p) = w
+        .parts
+        .iter_mut()
+        .find(|p| p.of == "remote.artifacts" && p.what == "receive")
+    {
+        p.bytes = r.artifacts.bytes;
+    }
     w.until("client.report", Some(now));
     let mut e = w.finish(now, false);
     let mut start = Some(0.);
@@ -621,9 +639,16 @@ pub fn render(e: &E2e) -> String {
             "█".repeat(bar_n.min(24))
         );
         for p in e.parts.iter().filter(|p| p.of == s.key && p.secs >= 0.005) {
+            // The rate says whether the link or the size made it slow.
+            let size = if p.bytes > 0 {
+                let mb = p.bytes as f64 / 1e6;
+                format!("  {mb:.1} MB, {:.1} MB/s", mb / p.secs)
+            } else {
+                String::new()
+            };
             let _ = writeln!(
                 o,
-                "  {:<6}   {:<24} {:>7.2}s",
+                "  {:<6}   {:<24} {:>7.2}s{size}",
                 "",
                 part_label(&p.of, &p.what),
                 p.secs
@@ -731,6 +756,7 @@ mod tests {
                 encode: 2.0,
                 receive: 4.0,
                 verify: 1.0,
+                bytes: 6_000_000,
             },
             ..Default::default()
         };
@@ -758,6 +784,8 @@ mod tests {
         let shown = render(&e);
         assert!(shown.contains("machine ready (lease, ssh)"), "{shown}");
         assert!(shown.contains("download, decode"), "{shown}");
+        // 6 MB in the 2s the scaled part holds.
+        assert!(shown.contains("6.0 MB, 3.0 MB/s"), "{shown}");
         // Old records and runs that measured nothing carry no parts.
         let plain = remote(&m, 9.0, &RemoteTimes::default());
         assert!(plain.parts.is_empty());

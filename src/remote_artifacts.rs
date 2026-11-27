@@ -1592,6 +1592,7 @@ fn fetch_inner(
                     files += 1;
                     patched += (patch || base.is_some()) as usize;
                     bytes += len;
+                    crate::e2e::note("artifacts.bytes", len as f64);
                 }
                 Frame::End => return Ok(()),
             }

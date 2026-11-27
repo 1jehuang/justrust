@@ -197,8 +197,11 @@ pub(super) fn compress(old: &Path, new: &Path, size: u64, compressed: &Path) -> 
     let mut input = File::open(new)?;
     let hints = unwind::Unwind::detect(&basis, &mut input, size as usize);
     input.rewind()?;
+    // Every worker: the residual is mostly zeros, and two workers took 0.81s
+    // of a 0.93s return of a 205 MB executable where all of them take 0.19s
+    // for the same bytes. Level 7 jobs are small, so memory stays bounded.
     let mut child = Command::new("zstd")
-        .args(["-q", "-f", "-7", "-T2", "-", "-o"])
+        .args(["-q", "-f", "-7", "-T0", "-", "-o"])
         .arg(compressed)
         .stdin(Stdio::piped())
         .spawn()?;
