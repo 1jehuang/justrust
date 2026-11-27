@@ -817,7 +817,7 @@ fn run_unit(
     };
     stages.mark("spawn-setup");
     // Build hosts only: wait until the machine has memory for this unit.
-    let memory = crate::memgov::admit(&described, run_dir);
+    let memory = crate::memgov::admit(&described, args, run_dir);
     stages.mark(memory.stage());
     let start = paths::now();
     let spawned = cmd.spawn();
@@ -890,7 +890,7 @@ fn run_unit(
         }
         return retry.status().ok().and_then(|s| s.code());
     }
-    drop(memory);
+    memory.release();
 
     let mut unit = described;
     if let (Some(plan), Some(captured)) = (&plan, &captured) {

@@ -44,6 +44,9 @@ use crate::shim::Unit;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Admit {
     Fits,
+    /// Fits, after waiting while a balloon held part of the machine's
+    /// memory (hosted inflates an idle slot's and returns it under load).
+    FitsAfterBalloon,
     FirstOfBuild,
     TimedOut,
     NoMeminfo,
@@ -96,6 +99,37 @@ pub(crate) fn decide(
         .sum();
     (available_mb >= reserve_mb.saturating_add(pending).saturating_add(need_mb))
         .then_some(Admit::Fits)
+}
+
+/// Promises under this are small: registry crates, build scripts, small
+/// local crates. Their class default is about twice what they use (flat
+/// 320 MB against a measured mean of 160 to 183 MB over 3679 registry
+/// units), and dozens run at once.
+const SMALL_MB: u64 = 1024;
+
+/// The second way in: memory is roomy. With a third of the machine free
+/// after this unit and every large promise in full, small promises count
+/// for a quarter. Without it a cold build of 589 units waited 98.6 s of
+/// job time while free memory never went under 12 GB of 29.6 (run
+/// 20261126-180124548-1484059): 176 registry crates stood behind each
+/// other's 320 MB promises and used 160 MB.
+pub(crate) fn roomy(
+    need_mb: u64,
+    installed_mb: u64,
+    available_mb: u64,
+    held: &[(Holder, u64)],
+) -> bool {
+    let pending: u64 = held
+        .iter()
+        .map(|(h, used)| {
+            let left = h.need_mb.saturating_sub(*used);
+            if h.need_mb < SMALL_MB { left / 4 } else { left }
+        })
+        .sum();
+    available_mb
+        >= (installed_mb / 3)
+            .saturating_add(pending)
+            .saturating_add(need_mb)
 }
 
 /// Memory kept free of compilers: a tenth of the machine, at least 2 GiB.
@@ -151,13 +185,130 @@ pub(crate) fn default_need_mb(u: &Unit) -> u64 {
     if opt && u.local { mb + mb / 4 } else { mb }
 }
 
-/// What to set aside for a unit whose recorded peak is `recorded` MB.
-pub(crate) fn need_from(recorded: Option<u64>, default_mb: u64, ceiling_mb: u64) -> u64 {
-    let mb = match recorded {
-        Some(r) => r + r / 5 + 64,
-        None => default_mb,
+/// What to set aside for a unit, in MB, from the most specific thing
+/// known about it:
+///
+/// 1. `own`: this crate's recorded peak in this class.
+/// 2. `siblings`: the same crate's peak in another class (its lib unit
+///    when its test binary is new), scaled for the heavier kind.
+/// 3. `source_bytes`: the size of the crate's sources. On 72 h of hosted
+///    local units (2026-11-26) no debug rlib or test unit with sources
+///    under 1 MB peaked above 1.0 GB, and the 2.5 GB class default made
+///    three concurrent cold builds wait about 5 s each with 13 GB free.
+/// 4. The class default.
+pub(crate) fn need_mb(
+    unit: &Unit,
+    own: Option<u64>,
+    siblings: &[(String, u64)],
+    source_bytes: Option<u64>,
+    ceiling_mb: u64,
+) -> u64 {
+    let margin = |r: u64| r + r / 5 + 64;
+    let to = class(unit);
+    let sibling = siblings
+        .iter()
+        .map(|(from, peak)| peak * scale_pct(from, &to) / 100)
+        .max();
+    let mb = match (own, sibling, source_bytes) {
+        (Some(r), _, _) => margin(r),
+        (None, Some(r), _) => margin(r),
+        // The envelope is steep for the few large crates that set it: past
+        // one and a half times the class default it promised a 2.7 GB rlib
+        // 5 GB, and three first builds of it then took turns (35.8 s
+        // against 25.3 s ungoverned, 2026-11-27).
+        (None, None, Some(bytes)) if unit.local && !unit.build_script => {
+            let default = default_need_mb(unit);
+            from_source(&to, bytes).min(default + default / 2)
+        }
+        _ => default_need_mb(unit),
     };
     mb.min(ceiling_mb).max(64)
+}
+
+/// Percent of a crate's peak in class `from` to expect in class `to`.
+/// Measured on the largest hosted crates: check to debug rlib 1.7x
+/// (justrust 1543 to 2667 MB), rlib to test binary 1.55x (justrust 1863 to
+/// 2883, jcode_app_core 3296 to 5091). Never scaled down.
+fn scale_pct(from: &str, to: &str) -> u64 {
+    let rank = |c: &str| match c.strip_suffix("-opt").unwrap_or(c) {
+        "meta" => 0,
+        "rlib" => 1,
+        _ => 2,
+    };
+    let kind = match (rank(from), rank(to)) {
+        (0, 1) => 200,
+        (0, 2) => 300,
+        (1, 2) => 160,
+        _ => 100,
+    };
+    if to.ends_with("-opt") && !from.ends_with("-opt") {
+        kind * 5 / 4
+    } else {
+        kind
+    }
+}
+
+/// An upper envelope of peak RSS over source size (same measurement):
+/// check units stayed under 320 MB + 0.5 GB per MB of source, codegen
+/// units under 384 MB + 1.6 GB per MB, but for a few macro-heavy crates
+/// under 0.2 MB that exceeded it by up to 0.3 GB.
+fn from_source(class: &str, bytes: u64) -> u64 {
+    let kb = bytes / 1024;
+    let mb = if class.starts_with("meta") {
+        320 + kb * 500 / 1024
+    } else {
+        384 + kb * 1600 / 1024
+    };
+    if class.ends_with("-opt") {
+        mb + mb / 4
+    } else {
+        mb
+    }
+}
+
+/// Bytes of Rust source in the crate rooted at `root`: the directory of a
+/// `lib.rs`, `main.rs` or `mod.rs`, else the file and its module directory.
+/// Sources reached another way (`#[path]`, `include!`, generated code) are
+/// not counted. `None` when the root cannot be read.
+pub(crate) fn source_bytes(root: &std::path::Path) -> Option<u64> {
+    let own = std::fs::metadata(root).ok()?.len();
+    let dir = root.parent()?;
+    let stem = root.file_stem()?.to_str()?;
+    let mut left = 20_000usize;
+    Some(if matches!(stem, "lib" | "main" | "mod") {
+        tree_bytes(dir, 12, &mut left).max(own)
+    } else {
+        own + tree_bytes(&dir.join(stem), 12, &mut left)
+    })
+}
+
+fn tree_bytes(dir: &std::path::Path, depth: usize, left: &mut usize) -> u64 {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut sum = 0;
+    for e in rd.flatten() {
+        if *left == 0 {
+            break;
+        }
+        *left -= 1;
+        // Not following links: a link cycle or a link out of the crate.
+        let Ok(t) = e.file_type() else { continue };
+        if t.is_dir() && depth > 0 {
+            sum += tree_bytes(&e.path(), depth - 1, left);
+        } else if t.is_file() && e.path().extension().is_some_and(|x| x == "rs") {
+            sum += e.metadata().map_or(0, |m| m.len());
+        }
+    }
+    sum
+}
+
+/// The crate root among rustc's arguments.
+fn root_arg(args: &[std::ffi::OsString]) -> Option<&std::path::Path> {
+    args.iter().map(std::path::Path::new).find(|p| {
+        p.extension().is_some_and(|x| x == "rs")
+            && !p.as_os_str().as_encoded_bytes().starts_with(b"-")
+    })
 }
 
 /// The recorded peak after one more compile: up at once, down a quarter of
@@ -194,6 +345,8 @@ pub(crate) struct Limits {
     pub max_wait: std::time::Duration,
     /// `None`: a tenth of MemTotal, at least 2 GiB.
     pub reserve_mb: Option<u64>,
+    /// Memory the machine has when no balloon holds any, if known.
+    pub installed_mb: Option<u64>,
 }
 
 const POLL: std::time::Duration = std::time::Duration::from_millis(50);
@@ -236,6 +389,14 @@ fn decide_locked(
     ledger: &mut dyn Ledger,
 ) -> Admit {
     let mut scanned: Option<std::time::Duration> = None;
+    let mut ballooned = false;
+    let fits = |why: Admit, ballooned: bool| match why {
+        Admit::Fits if ballooned => Admit::FitsAfterBalloon,
+        other => other,
+    };
+    let roomy = |available: u64, held: &[(Holder, u64)]| {
+        (limits.installed_mb).is_some_and(|i| roomy(me.need_mb, i, available, held))
+    };
     loop {
         let Some((total, available)) = probe.meminfo() else {
             return Admit::NoMeminfo;
@@ -246,7 +407,10 @@ fn decide_locked(
         // not tight, and it reads nothing but the directory.
         let full: Vec<(Holder, u64)> = holders.iter().cloned().map(|h| (h, 0)).collect();
         if let Some(why) = decide(me.need_mb, me.build, reserve, available, &full) {
-            return why;
+            return fits(why, ballooned);
+        }
+        if roomy(available, &full) {
+            return fits(Admit::Fits, ballooned);
         }
         // Tight: look at what the holders really use, and drop the dead.
         let now = probe.elapsed();
@@ -260,9 +424,15 @@ fn decide_locked(
                 }
             }
             if let Some(why) = decide(me.need_mb, me.build, reserve, available, &held) {
-                return why;
+                return fits(why, ballooned);
+            }
+            if roomy(available, &held) {
+                return fits(Admit::Fits, ballooned);
             }
         }
+        // Short while a fifth or more of the machine is in a balloon: the
+        // wait is for the host to give it back, not for other compilers.
+        ballooned |= limits.installed_mb.is_some_and(|i| total * 5 < i * 4);
         if probe.elapsed() >= limits.max_wait {
             return Admit::TimedOut;
         }
@@ -272,7 +442,6 @@ fn decide_locked(
 
 /// Held while the compiler runs. Dropping it frees the unit's promise.
 pub(crate) struct Ticket {
-    #[cfg(target_os = "linux")]
     path: Option<std::path::PathBuf>,
     why: Option<Admit>,
 }
@@ -282,13 +451,16 @@ impl Ticket {
     pub(crate) fn stage(&self) -> &'static str {
         match self.why {
             Some(Admit::TimedOut) => "wait-memory-timeout",
+            Some(Admit::FitsAfterBalloon) => "wait-balloon",
             _ => "wait-memory",
         }
     }
 
+    /// The compiler has exited: its promise is free. Dropping does the same.
+    pub(crate) fn release(self) {}
+
     fn none() -> Ticket {
         Ticket {
-            #[cfg(target_os = "linux")]
             path: None,
             why: None,
         }
@@ -297,7 +469,6 @@ impl Ticket {
 
 impl Drop for Ticket {
     fn drop(&mut self) {
-        #[cfg(target_os = "linux")]
         if let Some(p) = self.path.take() {
             let _ = std::fs::remove_file(p);
         }
@@ -313,24 +484,16 @@ pub(crate) fn on(value: &str) -> bool {
 }
 
 pub(crate) fn enabled() -> bool {
-    cfg!(target_os = "linux") && std::env::var(ENV).is_ok_and(|v| on(&v))
+    std::env::var(ENV).is_ok_and(|v| on(&v))
 }
 
 /// Wait for memory before spawning the compiler for `unit`. A no-op off a
 /// build host. Keep the ticket until the compiler has exited.
-pub(crate) fn admit(unit: &Unit, run_dir: &std::path::Path) -> Ticket {
+pub(crate) fn admit(unit: &Unit, args: &[std::ffi::OsString], run_dir: &std::path::Path) -> Ticket {
     if !enabled() {
         return Ticket::none();
     }
-    #[cfg(target_os = "linux")]
-    {
-        linux::admit(unit, run_dir).unwrap_or_else(Ticket::none)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (unit, run_dir);
-        Ticket::none()
-    }
+    linux::admit(unit, args, run_dir).unwrap_or_else(Ticket::none)
 }
 
 /// Remember what `unit` peaked at, for the next estimate.
@@ -354,6 +517,12 @@ pub(crate) fn learn(unit: &Unit) {
 }
 
 fn history_path(unit: &Unit) -> Option<std::path::PathBuf> {
+    history_file(unit, &class(unit))
+}
+
+/// History is per justrust home, so shared by every checkout and target
+/// directory this machine builds a crate in.
+fn history_file(unit: &Unit, class: &str) -> Option<std::path::PathBuf> {
     let name = &unit.crate_name;
     if name.is_empty()
         || name.len() > 128
@@ -368,15 +537,31 @@ fn history_path(unit: &Unit) -> Option<std::path::PathBuf> {
             .ok()?
             .join("memgov")
             .join("rss")
-            .join(format!("{name}.{}", class(unit))),
+            .join(format!("{name}.{class}")),
     )
+}
+
+/// The same crate's recorded peaks in its other classes.
+fn sibling_history(unit: &Unit) -> Vec<(String, u64)> {
+    if unit.build_script {
+        return Vec::new();
+    }
+    let own = class(unit);
+    ["meta", "rlib", "link", "test"]
+        .iter()
+        .flat_map(|k| [k.to_string(), format!("{k}-opt")])
+        .filter(|c| *c != own)
+        .filter_map(|c| {
+            let peak = read_history(&history_file(unit, &c)?)?;
+            Some((c, peak))
+        })
+        .collect()
 }
 
 fn read_history(path: &std::path::Path) -> Option<u64> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
-#[cfg(target_os = "linux")]
 mod linux {
     use super::*;
     use std::os::fd::AsRawFd;
@@ -499,7 +684,11 @@ mod linux {
         std::env::var(name).ok()?.trim().parse().ok()
     }
 
-    pub(super) fn admit(unit: &Unit, run_dir: &std::path::Path) -> Option<Ticket> {
+    pub(super) fn admit(
+        unit: &Unit,
+        args: &[std::ffi::OsString],
+        run_dir: &std::path::Path,
+    ) -> Option<Ticket> {
         // Installed, not MemTotal: hosted balloons an idle slot down to
         // ~6 GiB and deflates it seconds after work starts. The reserve and
         // the per-unit ceiling are sized for the machine. MemAvailable is
@@ -509,12 +698,22 @@ mod linux {
         let reserve = reserve_mb.unwrap_or_else(|| reserve_for(total));
         // A unit that could never fit would only ever leave by timeout.
         let ceiling = total.saturating_sub(reserve) / 2;
-        let recorded = history_path(unit).and_then(|p| read_history(&p));
+        let own = history_path(unit).and_then(|p| read_history(&p));
+        // The rest is read only for a unit never compiled on this machine.
+        let siblings = if own.is_none() {
+            sibling_history(unit)
+        } else {
+            Vec::new()
+        };
+        let source = match (own, siblings.is_empty(), unit.local) {
+            (None, true, true) => root_arg(args).and_then(source_bytes),
+            _ => None,
+        };
         let pid = std::process::id() as i32;
         let me = Holder {
             pid,
             start_ticks: crate::procfs::read_stat(pid)?.start_ticks,
-            need_mb: need_from(recorded, default_need_mb(unit), ceiling),
+            need_mb: need_mb(unit, own, &siblings, source, ceiling),
             build: {
                 use std::hash::{Hash, Hasher};
                 let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -529,6 +728,7 @@ mod linux {
                 env_u64("JUSTRUST_MEMGOV_MAX_WAIT_SECS").unwrap_or(120),
             ),
             reserve_mb,
+            installed_mb: Some(total),
         };
         let mut probe = Machine {
             started: std::time::Instant::now(),
@@ -645,6 +845,7 @@ mod tests {
         Limits {
             max_wait: Duration::from_secs(secs),
             reserve_mb: None,
+            installed_mb: Some(SLOT_MB),
         }
     }
 
@@ -731,6 +932,67 @@ mod tests {
         assert_eq!(probe.clock, POLL * 40);
         // Process table read every 250 ms of waiting, not every poll.
         assert!(probe.scans >= 8 && probe.scans <= 9, "{}", probe.scans);
+    }
+
+    #[test]
+    fn a_wait_for_the_slots_balloon_to_deflate_is_named_as_that() {
+        // An idle slot ballooned to 5.5 GB: MemTotal 5513, 4400 available.
+        // The host returns the memory after 3 s (60 polls).
+        let mut avail = vec![4400u64; 60];
+        avail.push(20_000);
+        let mut probe = Fake::new(5513, &avail);
+        probe.rss.insert(50, 300);
+        let mut ledger = Mem {
+            held: vec![holder(50, 400, 0xb)],
+            ..Default::default()
+        };
+        // Reserve is 2048 of the ballooned total: a 2.5 GB unit must wait.
+        let me = holder(2, 2500, 0xb);
+        assert_eq!(
+            wait_turn(&me, &limits(120), &mut probe, &mut ledger),
+            Admit::FitsAfterBalloon
+        );
+        assert_eq!(probe.clock, POLL * 60);
+        // A small unit fits in what the balloon left and is not held up.
+        let mut probe = Fake::new(5513, &[4400]);
+        probe.rss.insert(50, 300);
+        probe.rss.insert(2, 2400);
+        let small = holder(3, 300, 0xb);
+        assert_eq!(
+            wait_turn(&small, &limits(120), &mut probe, &mut ledger),
+            Admit::Fits
+        );
+        assert_eq!(probe.clock, Duration::ZERO);
+    }
+
+    #[test]
+    fn small_units_are_not_held_while_a_third_of_the_machine_is_free() {
+        // The production case: 60 registry crates in flight, each promised
+        // 320 MB, 20 GB of 29.6 available. Counted in full they do not fit.
+        let small: Vec<(Holder, u64)> = (0..60).map(|i| (holder(100 + i, 320, 0xb), 0)).collect();
+        assert_eq!(decide(320, 0xb, 2957, 20_000, &small), None);
+        assert!(roomy(320, SLOT_MB, 20_000, &small));
+        let mut probe = Fake::new(SLOT_MB, &[20_000]);
+        let mut ledger = Mem {
+            held: small.iter().map(|(h, _)| h.clone()).collect(),
+            ..Default::default()
+        };
+        assert_eq!(
+            wait_turn(&holder(2, 320, 0xb), &limits(120), &mut probe, &mut ledger),
+            Admit::Fits
+        );
+        assert_eq!((probe.clock, probe.scans), (Duration::ZERO, 0));
+        // Not once memory is no longer roomy: a third is 9859 MB.
+        assert!(!roomy(320, SLOT_MB, 14_900, &small));
+        assert!(roomy(320, SLOT_MB, 15_000, &small));
+        // Large promises count in full: three 3 GB units starting leave no
+        // room for a fourth at 20 GB available, small ones or not.
+        let large: Vec<(Holder, u64)> = (0..3).map(|i| (holder(200 + i, 3000, 0xb), 0)).collect();
+        assert!(!roomy(3000, SLOT_MB, 20_000, &large));
+        assert!(roomy(320, SLOT_MB, 20_000, &large));
+        // What they have realized is no longer pending.
+        let grown: Vec<(Holder, u64)> = large.iter().map(|(h, _)| (h.clone(), 2500)).collect();
+        assert!(roomy(3000, SLOT_MB, 14_400, &grown));
     }
 
     #[test]
@@ -846,11 +1108,91 @@ mod tests {
         };
         // Learned registry crates (p50 150 MB recorded): 92 at once even
         // before any of them has touched its memory.
-        assert!(admit_all(need_from(Some(150), 320, 13_000)) >= 92);
+        let reg = unit(false, "dep-info,metadata", &["lib"], "0", false);
+        assert!(admit_all(need_mb(&reg, Some(150), &[], None, 13_000)) >= 92);
         // Unknown registry crates at the default.
         assert_eq!(admit_all(320), 70);
-        // Unknown workspace test binaries: 8 at once, not 96.
+        // Workspace test binaries nothing is known about: 8 at once.
         assert_eq!(admit_all(2560), 8);
+        // A first build of a workspace of small crates (60 KB of source
+        // each) is not held to that: 47 of its test binaries at once.
+        let test = unit(true, "dep-info,link", &["lib"], "0", true);
+        let small = need_mb(&test, None, &[], Some(60 << 10), 13_000);
+        assert_eq!(small, 477);
+        assert_eq!(admit_all(small), 47);
+    }
+
+    #[test]
+    fn an_unseen_unit_is_sized_from_what_is_known_about_its_crate() {
+        let test = unit(true, "dep-info,link", &["lib"], "0", true);
+        let rlib = unit(true, "dep-info,metadata,link", &["lib"], "0", false);
+        let meta = unit(true, "dep-info,metadata", &["lib"], "0", false);
+        let sib = |c: &str, mb| vec![(c.to_string(), mb)];
+        // Its own record wins over everything.
+        assert_eq!(
+            need_mb(&test, Some(1000), &sib("rlib", 9000), Some(1), 13_000),
+            1264
+        );
+        // The lib's peak, scaled to a test binary: justrust's rlib peaked
+        // at 1863 MB and its test binary at 2883.
+        let seeded = need_mb(&test, None, &sib("rlib", 1863), Some(1), 13_000);
+        assert_eq!(seeded, 3640);
+        assert!(seeded > 2883);
+        // A check peak seeds a build, and a heavier sibling is not scaled.
+        assert_eq!(need_mb(&rlib, None, &sib("meta", 500), None, 13_000), 1264);
+        assert_eq!(need_mb(&meta, None, &sib("test", 1000), None, 13_000), 1264);
+        assert_eq!(
+            need_mb(&meta, None, &sib("rlib-opt", 1000), None, 13_000),
+            1264
+        );
+        // Source size: the measured peaks sit under these.
+        let src = |u: &Unit, mb: u64| need_mb(u, None, &[], Some(mb << 20), 13_000);
+        assert_eq!(src(&meta, 0), 320);
+        assert_eq!(src(&rlib, 0), 384);
+        // Large crates: one and a half class defaults, which covers
+        // justrust (rlib 2667 MB, test binary 2883) and leaves
+        // jcode_app_core's 5.1 GB test binary to the reserve.
+        assert_eq!((src(&meta, 4), src(&rlib, 4)), (1152, 3072));
+        assert_eq!((src(&test, 7), src(&test, 40)), (3840, 3840));
+        // Registry crates and build scripts keep their class default.
+        let reg = unit(false, "dep-info,metadata,link", &["lib"], "0", false);
+        assert_eq!(need_mb(&reg, None, &[], Some(9 << 20), 13_000), 320);
+        // Nothing known at all.
+        assert_eq!(need_mb(&test, None, &[], None, 13_000), 2560);
+    }
+
+    #[test]
+    fn source_size_counts_the_crate_tree_or_a_single_target_file() {
+        let dir = std::env::temp_dir().join(format!("jr-memgov-src-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let w = |rel: &str, bytes: usize| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, vec![b'x'; bytes]).unwrap();
+            p
+        };
+        let lib = w("src/lib.rs", 100);
+        w("src/a/b.rs", 1000);
+        w("src/notes.txt", 5000);
+        let it = w("tests/it.rs", 30);
+        w("tests/it/helper.rs", 7);
+        w("tests/other.rs", 900);
+        assert_eq!(source_bytes(&lib), Some(1100));
+        assert_eq!(source_bytes(&it), Some(37));
+        assert_eq!(source_bytes(&dir.join("src/gone.rs")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+        let args: Vec<std::ffi::OsString> = [
+            "--crate-name",
+            "x",
+            "--edition=2021",
+            "src/lib.rs",
+            "-C",
+            "x.rs",
+        ]
+        .iter()
+        .map(Into::into)
+        .collect();
+        assert_eq!(root_arg(&args), Some(std::path::Path::new("src/lib.rs")));
     }
 
     fn unit(local: bool, emit: &str, types: &[&str], opt: &str, test: bool) -> Unit {
@@ -887,10 +1229,10 @@ mod tests {
 
     #[test]
     fn the_estimate_follows_the_recorded_peak_with_a_margin() {
-        assert_eq!(need_from(Some(1000), 320, 13_000), 1264);
-        assert_eq!(need_from(None, 320, 13_000), 320);
+        let x = unit(true, "dep-info,link", &["lib"], "0", true);
+        assert_eq!(need_mb(&x, Some(1000), &[], None, 13_000), 1264);
         // Never more than half of what the machine can give a build.
-        assert_eq!(need_from(Some(40_000), 320, 13_000), 13_000);
+        assert_eq!(need_mb(&x, Some(40_000), &[], None, 13_000), 13_000);
         // Peaks rise at once and fall slowly.
         assert_eq!(learned(None, 800), 800);
         assert_eq!(learned(Some(800), 3000), 3000);

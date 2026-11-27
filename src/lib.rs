@@ -40,6 +40,12 @@ mod live;
 mod localcache;
 mod log_journal;
 mod mcp;
+// The governor exists on build hosts, which are Linux. Elsewhere the shim
+// gets a stub that never waits, so none of it is dead code there.
+#[cfg(target_os = "linux")]
+mod memgov;
+#[cfg(not(target_os = "linux"))]
+#[path = "memgov_stub.rs"]
 mod memgov;
 mod msvc_tools;
 mod native;

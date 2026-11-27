@@ -493,6 +493,7 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
 
     out.extend(giant_crates(s));
     out.extend(memory_wait(s));
+    out.extend(balloon_wait(s));
 
     // Build gaps: no rustc running inside the build window.
     if p.build_gaps >= 1.0 {
@@ -598,6 +599,32 @@ fn memory_wait(s: &Summary) -> Option<Finding> {
             "compilers waited {total:.1}s of job time for memory before starting \
              (lowest free memory {:.1} GB, other builds on this machine share it){gave_up}",
             free as f64 / 1024.0
+        ),
+    ))
+}
+
+/// Compilers held back while the hosted slot's memory balloon deflated: an
+/// idle slot is shrunk to about 6 GiB and the host returns the rest once it
+/// sees work. Its own cause and its own fix (deflate before the first
+/// compiler), so it is not folded into `memory_wait`.
+fn balloon_wait(s: &Summary) -> Option<Finding> {
+    let total: f64 = (s.gaps.as_ref()?.shim_stages.iter())
+        .filter(|x| x.name == "wait-balloon")
+        .map(|x| x.secs)
+        .sum();
+    if total < 1.0 {
+        return None;
+    }
+    let window = s.phases.compile + s.phases.build_gaps;
+    let cost = (total / s.resources.avg_build_cores.max(1.0)).min(window);
+    Some(Finding::new(
+        "balloon_wait",
+        cost,
+        format!(
+            "compilers waited {total:.1}s of job time for this machine's memory to come back: \
+             it was idle, so the host had taken all but {:.1} GB of it and returned it only \
+             after the build started. A hosted-service cost, nothing in this project causes it",
+            s.resources.min_mem_available_mb as f64 / 1024.0
         ),
     ))
 }
@@ -951,6 +978,18 @@ mod tests {
         assert!(f.message.contains("lowest free memory 3.0 GB"));
         assert!(f.message.contains("10.0s of it ended at the wait limit"));
         assert!(analyze(&s).iter().any(|f| f.kind == "memory_wait"));
+        // A deflating balloon is reported apart from it.
+        assert!(balloon_wait(&s).is_none());
+        s.gaps = Some(crate::gaps::Gaps {
+            shim_stages: vec![stage("wait-memory", 0.2), stage("wait-balloon", 24.0)],
+            ..Default::default()
+        });
+        assert!(memory_wait(&s).is_none());
+        let f = balloon_wait(&s).unwrap();
+        assert_eq!((f.kind.as_str(), f.cost_secs), ("balloon_wait", 3.0));
+        assert!(f.message.contains("waited 24.0s of job time"));
+        assert!(f.message.contains("all but 3.0 GB"));
+        assert!(analyze(&s).iter().any(|f| f.kind == "balloon_wait"));
     }
 
     fn with_e2e(segs: &[(&str, f64)], derived: bool) -> Summary {
