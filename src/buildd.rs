@@ -66,6 +66,40 @@ const CHILD_ENV: &str = "JUSTRUST_BUILDD_CHILD";
 /// to a local compile after a remote failure, never compiles locally on
 /// battery, and does not bring compile-only test executables back.
 pub const GUESS_ENV: &str = "JUSTRUST_BUILDD_GUESS";
+
+/// Set on a build whose units a compile-only prebuild compiled first:
+/// `<prebuild run id> <seconds this request waited for it>`. That build
+/// finds the units Fresh and would otherwise report that nothing was
+/// compiled, with the wait in nobody's record.
+pub const WAITED_ENV: &str = "JUSTRUST_BUILDD_WAITED";
+
+fn waited_env(run_id: Option<&str>, secs: f64) -> Option<String> {
+    let id = run_id?;
+    let ok = !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    (ok && secs.is_finite() && secs >= 0.0).then(|| format!("{id} {secs:.3}"))
+}
+
+/// The prebuild whose units this process's build reuses: its run id and the
+/// seconds the daemon held this request back for it. Taken out of the
+/// environment on first use, so call it before anything is spawned: the
+/// note must never reach cargo, a compiler or a cache key.
+pub fn waited_prebuild() -> Option<(String, f64)> {
+    static NOTE: std::sync::OnceLock<Option<(String, f64)>> = std::sync::OnceLock::new();
+    NOTE.get_or_init(|| {
+        let v = std::env::var(WAITED_ENV).ok()?;
+        // SAFETY: single-threaded where the recorder first asks.
+        unsafe { std::env::remove_var(WAITED_ENV) };
+        parse_waited(&v)
+    })
+    .clone()
+}
+
+fn parse_waited(v: &str) -> Option<(String, f64)> {
+    let (id, secs) = v.split_once(' ')?;
+    let secs: f64 = secs.parse().ok()?;
+    let ok = !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    (ok && secs.is_finite() && secs >= 0.0).then(|| (id.to_owned(), secs))
+}
 const IDLE_EXIT: Duration = Duration::from_secs(900);
 
 /// Variables that identify the agent or its terminal, not the build. Two
@@ -99,6 +133,8 @@ const IGNORED_ENV: &[&str] = &[
     // Benchmarks pin run ids; an attached request links its id to the
     // shared run instead (`Exit::run_id`).
     "JUSTRUST_RUN_ID_OVERRIDE",
+    // The daemon's own note to a build; never part of what was asked.
+    WAITED_ENV,
 ];
 const IGNORED_ENV_PREFIXES: &[&str] = &["KITTY_", "JCODE_SPAWN_", "JCODE_TUI_", "JCODE_RELOAD_"];
 
@@ -1420,24 +1456,35 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
     let (stamp, files) = source_stamp(&roots, &cwd, &req.env);
     let scan = (t0.elapsed().as_secs_f64() * 1000.0, files);
     let wait_start = Instant::now();
+    // The compile-only prebuild whose units this request reuses, and how
+    // long the request waited for it.
+    let mut waited_for: Option<(Arc<Build>, f64)> = None;
     if !req.prebuild {
         cancel_stale_prebuild(dm, &key, &stamp);
         // Before the wrong guesses are stopped: this one is not wrong.
         let same_units = claim_same_units(dm, &req, &key, &stamp);
         cancel_wrong_guess(dm, &key, &session_of(&req));
         await_stopped(dm, &key);
-        settle_compile_only(dm, &key, &stamp);
+        let t = Instant::now();
+        if let Some(b) = settle_compile_only(dm, &key, &stamp) {
+            waited_for = Some((b, t.elapsed().as_secs_f64()));
+        }
         if let Some(b) = same_units {
             log(&format!(
                 "waiting for compile-only prebuild pid {} of the same units",
                 b.pid
             ));
+            let t = Instant::now();
             let mut l = b.log.lock().unwrap();
             while l.exit.is_none() {
                 l = b.cv.wait(l).unwrap();
             }
+            drop(l);
+            waited_for = Some((b, t.elapsed().as_secs_f64()));
         }
     }
+    // A prebuild that was stopped or killed left nothing to report.
+    waited_for.take_if(|(b, _)| no_result(b, &b.log.lock().unwrap()));
     let waited_ms = wait_start.elapsed().as_secs_f64() * 1000.0;
     let (build, attached, replayed) = {
         let mut st = dm.state.lock().unwrap();
@@ -1487,7 +1534,15 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
                 (b, true, replayed)
             }
             _ => {
-                let b = start(&req, Some(stamp), &cwd)?;
+                // The run that follows a prebuild of its units finds them
+                // Fresh: tell it whose work that was.
+                let waited = waited_for
+                    .as_ref()
+                    .and_then(|(b, secs)| waited_env(b.run_id.as_deref(), *secs));
+                let mut told = req.clone();
+                told.env.retain(|(k, _)| k != WAITED_ENV);
+                told.env.extend(waited.map(|v| (WAITED_ENV.to_owned(), v)));
+                let b = start(&told, Some(stamp), &cwd)?;
                 st.builds.insert(key.clone(), b.clone());
                 let (dm2, key2, b2) = (dm.clone(), key.clone(), b.clone());
                 std::thread::spawn(move || reap(&dm2, &key2, &b2));
@@ -2027,22 +2082,29 @@ fn claim_same_units(dm: &Daemon, req: &Request, key: &str, stamp: &str) -> Optio
 /// A compile-only prebuild of this request and these sources is running:
 /// wait for it (the agent's build would wait on its slot anyway), so the
 /// real run that follows finds every unit Fresh. A finished one is dropped.
-fn settle_compile_only(dm: &Daemon, key: &str, stamp: &str) {
-    let b = {
+/// Returns the prebuild of these sources whose units the run will reuse.
+fn settle_compile_only(dm: &Daemon, key: &str, stamp: &str) -> Option<Arc<Build>> {
+    let (done, b) = {
         let mut st = dm.state.lock().unwrap();
-        if st
+        let done = if st
             .finished
             .get(key)
             .is_some_and(|b| *b.compile_only.lock().unwrap())
         {
-            st.finished.remove(key);
-        }
-        st.builds
+            st.finished
+                .remove(key)
+                .filter(|b| b.stamp.as_deref() == Some(stamp))
+        } else {
+            None
+        };
+        let b = st
+            .builds
             .get(key)
-            .filter(|b| b.stamp.as_deref() == Some(&*stamp) && *b.compile_only.lock().unwrap())
-            .cloned()
+            .filter(|b| b.stamp.as_deref() == Some(stamp) && *b.compile_only.lock().unwrap())
+            .cloned();
+        (done, b)
     };
-    let Some(b) = b else { return };
+    let Some(b) = b else { return done };
     b.log.lock().unwrap().claimed = true;
     log(&format!("waiting for compile-only prebuild pid {}", b.pid));
     let mut l = b.log.lock().unwrap();
@@ -2055,6 +2117,8 @@ fn settle_compile_only(dm: &Daemon, key: &str, stamp: &str) {
     if st.builds.get(key).is_some_and(|x| Arc::ptr_eq(x, &b)) {
         st.builds.remove(key);
     }
+    drop(st);
+    Some(b)
 }
 
 fn session_of(req: &Request) -> String {
@@ -3089,6 +3153,69 @@ mod tests {
             l.claimed = claimed;
             assert!(!no_result(&b, &l), "exit {code}");
         }
+    }
+
+    #[test]
+    fn the_prebuild_a_build_waited_for_is_named_to_it() {
+        let v = waited_env(Some("20261127-001850999-119917-pre"), 3.5304).unwrap();
+        assert_eq!(v, "20261127-001850999-119917-pre 3.530");
+        assert_eq!(
+            parse_waited(&v),
+            Some(("20261127-001850999-119917-pre".into(), 3.53))
+        );
+        // No run id to name, or nothing a record could trust.
+        assert_eq!(waited_env(None, 1.0), None);
+        assert_eq!(waited_env(Some("../x"), 1.0), None);
+        assert_eq!(waited_env(Some("id"), f64::NAN), None);
+        for bad in ["", "id", "id x", "../x 1", "id -1", "id inf", " 1"] {
+            assert_eq!(parse_waited(bad), None, "{bad:?}");
+        }
+        // The note is the daemon's: it never makes two requests differ.
+        let plain = req(&[("PATH", "/bin")], &["test"]);
+        let noted = req(&[("PATH", "/bin"), (WAITED_ENV, "id 1.000")], &["test"]);
+        assert_eq!(request_key(&plain), request_key(&noted));
+    }
+
+    #[test]
+    fn a_finished_or_running_prebuild_of_these_sources_is_reported_as_reused() {
+        let dm = bare_daemon();
+        let pre = |stamp: &str| {
+            let mut b = fake_build();
+            b.stamp = Some(stamp.into());
+            *b.prebuild.lock().unwrap() = true;
+            *b.compile_only.lock().unwrap() = true;
+            b.log.lock().unwrap().exit = Some(0);
+            Arc::new(b)
+        };
+        // Finished before the request: reused, and dropped as before.
+        let done = pre("s");
+        dm.state
+            .lock()
+            .unwrap()
+            .finished
+            .insert("key".into(), done.clone());
+        let got = settle_compile_only(&dm, "key", "s").unwrap();
+        assert!(Arc::ptr_eq(&got, &done));
+        assert!(dm.state.lock().unwrap().finished.is_empty());
+        // Of older sources: dropped, and nothing of it is reused.
+        dm.state
+            .lock()
+            .unwrap()
+            .finished
+            .insert("key".into(), pre("old"));
+        assert!(settle_compile_only(&dm, "key", "s").is_none());
+        assert!(dm.state.lock().unwrap().finished.is_empty());
+        // Still in `builds` when the request arrives: waited for.
+        let running = pre("s");
+        dm.state
+            .lock()
+            .unwrap()
+            .builds
+            .insert("key".into(), running.clone());
+        let got = settle_compile_only(&dm, "key", "s").unwrap();
+        assert!(Arc::ptr_eq(&got, &running));
+        assert!(running.log.lock().unwrap().claimed);
+        assert!(dm.state.lock().unwrap().builds.is_empty());
     }
 
     fn fake_build() -> Build {
