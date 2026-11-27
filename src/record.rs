@@ -788,7 +788,7 @@ fn record(
         std::thread::spawn(move || crate::sched::enter(&id))
     };
     // Agent runs get a private target dir so parallel agents do not block.
-    let slot = opts.agent.then(|| slots::acquire_for(args, id)).flatten();
+    let mut slot = opts.agent.then(|| slots::acquire_for(args, id)).flatten();
     let cargo_args = slot.as_ref().map_or(args, |s| s.args.as_slice());
     trace.mark("slot");
 
@@ -1041,6 +1041,11 @@ fn record(
     CHILD_PID.store(0, Ordering::SeqCst);
     let _ = t_out.join();
     let _ = t_err.join();
+    // Cargo has exited; release the slot lock before draining pooled tests so
+    // an identical build waiting on this slot does not sit behind our test run.
+    if let Some(s) = slot.as_mut() {
+        s.release();
+    }
     let mut pooled_spans = Vec::new();
     if let Some(p) = pool {
         // Binaries cargo handed over may still be running.

@@ -129,6 +129,17 @@ pub struct Slot {
     _lock: Option<File>,
 }
 
+impl Slot {
+    /// Release the slot lock once Cargo has exited (for example, while pooled
+    /// test binaries are still running) so a waiting joiner can reuse the
+    /// built artifacts without waiting for unrelated tests to finish.
+    pub fn release(&mut self) {
+        if let Some(f) = self._lock.take() {
+            let _ = f.unlock();
+        }
+    }
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct SlotMeta {
     owner: String,
@@ -3080,6 +3091,40 @@ mod tests {
         .unwrap();
         assert_eq!(load_cached_directories(&canonical), None);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slot_release_unblocks_joiner_while_slot_struct_lives() {
+        let dir =
+            std::env::temp_dir().join(format!("justrust-slot-release-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let lock_path = dir.join("0.lock");
+        let lock = try_lock(&lock_path).unwrap();
+        std::fs::write(dir.join("0.req"), "same").unwrap();
+        std::fs::write(dir.join("0.run"), "owner-run\nstamp-a\n").unwrap();
+        let mut slot = Slot {
+            info: SlotInfo {
+                slot: Some(0),
+                target_dir: dir.join("0").to_string_lossy().into_owned(),
+                how: "sticky".into(),
+                ..Default::default()
+            },
+            args: Vec::new(),
+            _lock: Some(lock),
+        };
+        assert!(
+            try_lock_probe(&lock_path),
+            "slot should be locked before release"
+        );
+        slot.release();
+        assert!(
+            !try_lock_probe(&lock_path),
+            "slot should be unlocked after release while Slot is still alive"
+        );
+        // Info remains intact for post-build reporting/cleanup.
+        assert_eq!(slot.info.slot, Some(0));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
