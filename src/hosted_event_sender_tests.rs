@@ -378,3 +378,101 @@ fn native_sender_rejects_oversized_body_before_connecting() {
         std::io::ErrorKind::WouldBlock
     );
 }
+
+/// Answers each request with the next `changed` count and returns how many
+/// requests arrived.
+fn changed_fixture(replies: Vec<u64>) -> (Creds, thread::JoinHandle<usize>) {
+    let server = listener();
+    let creds = Creds::new(
+        format!("http://{}", server.local_addr().unwrap()),
+        SECRET.into(),
+    )
+    .unwrap();
+    let fixture = thread::spawn(move || {
+        for changed in &replies {
+            let mut stream = accept(&server);
+            request(&mut stream);
+            let body = format!("{{\"ok\":true,\"changed\":{changed}}}");
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(
+            server.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "one request more than expected"
+        );
+        replies.len()
+    });
+    (creds, fixture)
+}
+
+#[test]
+fn terminal_event_is_resent_until_the_row_exists() {
+    // A prebuild stopped 95 ms after a lease admission reports "abandoned"
+    // before the daemon's redeem has inserted its row: the service answers
+    // changed 0 until the row is there.
+    for event in ["abandoned", "done"] {
+        let (creds, fixture) = changed_fixture(vec![0, 0, 1]);
+        let mut pauses = Vec::new();
+        let code = send_event_until_applied(
+            &test_agent(),
+            &creds,
+            PATH,
+            &serde_json::json!({"event": event, "exit_code": 143}),
+            |d| pauses.push(d.as_millis() as u64),
+        );
+        assert_eq!(code.unwrap(), 200);
+        assert_eq!(fixture.join().unwrap(), 3);
+        assert_eq!(pauses, UNAPPLIED_RETRY_MS[..2]);
+    }
+}
+
+#[test]
+fn unapplied_resends_are_bounded_and_only_for_terminal_events() {
+    // A heartbeat for a row that is not there yet is sent once: the next
+    // heartbeat repeats it anyway.
+    let (creds, fixture) = changed_fixture(vec![0]);
+    let mut pauses = 0;
+    send_event_until_applied(
+        &test_agent(),
+        &creds,
+        PATH,
+        &serde_json::json!({"event": "running"}),
+        |_| pauses += 1,
+    )
+    .unwrap();
+    assert_eq!((fixture.join().unwrap(), pauses), (1, 0));
+
+    // A row that never appears (a run that was never admitted) ends the
+    // sender after the last wait.
+    let (creds, fixture) = changed_fixture(vec![0; UNAPPLIED_RETRY_MS.len() + 1]);
+    let mut pauses = 0;
+    send_event_until_applied(
+        &test_agent(),
+        &creds,
+        PATH,
+        &serde_json::json!({"event": "abandoned"}),
+        |_| pauses += 1,
+    )
+    .unwrap();
+    assert_eq!(
+        (fixture.join().unwrap(), pauses),
+        (UNAPPLIED_RETRY_MS.len() + 1, UNAPPLIED_RETRY_MS.len())
+    );
+
+    assert!(!terminal_event_unapplied(
+        &serde_json::json!({"event": "abandoned"}),
+        503,
+        b"{\"changed\":0}"
+    ));
+    assert!(!terminal_event_unapplied(
+        &serde_json::json!({"event": "abandoned"}),
+        200,
+        b"not json"
+    ));
+}

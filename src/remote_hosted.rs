@@ -1347,6 +1347,57 @@ fn event_agent() -> ureq::Agent {
 }
 
 fn send_event_native(agent: &ureq::Agent, c: &Creds, path: &str, body: &Value) -> Result<u16> {
+    send_event_reply(agent, c, path, body).map(|(code, _)| code)
+}
+
+/// How long the detached sender waits before each resend of a terminal event
+/// that matched no row.
+const UNAPPLIED_RETRY_MS: [u64; 4] = [500, 1000, 2000, 4000];
+
+/// True when the service accepted a terminal event (`done`, `abandoned`) but
+/// changed no row. A warm admission is a local lease checkout: the row is
+/// inserted later, when the sync daemon redeems the lease. A run that ends
+/// first (a prebuild stopped 95 ms after it started) reports before its row
+/// exists, and the row then stays "queued" until the sweeper calls it lost.
+fn terminal_event_unapplied(body: &Value, code: u16, reply: &[u8]) -> bool {
+    matches!(body["event"].as_str(), Some("done" | "abandoned"))
+        && (200..300).contains(&code)
+        && serde_json::from_slice::<Value>(reply)
+            .ok()
+            .is_some_and(|r| r["changed"].as_u64() == Some(0))
+}
+
+/// Send one event, and resend a terminal one while the service says it
+/// matched no row. The event is an idempotent forward-only update, so a
+/// resend can only apply it once. A transport failure is never retried: its
+/// outcome is ambiguous.
+fn send_event_until_applied(
+    agent: &ureq::Agent,
+    c: &Creds,
+    path: &str,
+    body: &Value,
+    mut pause: impl FnMut(Duration),
+) -> Result<u16> {
+    let mut waits = UNAPPLIED_RETRY_MS.iter();
+    loop {
+        let (code, reply) = send_event_reply(agent, c, path, body)?;
+        if !terminal_event_unapplied(body, code, &reply) {
+            return Ok(code);
+        }
+        let Some(ms) = waits.next() else {
+            return Ok(code);
+        };
+        pause(Duration::from_millis(*ms));
+    }
+}
+
+/// The status and the start of the reply (enough for `{"ok":true,"changed":N}`).
+fn send_event_reply(
+    agent: &ureq::Agent,
+    c: &Creds,
+    path: &str,
+    body: &Value,
+) -> Result<(u16, Vec<u8>)> {
     use std::io::Read;
     let encoded = body.to_string();
     anyhow::ensure!(encoded.len() as u64 <= MAX_EVENT_BYTES, "event too large");
@@ -1357,12 +1408,12 @@ fn send_event_native(agent: &ureq::Agent, c: &Creds, path: &str, body: &Value) -
         .header("Authorization", c.authorization_header())
         .send(encoded)?;
     let code = response.status().as_u16();
-    let bytes = std::io::copy(
-        &mut response.body_mut().as_reader().take(MAX_EVENT_BYTES + 1),
-        &mut std::io::sink(),
-    )?;
+    let mut reader = response.body_mut().as_reader().take(MAX_EVENT_BYTES + 1);
+    let mut head = Vec::new();
+    let kept = (&mut reader).take(4096).read_to_end(&mut head)? as u64;
+    let bytes = kept + std::io::copy(&mut reader, &mut std::io::sink())?;
     anyhow::ensure!(bytes <= MAX_EVENT_BYTES, "event response too large");
-    Ok(code)
+    Ok((code, head))
 }
 
 /// Independent child, like the previous detached curl: it survives the build
@@ -1374,7 +1425,13 @@ pub(crate) fn event_sender_main() -> ! {
         let event = parse_event_envelope(std::io::stdin().lock())?;
         let mut creds = Creds::new(DEFAULT_API_BASE.into(), event.key)?;
         creds.set_build_base(DEFAULT_BUILD_BASE.into())?;
-        send_event_native(&event_agent(), &creds, &event.path, &event.body)?;
+        send_event_until_applied(
+            &event_agent(),
+            &creds,
+            &event.path,
+            &event.body,
+            std::thread::sleep,
+        )?;
         Ok(())
     })();
     std::process::exit(if result.is_ok() { 0 } else { 1 });
