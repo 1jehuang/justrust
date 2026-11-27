@@ -790,6 +790,36 @@ impl DepGraphData {
         }
     }
 
+    /// justrust reuse ledger: `node` could not be marked green because `dep`,
+    /// the first of its dependencies found red, is red. Counted per pair of
+    /// kinds. `JUSTRUST_RED_DEP_TRACE=<node kind>` (or `*`) also prints each
+    /// pair with its keys to stderr. Diagnostic only: reads no query and
+    /// changes no color. Free when the ledger is off.
+    #[inline]
+    fn jr_note_red_dep(
+        &self,
+        node: SerializedDepNodeIndex,
+        dep: SerializedDepNodeIndex,
+        how: &'static str,
+    ) {
+        if !rustc_data_structures::profiling::jr_reuse_enabled() {
+            return;
+        }
+        static TRACE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        let node = self.previous.index_to_node(node);
+        let dep = self.previous.index_to_node(dep);
+        let (node_kind, dep_kind) = (node.kind.name(), dep.kind.name());
+        rustc_data_structures::profiling::jr_red_dep(node_kind, dep_kind, how);
+        let trace = TRACE.get_or_init(|| {
+            std::env::var("JUSTRUST_RED_DEP_TRACE").ok().filter(|kind| !kind.is_empty())
+        });
+        if let Some(kind) = trace
+            && (kind == "*" || kind == node_kind)
+        {
+            eprintln!("jr-red-dep {how}: {node:?} <- {dep:?}");
+        }
+    }
+
     /// justrust reuse ledger: classify a provider execution after its node was
     /// allocated. `new` (absent from the previous session), `same` (re-ran,
     /// identical value: green after execution), `changed`, or `nohash`.
@@ -1089,7 +1119,10 @@ impl DepGraphData {
 
                 // This dependency's result is different to the previous compilation session. We
                 // cannot mark this dep_node as green, so stop checking.
-                DepNodeColor::Red => return None,
+                DepNodeColor::Red => {
+                    self.jr_note_red_dep(prev_dep_node_index, parent_dep_node_index, "red_dep");
+                    return None;
+                }
 
                 // We still need to determine this dependency's colour.
                 DepNodeColor::Unknown => {}
@@ -1114,6 +1147,11 @@ impl DepGraphData {
 
             // We failed to mark it green, so we try to force the query.
             if !tcx.try_force_from_dep_node(*parent_dep_node, parent_dep_node_index, &frame) {
+                self.jr_note_red_dep(
+                    prev_dep_node_index,
+                    parent_dep_node_index,
+                    "red_dep_unforced",
+                );
                 return None;
             }
 
@@ -1122,7 +1160,10 @@ impl DepGraphData {
                     edges.push(parent_index);
                     continue;
                 }
-                DepNodeColor::Red => return None,
+                DepNodeColor::Red => {
+                    self.jr_note_red_dep(prev_dep_node_index, parent_dep_node_index, "red_dep");
+                    return None;
+                }
                 DepNodeColor::Unknown => {}
             }
 

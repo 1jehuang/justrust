@@ -885,6 +885,10 @@ struct JrPhaseLedger {
     /// The reuse ledger: per (outcome, query) the exclusive provider or load
     /// time and count. See `jr_reuse_finish`.
     reuse: parking_lot::Mutex<FxHashMap<(&'static str, &'static str), (Duration, u64)>>,
+    /// Why nodes could not be marked green: per (node kind, first red
+    /// dependency kind, how the dependency was found red) a count. See
+    /// `jr_red_dep`.
+    red: parking_lot::Mutex<FxHashMap<(&'static str, &'static str, &'static str), u64>>,
 }
 
 thread_local! {
@@ -937,6 +941,18 @@ pub fn jr_reuse_finish(start: JrReuseStart, query: &'static str, outcome: &'stat
     let entry = reuse.entry((outcome, query)).or_insert((Duration::ZERO, 0));
     entry.0 += dur;
     entry.1 += 1;
+}
+
+/// A node of kind `node` could not be marked green because its dependency of
+/// kind `dep` is red. Only the first red dependency is seen: marking stops
+/// there. `how` is `red_dep` (the dependency re-ran to a different value or
+/// is never hashed) or `red_dep_unforced` (the dependency could not be
+/// forced from its dep node, so nothing is known about its value). Written
+/// to the reuse ledger as `how\t<node<-dep>\t0\tcount`.
+pub fn jr_red_dep(node: &'static str, dep: &'static str, how: &'static str) {
+    if let Some(ledger) = jr_phase_ledger() {
+        *ledger.red.lock().entry((node, dep, how)).or_insert(0) += 1;
+    }
 }
 
 /// Count `n` units of `outcome` for a non-query item kind (codegen units).
@@ -1235,6 +1251,7 @@ fn jr_phase_ledger() -> Option<&'static JrPhaseLedger> {
                 written: std::sync::atomic::AtomicBool::new(false),
                 phases: parking_lot::Mutex::new(FxHashMap::default()),
                 reuse: parking_lot::Mutex::new(FxHashMap::default()),
+                red: parking_lot::Mutex::new(FxHashMap::default()),
             })
         })
         .as_ref()
@@ -1306,6 +1323,15 @@ pub fn jr_phases_write(total: Duration) {
         rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
         for ((outcome, query), (dur, count)) in rows {
             let _ = writeln!(reuse_out, "{outcome}\t{query}\t{:.6}\t{count}", dur.as_secs_f64());
+        }
+    }
+    {
+        // `<...>` marks an evidence row: readers never sum it as query time.
+        let red = ledger.red.lock();
+        let mut rows: Vec<_> = red.iter().map(|(k, v)| (*k, *v)).collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        for ((node, dep, how), count) in rows {
+            let _ = writeln!(reuse_out, "{how}\t<{node}<-{dep}>\t0.000000\t{count}");
         }
     }
     if !reuse_out.is_empty() {
