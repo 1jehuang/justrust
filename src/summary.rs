@@ -1632,7 +1632,16 @@ fn a_run_that_reused_a_prebuild_names_it_and_is_estimated_as_a_build() {
     );
     s.theoretical_floor = Some(own.clone());
     s.credit_prebuild(&pre.id, 1.0, Some(&pre));
+    assert_eq!(s.theoretical_floor, Some(own.clone()));
+    s.credit_join(&pre);
     assert_eq!(s.theoretical_floor, Some(own));
+    // A run that waited in a slot for the identical build and compiled
+    // nothing is estimated as that build, with no prebuild claimed.
+    let mut s = fresh();
+    s.credit_join(&pre);
+    assert!(s.prebuild.is_none());
+    assert!(s.theoretical_floor.as_ref().unwrap().optimistic_est_secs > 0.6);
+    assert_eq!((s.units.compiled, s.units.fresh), (0, 184));
     // Old records read as before.
     let old: Summary = serde_json::from_str(&serde_json::to_string(&fresh()).unwrap()).unwrap();
     assert!(old.prebuild.is_none());
@@ -1751,6 +1760,22 @@ impl Summary {
             reuse.compile_secs = p.phases.compile;
             reuse.rustc_wall_sum = p.units.rustc_wall_sum;
             reuse.wall = p.wall;
+            self.estimate_as_built_by(p);
+        }
+        self.prebuild = Some(reuse);
+    }
+
+    /// This run waited in a slot for `joined`, the identical build another
+    /// run had started (`SlotInfo::joined_run`), and then found its units
+    /// Fresh. Estimate it as that build: the request needed those units.
+    pub fn credit_join(&mut self, joined: &Summary) {
+        self.estimate_as_built_by(joined);
+    }
+
+    /// Recompute the estimate with the units `p` compiled, when this run
+    /// compiled none because `p` had just compiled them for it.
+    fn estimate_as_built_by(&mut self, p: &Summary) {
+        {
             if self.units.compiled == 0 && p.units.compiled > 0 {
                 let mut units = self.units.clone();
                 units.compiled = p.units.compiled;
@@ -1771,7 +1796,6 @@ impl Summary {
                 ));
             }
         }
-        self.prebuild = Some(reuse);
     }
 
     /// The report line for [`Summary::prebuild`].

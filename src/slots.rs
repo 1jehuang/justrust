@@ -82,6 +82,9 @@ pub struct SlotInfo {
     /// (then this run reused its slot instead of compiling the same crates).
     #[serde(default)]
     pub join_wait_secs: f64,
+    /// The run this one waited for, when it joined (`justrust show <id>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joined_run: Option<String>,
 }
 
 impl SlotInfo {
@@ -100,8 +103,12 @@ impl SlotInfo {
                 }
                 if self.how == "joined" {
                     s.push_str(&format!(
-                        ", waited {:.1}s for the identical build running there",
-                        self.join_wait_secs
+                        ", waited {:.1}s for the identical build running there{}",
+                        self.join_wait_secs,
+                        self.joined_run
+                            .as_deref()
+                            .map(|r| format!(" (run {r})"))
+                            .unwrap_or_default()
                     ));
                 }
                 s
@@ -1346,12 +1353,52 @@ fn join_max_wait() -> Duration {
     Duration::from_secs_f64(env_f64("JUSTRUST_JOIN_WAIT", 300.0).max(0.0))
 }
 
+/// The run id of the build this process records, for `<n>.run`.
+static OWNER_RUN: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// [`acquire`], naming the run in the slot so a run that joins it can say
+/// which build it waited for.
+pub fn acquire_for(args: &[OsString], run_id: &str) -> Option<Slot> {
+    *OWNER_RUN.lock().unwrap() = run_id.to_owned();
+    acquire(args)
+}
+
+/// The build daemon's stamp of the sources this build was started for
+/// (`buildd::STAMP_ENV`); empty when it has none.
+fn source_stamp() -> String {
+    crate::buildd::build_stamp().unwrap_or_default()
+}
+
+/// `<n>.run`: the run building in slot `n` and its source stamp.
+fn read_owner(root: &Path, n: usize) -> (String, String) {
+    let s = std::fs::read_to_string(root.join(format!("{n}.run"))).unwrap_or_default();
+    let mut l = s.lines();
+    (
+        l.next().unwrap_or_default().to_owned(),
+        l.next().unwrap_or_default().to_owned(),
+    )
+}
+
 /// If a slot is held right now by a run with the same request key, wait for
 /// it to finish and take that slot. Two identical builds in parallel compile
 /// the same crates twice and compete for the CPU (pair 15s vs 10-12s when
 /// the second waited on the shared dir's lock, FINDINGS section 7). Waiting
 /// and then running cargo in the finished slot costs one no-op cargo.
 fn join_identical(root: &Path, cap: usize, key: &str) -> (Option<(usize, File)>, f64) {
+    join_identical_at(root, cap, key, &source_stamp())
+}
+
+/// [`join_identical`] for a run whose sources have `stamp`. The same command
+/// started before an edit builds other sources: this run would wait and
+/// then compile anyway (in a week on the hosted machine 30 of 47 joined runs
+/// compiled after waiting, 13 of them because a source file had changed),
+/// so it takes another slot instead. Unknown stamps join.
+fn join_identical_at(
+    root: &Path,
+    cap: usize,
+    key: &str,
+    stamp: &str,
+) -> (Option<(usize, File)>, f64) {
     if std::env::var("JUSTRUST_JOIN").as_deref() == Ok("0") {
         return (None, 0.0);
     }
@@ -1361,6 +1408,14 @@ fn join_identical(root: &Path, cap: usize, key: &str) -> (Option<(usize, File)>,
     }) else {
         return (None, 0.0);
     };
+    let theirs = read_owner(root, n).1;
+    if !stamp.is_empty() && !theirs.is_empty() && theirs != stamp {
+        eprintln!(
+            "justrust: the same command is running in slot {n} on other sources; \
+             not waiting for it"
+        );
+        return (None, 0.0);
+    }
     eprintln!(
         "justrust: an identical build is running in slot {n}; waiting for it instead of \
          compiling the same crates twice (JUSTRUST_JOIN=0 disables)"
@@ -1542,6 +1597,10 @@ fn acquire_with_probe_and_fs(
     };
     let lock = locks[n].take();
     drop(locks);
+    // Still the finished owner's: this run writes its own below.
+    let joined_run = (how == "joined")
+        .then(|| read_owner(&root, n).0)
+        .filter(|r| !r.is_empty());
     let slot_dir = root.join(n.to_string());
     let meta_path = root.join(format!("{n}.json"));
     let mut meta = metas[n]
@@ -1621,6 +1680,10 @@ fn acquire_with_probe_and_fs(
     }
     // What this slot is building now, so an identical request can join it.
     let _ = std::fs::write(root.join(format!("{n}.req")), &key);
+    let _ = std::fs::write(
+        root.join(format!("{n}.run")),
+        format!("{}\n{}\n", OWNER_RUN.lock().unwrap(), source_stamp()),
+    );
 
     let mut new_args = args.to_vec();
     let at = subcommand_index(args).map_or(new_args.len(), |i| i + 1);
@@ -1637,6 +1700,7 @@ fn acquire_with_probe_and_fs(
             refresh_secs,
             refreshed_units,
             join_wait_secs: join_wait,
+            joined_run,
         },
         args: new_args,
         _lock: lock,
@@ -1771,6 +1835,7 @@ fn remove_slot(root: &Path, n: usize) -> bool {
     if moved {
         std::fs::remove_file(root.join(format!("{n}.json"))).ok();
         std::fs::remove_file(root.join(format!("{n}.req"))).ok();
+        std::fs::remove_file(root.join(format!("{n}.run"))).ok();
     }
     drop(lock);
     if trash.exists() {
@@ -2662,6 +2727,29 @@ mod tests {
         assert_eq!(joined.map(|j| j.0), Some(1));
         assert!(waited >= 0.2, "waited {waited}");
         t.join().unwrap();
+        // The same command on other sources (it started before an edit):
+        // waiting for it would end in compiling anyway.
+        let held = try_lock(&root.join("1.lock")).unwrap();
+        std::fs::write(root.join("1.run"), "20261126-175201000-1-pre\nold\n").unwrap();
+        assert_eq!(read_owner(&root, 1).0, "20261126-175201000-1-pre");
+        let (joined, waited) = join_identical_at(&root, 4, &key, "new");
+        assert!(joined.is_none());
+        assert_eq!(waited, 0.0);
+        // Same sources, or sources nobody stamped: join as before.
+        for stamp in ["old", ""] {
+            let root2 = root.clone();
+            let key2 = key.clone();
+            let j = std::thread::spawn(move || join_identical_at(&root2, 4, &key2, stamp).0);
+            std::thread::sleep(Duration::from_millis(150));
+            assert!(!j.is_finished(), "did not wait with stamp {stamp:?}");
+            // Let it through, then take the lock back for the next round.
+            let _ = held.unlock();
+            let got = j.join().unwrap();
+            assert_eq!(got.as_ref().map(|j| j.0), Some(1));
+            drop(got);
+            held.lock().unwrap();
+        }
+        drop(held);
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -363,6 +363,7 @@ pub fn run(args: Vec<OsString>, opts: Options) -> ! {
     // The build daemon's note is for this process only: out of the
     // environment before cargo or a compiler can inherit it.
     crate::buildd::waited_prebuild();
+    crate::buildd::build_stamp();
     let mut trace = PhaseTrace::new();
     if !should_record(&args) {
         exec_cargo(&args);
@@ -787,7 +788,7 @@ fn record(
         std::thread::spawn(move || crate::sched::enter(&id))
     };
     // Agent runs get a private target dir so parallel agents do not block.
-    let slot = opts.agent.then(|| slots::acquire(args)).flatten();
+    let slot = opts.agent.then(|| slots::acquire_for(args, id)).flatten();
     let cargo_args = slot.as_ref().map_or(args, |s| s.args.as_slice());
     trace.mark("slot");
 
@@ -1214,6 +1215,15 @@ fn finish(
             .and_then(|runs| std::fs::read(runs.join(&pre_id).join("summary.json")).ok())
             .and_then(|b| serde_json::from_slice::<summary::Summary>(&b).ok());
         s.credit_prebuild(&pre_id, waited, pre.as_ref());
+    }
+    // Waited in a slot for the identical build: that run compiled the units.
+    if let Some(joined) = s.slot.as_ref().and_then(|i| i.joined_run.clone())
+        && let Some(j) = run_dir
+            .parent()
+            .and_then(|runs| std::fs::read(runs.join(&joined).join("summary.json")).ok())
+            .and_then(|b| serde_json::from_slice::<summary::Summary>(&b).ok())
+    {
+        s.credit_join(&j);
     }
     if let Some(mut e) = early {
         let root = crate::early::workspace_root(Path::new(&meta.cwd))

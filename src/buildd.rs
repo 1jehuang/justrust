@@ -94,6 +94,26 @@ pub fn waited_prebuild() -> Option<(String, f64)> {
     .clone()
 }
 
+/// Set on every build the daemon starts: its stamp of the sources the build
+/// was started for. A slot records it, so the same command started after an
+/// edit does not wait for a build of the old sources (`slots`).
+pub const STAMP_ENV: &str = "JUSTRUST_BUILDD_STAMP";
+
+/// This process's [`STAMP_ENV`]. Taken out of the environment on first use,
+/// like [`waited_prebuild`], and for the same reason.
+pub fn build_stamp() -> Option<String> {
+    static STAMP: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    STAMP
+        .get_or_init(|| {
+            let v = std::env::var(STAMP_ENV).ok()?;
+            // SAFETY: single-threaded where the recorder first asks.
+            unsafe { std::env::remove_var(STAMP_ENV) };
+            let ok = !v.is_empty() && v.bytes().all(|b| b.is_ascii_alphanumeric());
+            ok.then_some(v)
+        })
+        .clone()
+}
+
 fn parse_waited(v: &str) -> Option<(String, f64)> {
     let (id, secs) = v.split_once(' ')?;
     let secs: f64 = secs.parse().ok()?;
@@ -141,6 +161,7 @@ const IGNORED_ENV: &[&str] = &[
     "JUSTRUST_RUN_ID_OVERRIDE",
     // The daemon's own note to a build; never part of what was asked.
     WAITED_ENV,
+    STAMP_ENV,
 ];
 const IGNORED_ENV_PREFIXES: &[&str] = &["KITTY_", "JCODE_SPAWN_", "JCODE_TUI_", "JCODE_RELOAD_"];
 
@@ -1895,6 +1916,10 @@ fn start(req: &Request, stamp: Option<String>, cwd: &Path) -> Result<Arc<Build>>
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    c.env_remove(STAMP_ENV);
+    if let Some(s) = &stamp {
+        c.env(STAMP_ENV, s);
+    }
     c.detached();
     if req.prebuild {
         // A guess: below every build an agent is waiting for.
