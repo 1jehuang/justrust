@@ -32,6 +32,12 @@ const MAX_JOURNAL: u64 = 256 << 20;
 const MAX_PACKET: usize = 80 << 20;
 const MAX_PENDING: usize = 128 << 20;
 const AGENT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long an attachment waits for its peer: for the first packet, and then
+/// between packets. Wall-clock bounds on a live transport, so the unit tests
+/// (thousands in parallel on a shared machine) do not run under them: a test
+/// thread starved for 3 s looked like a dropped client.
+const ATTACH_FIRST: Duration = Duration::from_secs(if cfg!(test) { 300 } else { 10 });
+const ATTACH_IDLE: Duration = Duration::from_secs(if cfg!(test) { 300 } else { 3 });
 
 fn nonblocking(input: &std::process::ChildStdin) -> std::io::Result<()> {
     let fd = input.as_raw_fd();
@@ -678,7 +684,7 @@ fn terminate(broker: &Broker, child: &mut Child, grace: Duration) {
 }
 
 fn attachment(broker: &Arc<Broker>, mut stream: UnixStream) -> Result<bool> {
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.set_read_timeout(Some(ATTACH_FIRST))?;
     let (
         Packet::Attach {
             session,
@@ -717,8 +723,8 @@ fn attachment(broker: &Arc<Broker>, mut stream: UnixStream) -> Result<bool> {
         },
         &[],
     )?;
-    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+    stream.set_read_timeout(Some(ATTACH_IDLE))?;
+    stream.set_write_timeout(Some(ATTACH_IDLE))?;
     let disconnected = Arc::new(AtomicBool::new(false));
     let mut output = stream.try_clone()?;
     let writer = {

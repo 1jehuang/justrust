@@ -264,8 +264,9 @@ impl Fixture {
         prefix: &str,
     ) -> (UnixStream, std::thread::JoinHandle<Result<bool>>) {
         let (mut client, server) = UnixStream::pair().unwrap();
+        // No test waits for this: it only keeps a broken one from hanging.
         client
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_secs(300)))
             .unwrap();
         let broker = self.broker.clone();
         let handle = std::thread::spawn(move || attachment(&broker, server));
@@ -336,8 +337,16 @@ fn transient_disconnect_reattaches_original_job_and_replays_only_missing_output(
     let mut acknowledged = false;
     while delivered.len() < first.len() || !acknowledged {
         match receive(&mut stream).unwrap() {
-            (Packet::Output { offset: 0 }, bytes) => delivered.extend(bytes),
-            (Packet::Ack { seq: 1 }, _) => acknowledged = true,
+            (Packet::Output { offset }, bytes) => {
+                assert_eq!(offset, delivered.len() as u64);
+                delivered.extend(bytes)
+            }
+            // The writer also acknowledges once a second as a pulse, so a
+            // slow start can see the previous count first.
+            (Packet::Ack { seq }, _) => {
+                assert!(seq <= 1, "acknowledged input never sent: {seq}");
+                acknowledged |= seq == 1;
+            }
             other => panic!("unexpected packet: {other:?}"),
         }
     }
