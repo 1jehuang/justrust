@@ -58,6 +58,8 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+mod warm;
+
 pub const DAEMON_ARG: &str = "__buildd";
 /// Set on the builds the daemon runs: they never go back to the daemon.
 const CHILD_ENV: &str = "JUSTRUST_BUILDD_CHILD";
@@ -1261,6 +1263,8 @@ struct Daemon {
     /// (path, dev, ino) of our executable at startup: detect atomic replacement.
     exe: Option<(PathBuf, (u64, u64))>,
     draining: std::sync::atomic::AtomicBool,
+    /// Prebuilds after a toolchain change or a daemon replacement.
+    warm: warm::Warm,
 }
 
 impl Daemon {
@@ -1337,6 +1341,7 @@ fn daemon() -> Result<()> {
         crate::remote_daemon::build_id()
     ));
     let (wtx, wrx) = std::sync::mpsc::channel::<PathBuf>();
+    let warm = warm::Warm::new(wtx.clone());
     let watcher = crate::remote_watch::Watcher::new(wtx)
         .map_err(|e| log(&format!("no file watcher, prebuilds off: {e:#}")))
         .ok();
@@ -1350,7 +1355,12 @@ fn daemon() -> Result<()> {
         sock: (sock, crate::sys::file_id(&md)),
         exe: current_exe_identity(),
         draining: Default::default(),
+        warm,
     });
+    {
+        let dm = dm.clone();
+        std::thread::spawn(move || warm::run(&dm));
+    }
     {
         let dm = dm.clone();
         std::thread::spawn(move || {
@@ -1926,10 +1936,11 @@ fn start(req: &Request, stamp: Option<String>, cwd: &Path) -> Result<Arc<Build>>
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
+            let nice = warm::niceness(req);
             // SAFETY: setpriority is async-signal-safe.
             unsafe {
-                c.pre_exec(|| {
-                    libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+                c.pre_exec(move || {
+                    libc::setpriority(libc::PRIO_PROCESS, 0, nice);
                     Ok(())
                 });
             }
@@ -2337,6 +2348,8 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
         }
+        // Queued by `warm`: prebuilt whatever the watcher saw.
+        let queued = dm.warm.take_ready();
         let wanted: Vec<(String, Request, Vec<PathBuf>)> = {
             let mut st = dm.state.lock().unwrap();
             prune_recent(&mut st.recent);
@@ -2347,6 +2360,7 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
                 .filter(|(k, r)| {
                     r.budget > 0
                         && (retry.contains(k)
+                            || queued.contains(k)
                             || dirty
                                 .iter()
                                 .any(|d| r.roots.iter().any(|x| d.starts_with(x))))
@@ -2401,6 +2415,9 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
             req.env.retain(|(k, _)| k != "JCODE_SESSION_ID");
             req.env.retain(|(k, _)| k != GUESS_ENV);
             req.env.push((GUESS_ENV.into(), "1".into()));
+            if queued.contains(&key) {
+                warm::mark(&mut req);
+            }
             // One prebuild of a command in a build directory at a time, over
             // all daemons: wait for the other one, then find its units Fresh.
             let claim = match dir().map(|d| prebuild_claim(&d.join("prebuild"), &req)) {
@@ -2943,6 +2960,7 @@ mod tests {
             sock: (PathBuf::new(), (0, 0)),
             exe: None,
             draining: std::sync::atomic::AtomicBool::new(false),
+            warm: Default::default(),
         };
         let env = [("PATH", "/bin"), ("JUSTRUST_SLOT_SESSION", "agent")];
         let guessed = req(&env, &["test", "--lib", "--", "a::"]);
@@ -3143,6 +3161,7 @@ mod tests {
             sock: (PathBuf::new(), (0, 0)),
             exe: None,
             draining: std::sync::atomic::AtomicBool::new(false),
+            warm: Default::default(),
         };
         let mut b = fake_build();
         b.stamp = None;
@@ -3173,6 +3192,7 @@ mod tests {
             sock: (PathBuf::new(), (0, 0)),
             exe: None,
             draining: std::sync::atomic::AtomicBool::new(false),
+            warm: Default::default(),
         });
         let mut owner = fake_build();
         owner.stamp = None;
@@ -3217,6 +3237,7 @@ mod tests {
             sock: (PathBuf::new(), (0, 0)),
             exe: None,
             draining: std::sync::atomic::AtomicBool::new(false),
+            warm: Default::default(),
         };
         let mut old = fake_build();
         old.stamp = None;
@@ -3242,6 +3263,7 @@ mod tests {
             sock: (PathBuf::new(), (0, 0)),
             exe: None,
             draining: std::sync::atomic::AtomicBool::new(false),
+            warm: Default::default(),
         };
         for (code, kept) in [(GUESS_DROPPED, false), (0, true), (101, true)] {
             let b = fake_build();
@@ -3262,6 +3284,7 @@ mod tests {
             sock: (PathBuf::new(), (0, 0)),
             exe: None,
             draining: std::sync::atomic::AtomicBool::new(false),
+            warm: Default::default(),
         }
     }
 
