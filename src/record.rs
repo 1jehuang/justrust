@@ -1187,7 +1187,7 @@ fn finish(
         serde_json::to_vec_pretty(procs)?,
     )?;
     let mut units = summary::load_units(run_dir);
-    units.extend(summary::units_from_wrapper_procs(procs));
+    units.extend(summary::units_from_wrapper_procs(procs, run_dir));
     let mut s = summary::build(
         meta,
         git,

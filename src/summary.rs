@@ -512,8 +512,11 @@ pub fn load_units(run_dir: &Path) -> Vec<Unit> {
 /// shim would change the units' hashes (cargo hashes the wrapper path) and
 /// stop sharing artifacts with plain `cargo clippy`, so these units are
 /// reconstructed from the sampled process tree instead: timing at sample
-/// resolution, no pass timings.
-pub fn units_from_wrapper_procs(procs: &[ProcRecord]) -> Vec<Unit> {
+/// resolution. Phases and the front-end thread count come from our
+/// clippy-driver, which does natively what the shim does for other units
+/// and leaves `phases/<pid>.tsv` (the ledger, `.reuse` beside it) and
+/// `phases/<pid>.driver` in the run directory. A stock driver leaves neither.
+pub fn units_from_wrapper_procs(procs: &[ProcRecord], run_dir: &Path) -> Vec<Unit> {
     procs
         .iter()
         .filter(|p| p.comm == "clippy-driver")
@@ -532,7 +535,32 @@ pub fn units_from_wrapper_procs(procs: &[ProcRecord]) -> Vec<Unit> {
                 .unwrap_or_default()
                 .to_owned();
             let wall = (p.last_seen - p.first_seen).max(0.0);
+            let ledger = run_dir.join("phases").join(format!("{}.tsv", p.pid));
+            let read = |path: std::path::PathBuf| std::fs::read_to_string(path).ok();
+            let passes = read(ledger.clone())
+                .map(|text| crate::shim::parse_phase_ledger(&text))
+                .unwrap_or_default();
+            let frontend_threads = read(ledger.with_extension("driver"))
+                .and_then(|text| {
+                    text.lines()
+                        .find_map(|l| l.strip_prefix("frontend_threads\t")?.trim().parse().ok())
+                })
+                .or_else(|| {
+                    args.iter()
+                        .find_map(|a| a.strip_prefix("-Zthreads=")?.parse().ok())
+                });
             Some(Unit {
+                frontend_threads,
+                phase_coverage: if passes.is_empty() {
+                    ""
+                } else {
+                    "native-ledger"
+                }
+                .into(),
+                passes,
+                reuse: read(ledger.with_extension("tsv.reuse"))
+                    .map(|text| crate::reuse::parse(&text))
+                    .unwrap_or_default(),
                 package: crate_name.replace('_', "-"),
                 build_script: crate_name.starts_with("build_script_"),
                 crate_name,
@@ -2683,17 +2711,44 @@ mod tests {
             cpu_secs: 4.0,
             max_rss_mb: 700.0,
         };
-        let units = units_from_wrapper_procs(&[
-            p("cargo", "/usr/bin/cargo check"),
-            p(
-                "clippy-driver",
-                "/usr/bin/clippy-driver /h/.justrust/bin/shim/rustc --crate-name my_app \
+        let dir =
+            std::env::temp_dir().join(format!("justrust-clippy-units-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("phases")).unwrap();
+        std::fs::write(
+            dir.join("phases/7.tsv"),
+            "type_check_crate\t1.5\t1\nmisc_checking_3\t0.5\t1\ntotal\t2.4\t1\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("phases/7.driver"), "frontend_threads\t16\n").unwrap();
+        let mut linted = p(
+            "clippy-driver",
+            "/t/jr-1/bin/clippy-driver /h/shim/rustc --crate-name my_app src/lib.rs",
+        );
+        linted.pid = 7;
+        let units = units_from_wrapper_procs(
+            &[
+                p("cargo", "/usr/bin/cargo check"),
+                p(
+                    "clippy-driver",
+                    "/usr/bin/clippy-driver /h/.justrust/bin/shim/rustc --crate-name my_app \
                  --edition=2024 src/lib.rs --crate-type lib --emit=dep-info,metadata --test",
-            ),
-            p("rustc", "/h/.justrust/bin/shim/rustc --crate-name serde"),
-        ]);
-        assert_eq!(units.len(), 1);
+                ),
+                p("rustc", "/h/.justrust/bin/shim/rustc --crate-name serde"),
+                linted,
+            ],
+            &dir,
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(units.len(), 2);
+        // Our driver's ledger and thread count, found by process id.
+        let timed = &units[1];
+        assert_eq!(timed.frontend_threads, Some(16));
+        assert_eq!(timed.phase_coverage, "native-ledger");
+        assert_eq!(split_passes(&timed.passes).unwrap().frontend, 2.0);
+        // A stock driver leaves no ledger: single-threaded, no phases.
         let u = &units[0];
+        assert_eq!(u.frontend_threads, None);
+        assert!(u.passes.is_empty() && u.phase_coverage.is_empty());
         assert_eq!(
             (u.crate_name.as_str(), u.package.as_str()),
             ("my_app", "my-app")

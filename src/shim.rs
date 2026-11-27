@@ -455,7 +455,7 @@ fn phase_ledger_environment(cmd: &mut Command, ledger: Option<&std::path::Path>)
 }
 
 /// Parse a phase ledger: `label\tseconds\tcount` per line.
-fn parse_phase_ledger(text: &str) -> Vec<Pass> {
+pub(crate) fn parse_phase_ledger(text: &str) -> Vec<Pass> {
     text.lines()
         .filter_map(|l| {
             let mut f = l.split('\t');
