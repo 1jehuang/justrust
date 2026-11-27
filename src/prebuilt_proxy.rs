@@ -36,6 +36,13 @@ const WORKER_THREADS: usize = 64;
 const REFRESH_THREADS: usize = 4;
 const REFRESH_QUEUE_CAP: usize = 1024;
 const INDEX_TTL_SECS: f64 = 600.0;
+/// Oldest index the mirror serves while it refreshes in the background. The
+/// shim treats the copy it gets as current for another `INDEX_TTL_SECS`, and
+/// a key the index lacks is never asked for. The mirror outlives sessions,
+/// so without a bound the first build after an idle night or a toolchain
+/// release answered from an index as old as the previous session and missed
+/// everything the fleet had published since.
+const INDEX_MAX_STALE_SECS: f64 = 2.0 * INDEX_TTL_SECS;
 const MANIFEST_TTL_SECS: f64 = 3600.0;
 const NEGATIVE_TTL: Duration = Duration::from_secs(60);
 const MAX_NEGATIVE_ENTRIES: usize = 16_384;
@@ -432,11 +439,18 @@ fn fetch_cached(state: &State, rel: &str, kind: Kind) -> FetchResult {
     // expires, and refresh asynchronously in the bounded background pool.
     // Bundles referenced by manifests are content-addressed and verified on
     // unpack, so serving a slightly stale append-only manifest is always safe.
-    if matches!(kind, Kind::Mutable { .. }) && dst.is_file() {
+    // The index is the exception: it decides which keys are asked for at
+    // all, so a copy past its bound is refetched first (and still served if
+    // no upstream answers).
+    let too_stale = rel == "index" && !fresh_file(&dst, INDEX_MAX_STALE_SECS);
+    if matches!(kind, Kind::Mutable { .. }) && dst.is_file() && !too_stale {
         schedule_refresh(state, rel, kind, &dst);
         return FetchResult::Hit(dst);
     }
     if is_neg_cached(state, rel) {
+        if too_stale && dst.is_file() {
+            return FetchResult::Hit(dst);
+        }
         return FetchResult::Missing;
     }
 
@@ -464,6 +478,9 @@ fn fetch_cached(state: &State, rel: &str, kind: Kind) -> FetchResult {
         if is_neg_cached(state, rel) {
             return FetchResult::Missing;
         }
+        if too_stale && dst.is_file() {
+            return FetchResult::Hit(dst);
+        }
         return FetchResult::Error;
     }
 
@@ -479,7 +496,11 @@ fn fetch_cached(state: &State, rel: &str, kind: Kind) -> FetchResult {
         cv.notify_all();
     }
 
-    result
+    match result {
+        // Fail open: an old index beats none when the store is unreachable.
+        FetchResult::Error if too_stale && dst.is_file() => FetchResult::Hit(dst),
+        r => r,
+    }
 }
 
 enum One {
@@ -1137,5 +1158,80 @@ mod tests {
         assert_eq!(upstream_hits.load(Ordering::Relaxed), 1);
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Write `body` as the mirror's index, last refreshed `age` ago.
+    fn old_index(dir: &Path, body: &[u8], age: Duration) {
+        let p = dir.join("v1/index");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, body).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    }
+
+    #[test]
+    fn index_left_by_an_earlier_session_is_refetched_before_it_is_served() {
+        let new = format!("{}\n{}\n", key(1), key(2)).into_bytes();
+        let (store, hits) = fake_store(vec![("/v1/index".into(), new.clone())], Duration::ZERO);
+        let dir = test_dir("old-index");
+        // Yesterday's index lacks the key the fleet published since.
+        old_index(
+            &dir,
+            format!("{}\n", key(1)).as_bytes(),
+            Duration::from_secs(86_400),
+        );
+        let base = start(store, dir.clone()).unwrap();
+        let dst = dir.join("got");
+        assert!(matches!(
+            depcache_prebuilt::get(&base, "index", &dst, 5, 1 << 20),
+            depcache_prebuilt::Got::Ok
+        ));
+        assert_eq!(std::fs::read(&dst).unwrap(), new);
+        assert_eq!(hits.load(Ordering::Relaxed), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Within the bound it is still served at once and refreshed behind.
+        let (store, _) = fake_store(
+            vec![("/v1/index".into(), new.clone())],
+            Duration::from_millis(300),
+        );
+        let dir = test_dir("recent-index");
+        let recent = format!("{}\n", key(1)).into_bytes();
+        old_index(
+            &dir,
+            &recent,
+            Duration::from_secs(INDEX_TTL_SECS as u64 + 60),
+        );
+        let base = start(store, dir.clone()).unwrap();
+        let dst = dir.join("got");
+        assert!(matches!(
+            depcache_prebuilt::get(&base, "index", &dst, 5, 1 << 20),
+            depcache_prebuilt::Got::Ok
+        ));
+        assert_eq!(std::fs::read(&dst).unwrap(), recent);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn old_index_is_served_when_no_upstream_answers() {
+        // Bound and immediately closed: connections are refused.
+        let dead = TcpListener::bind("127.0.0.1:0").unwrap();
+        let store = format!("http://{}", dead.local_addr().unwrap());
+        drop(dead);
+        let dir = test_dir("old-index-offline");
+        let body = format!("{}\n", key(1)).into_bytes();
+        old_index(&dir, &body, Duration::from_secs(86_400));
+        let base = start(store, dir.clone()).unwrap();
+        let dst = dir.join("got");
+        assert!(matches!(
+            depcache_prebuilt::get(&base, "index", &dst, 5, 1 << 20),
+            depcache_prebuilt::Got::Ok
+        ));
+        assert_eq!(std::fs::read(&dst).unwrap(), body);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
