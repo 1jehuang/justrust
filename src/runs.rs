@@ -446,7 +446,9 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
     };
     {
         let f = floor;
-        let ratio = if f.total_secs > 0.0 {
+        // A run ended by a signal did not finish: its wall time is not a
+        // build time to hold against the floor.
+        let ratio = if f.total_secs > 0.0 && !crate::summary::signal_exit(s.exit) {
             format!(" ({:.1}x above theoretical optimal)", s.wall / f.total_secs)
         } else {
             String::new()
@@ -493,6 +495,14 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
         )
     } else if s.tests.failed > 0 {
         format!("exit {} ({} tests failed)", s.exit, s.tests.failed)
+    } else if crate::summary::signal_exit(s.exit) && !s.units.cut.is_empty() {
+        format!(
+            "exit {} (killed while compiling {})",
+            s.exit,
+            s.units.cut.join(", ")
+        )
+    } else if crate::summary::signal_exit(s.exit) {
+        format!("exit {} (killed)", s.exit)
     } else {
         format!("exit {}", s.exit)
     };
@@ -1012,6 +1022,31 @@ mod tail_tests {
                 assert!(report.contains(&labels.join(", ")), "{report}");
             }
         }
+    }
+
+    #[test]
+    fn show_does_not_score_a_killed_run_and_says_what_was_cut() {
+        let missing = std::path::Path::new("/nonexistent/justrust-killed-test");
+        let mut s = Summary {
+            subcommand: "build".into(),
+            exit: 143,
+            wall: 6.0,
+            ..Default::default()
+        };
+        s.units.cut = vec!["justrust".into()];
+        let report = render(&s, missing);
+        assert!(!report.contains("above theoretical optimal"), "{report}");
+        assert!(
+            report.contains("result   exit 143 (killed while compiling justrust)"),
+            "{report}"
+        );
+        s.units.cut.clear();
+        assert!(render(&s, missing).contains("result   exit 143 (killed)"));
+        // A run that ended by itself is still held against its floor.
+        s.exit = 0;
+        let report = render(&s, missing);
+        assert!(report.contains("above theoretical optimal"), "{report}");
+        assert!(report.contains("result   exit 0\n"), "{report}");
     }
 
     #[test]
