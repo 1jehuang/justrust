@@ -142,8 +142,8 @@ pub fn exit_eligible(diags: &[Diag]) -> bool {
     !diags.is_empty() && diags.iter().all(|d| !d.code.is_empty())
 }
 
-/// `JUSTRUST_EARLY`: unset or `0` = off, `auto` = query a running daemon
-/// and start one for workspaces with recent agent builds (`maybe_autostart`),
+/// `JUSTRUST_EARLY`: unset or `auto` = query a running daemon and start one
+/// for workspaces with recent agent builds (`maybe_autostart`), `0` = off,
 /// `query` = query a running daemon only, anything else = on (query, and
 /// start the daemon on first use). Remote startup requires a machine-local
 /// launcher.json argv prefix so resource policy failures never start unbounded.
@@ -166,8 +166,8 @@ pub fn mode() -> Mode {
 fn parse_mode(value: Option<&str>, exit: bool) -> Mode {
     match value {
         None if exit => Mode::On,
-        Some("0" | "off" | "no" | "false") | None => Mode::Off,
-        Some("auto") => Mode::Auto,
+        None | Some("auto") => Mode::Auto,
+        Some("0" | "off" | "no" | "false") => Mode::Off,
         Some("query") => Mode::Query,
         Some(_) => Mode::On,
     }
@@ -1933,7 +1933,7 @@ mod tests {
     fn query_mode_never_requests_autostart_or_early_exit() {
         assert_eq!(parse_mode(Some("query"), false), Mode::Query);
         assert_eq!(parse_mode(Some("query"), true), Mode::Query);
-        assert_eq!(parse_mode(None, false), Mode::Off);
+        assert_eq!(parse_mode(None, false), Mode::Auto);
         assert_eq!(parse_mode(None, true), Mode::On);
         assert_eq!(parse_mode(Some("auto"), false), Mode::Auto);
         assert_eq!(parse_mode(Some("0"), true), Mode::Off);
