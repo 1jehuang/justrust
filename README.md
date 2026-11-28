@@ -21,13 +21,21 @@ justrust vertically integrates and optimizes the Rust build toolchain to make
 the entire edit, check, and test loop faster. Use it locally or with our remote
 build service.
 
-[uv benchmarks](docs/readme-uv-benchmark-20261014.md), median of three rounds. Factors are relative to Stock Cargo.
+Holistic benchmarks (`bench/holistic.py`, `v0.1.74`–`v0.1.78` remote hosted vs local Stock Cargo on Intel Core Ultra X9):
 
-| Operation | Stock Cargo (local) | justrust (local) | justrust (remote) |
-|---|---:|---:|---:|
-| Fresh checkout, `check --workspace` | 81.2 s | **34.5 s (2.35×)** | **14.3 s (5.66×)** |
-| Fresh checkout, `test -p uv-resolver --no-run` | 85.8 s | **33.3 s (2.58×)** | **15.2 s (5.63×)** |
-| Warm one-line body edit, `check -p uv-resolver` | 0.96 s | 0.85 s (1.13×) | 0.89 s (1.07×) |
+| Scenario | Category | Stock Cargo (local) | justrust (remote) | Speedup |
+|---|---|---:|---:|---:|
+| `jcode` release build | Cold clone | 653.5 s | **68.3 s** | **9.6×** |
+| `jcode-tui` lib test | Fresh worktree | 218.1 s | **41.0 s** | **5.3×** |
+| `uv-resolver` check | Fresh worktree | 35.0 s | **7.9 s** | **4.4×** |
+| `jcode-tui` lib test | Cold clone | 221.8 s | **53.8 s** | **4.1×** |
+| `ripgrep` release build | Cold clone | 15.2 s | **5.3 s** | **2.9×** |
+| `jcode-tui` lib test | Agent-paced (5 s gap) | 10.7 s | **5.1 s** | **2.1×** |
+| `jcode` bin check | Warm edit (0 ms gap) | 4.3 s | **2.9 s** | **1.5×** |
+| `jcode-tui` lib test | Warm edit (0 ms gap) | 10.7 s | **8.4 s** | **1.3×** |
+| 4-agent parallel swarm | Swarm | 10.8 s | **10.0 s** | **1.1×** |
+
+*(Earlier Oct 14 `uv` local/remote comparison: [docs/readme-uv-benchmark-20261014.md](docs/readme-uv-benchmark-20261014.md).)*
 
 Your coding agents spend valuable time waiting for Rust checks, builds, and
 tests. Running those operations locally can slow down your machine, drive up
