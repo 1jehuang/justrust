@@ -33,7 +33,7 @@ fn list(home: &Path, cwd: &Path, limit: usize, flags: &[&str]) -> Vec<Value> {
 }
 
 #[test]
-fn history_cli_preserves_limits_filters_and_duplicates() {
+fn history_cli_filters_and_limits_the_latest_row_per_run() {
     let base = std::env::var_os("JCODE_SCRATCH_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
@@ -49,18 +49,18 @@ fn history_cli_preserves_limits_filters_and_duplicates() {
     let mut entries = Vec::new();
     for i in 0..600 {
         let mut entry = json!({
-            // Repeated IDs are separate retained index entries, not a set.
+            // Two receipts for each run, with deliberately different metadata.
             "id": format!("run-{}", i / 2),
             "cwd": if i % 3 == 0 { &cwd } else { &elsewhere },
             "args": ["test", &format!("case-{i}")],
             "start": i as f64,
-            "exit": if i % 4 == 0 { 101 } else { 0 },
+            "exit": if matches!(i % 8, 0 | 3 | 7) { 101 } else { 0 },
             "wall": 0.0, "cpu_secs": 0.0, "compile": 0.0, "test_run": 0.0,
             "units_compiled": 0, "top_unit": null, "compile_failed": false,
             "agent_session": null
         });
-        if i % 4 == 0 {
-            entry["failure"] = json!(if i % 8 == 0 { "infra" } else { "user_code" });
+        if entry["exit"] != 0 {
+            entry["failure"] = json!(if i % 8 == 7 { "user_code" } else { "infra" });
         }
         entries.push(entry);
     }
@@ -85,7 +85,10 @@ fn history_cli_preserves_limits_filters_and_duplicates() {
             }
             for limit in [0, 1, 17, 200, 1000] {
                 let mut expected: Vec<_> = entries
-                    .iter()
+                    // Only the second receipt in each pair is authoritative,
+                    // even when the first receipt would match a filter.
+                    .chunks_exact(2)
+                    .map(|pair| &pair[1])
                     .filter(|e| {
                         if here
                             && !e["cwd"]
