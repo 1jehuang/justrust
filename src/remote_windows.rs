@@ -10,21 +10,24 @@ use std::process::Stdio;
 
 pub const TARGET: &str = "x86_64-pc-windows-msvc";
 pub const TRANSPORT: &str = "windows-powershell-v1";
+pub const MACOS_TARGET: &str = "aarch64-apple-darwin";
+pub const MACOS_TRANSPORT: &str = "native_macos_tunnel";
 const AGENT: &str = r"C:\ProgramData\Justrust\hosted-agent.ps1";
 const MAX_SOURCE: usize = 64 << 20;
 const MAX_FRAME: usize = 1 << 20;
 const MAX_CHUNK: usize = 256 << 10;
 const MAX_ARTIFACT: u64 = 512 << 20;
 
-fn platform_value(value: &str) -> Result<bool> {
+fn platform_value(value: &str) -> Result<&'static str> {
     match value {
-        "linux" => Ok(false),
-        "windows" => Ok(true),
-        _ => bail!("unsupported hosted platform {value:?}: expected linux or windows"),
+        "linux" => Ok("linux"),
+        "windows" => Ok("windows"),
+        "macos" => Ok("macos"),
+        _ => bail!("unsupported hosted platform {value:?}: expected linux, windows, or macos"),
     }
 }
 
-pub fn selected() -> Result<bool> {
+pub fn selected_platform() -> Result<&'static str> {
     if let Some(value) = std::env::var_os("JUSTRUST_HOST_PLATFORM") {
         return platform_value(value.to_str().context("host platform is not UTF-8")?);
     }
@@ -34,9 +37,13 @@ pub fn selected() -> Result<bool> {
             &serde_json::from_slice::<String>(&data)
                 .context("invalid hosted platform selection")?,
         ),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok("linux"),
         Err(e) => Err(e.into()),
     }
+}
+
+pub fn selected() -> Result<bool> {
+    Ok(selected_platform()? == "windows")
 }
 
 pub fn select(value: &str) -> Result<()> {
@@ -79,8 +86,10 @@ pub fn setup_args(args: &[String]) -> Result<String> {
     }
     let platform = platform.unwrap_or("linux");
     ensure!(
-        target.is_none() || (platform == "windows" && target == Some(TARGET)),
-        "hosted Windows requires --platform windows --target {TARGET}"
+        target.is_none()
+            || (platform == "windows" && target == Some(TARGET))
+            || (platform == "macos" && target == Some(MACOS_TARGET)),
+        "hosted platform target mismatch: windows requires {TARGET}, macos requires {MACOS_TARGET}"
     );
     Ok(platform.into())
 }
@@ -1126,9 +1135,13 @@ mod tests {
             setup_args(&strings(&["--platform=windows", "--target", TARGET])).unwrap(),
             "windows"
         );
+        assert_eq!(
+            setup_args(&strings(&["--platform=macos", "--target", MACOS_TARGET])).unwrap(),
+            "macos"
+        );
         for args in [
             vec!["windows"],
-            vec!["--platform", "macos"],
+            vec!["--platform", "freebsd"],
             vec!["--platform"],
             vec!["--target", TARGET],
             vec![
@@ -1141,8 +1154,9 @@ mod tests {
         ] {
             assert!(setup_args(&strings(&args)).is_err(), "{args:?}");
         }
-        assert!(!platform_value("linux").unwrap());
-        assert!(platform_value("windows").unwrap());
+        assert_eq!(platform_value("linux").unwrap(), "linux");
+        assert_eq!(platform_value("windows").unwrap(), "windows");
+        assert_eq!(platform_value("macos").unwrap(), "macos");
         assert!(platform_value("Linux").is_err());
     }
 

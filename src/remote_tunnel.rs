@@ -28,6 +28,8 @@ use tungstenite::{Error, Message};
 pub const ARG: &str = "__tunnel";
 /// argv[2] for the native Windows worker's relay.
 pub const WINDOWS_ARG: &str = "windows";
+/// argv[2] for the native macOS worker's relay.
+pub const MACOS_ARG: &str = "macos";
 
 /// One WebSocket frame of ssh bytes. Well under the relay's message limit.
 const CHUNK: usize = 32 * 1024;
@@ -35,8 +37,12 @@ const CHUNK: usize = 32 * 1024;
 const READ_BURST: usize = 64;
 
 pub fn main() -> ! {
-    let windows = std::env::args().nth(2).as_deref() == Some(WINDOWS_ARG);
-    match run(windows) {
+    let platform = match std::env::args().nth(2).as_deref() {
+        Some(WINDOWS_ARG) => "windows",
+        Some(MACOS_ARG) => "macos",
+        _ => "linux",
+    };
+    match run(platform) {
         Ok(()) => std::process::exit(0),
         Err(e) => {
             eprintln!("justrust tunnel: {e:#}");
@@ -45,10 +51,10 @@ pub fn main() -> ! {
     }
 }
 
-fn run(windows: bool) -> Result<()> {
+fn run(platform: &str) -> Result<()> {
     let creds = crate::remote_hosted::creds()?;
     crate::remote_status_watch::select_tls_provider();
-    let (url, authorization) = creds.tunnel_request(windows);
+    let (url, authorization) = creds.tunnel_request_platform(platform);
     let mut request = url.into_client_request()?;
     request.headers_mut().insert("Authorization", authorization);
     let host = request
@@ -326,11 +332,19 @@ fn pump(mut socket: Socket, raw: TcpStream) -> Result<()> {
 /// The `ProxyCommand` value that runs this binary as the relay client, or
 /// `None` when the executable path cannot be expressed.
 pub fn proxy_command(windows_worker: bool) -> Option<String> {
+    proxy_command_platform(if windows_worker { "windows" } else { "linux" })
+}
+
+pub fn proxy_command_platform(platform: &str) -> Option<String> {
     let exe = crate::procfs::running_executable_path().ok()?;
-    proxy_command_for(exe.to_str()?, windows_worker)
+    proxy_command_for_platform(exe.to_str()?, platform)
 }
 
 fn proxy_command_for(exe: &str, windows_worker: bool) -> Option<String> {
+    proxy_command_for_platform(exe, if windows_worker { "windows" } else { "linux" })
+}
+
+fn proxy_command_for_platform(exe: &str, platform: &str) -> Option<String> {
     // A running binary replaced by self-update reads back with this suffix on
     // Linux. The path itself is the new release.
     let exe = exe.strip_suffix(" (deleted)").unwrap_or(exe);
@@ -347,9 +361,12 @@ fn proxy_command_for(exe: &str, windows_worker: bool) -> Option<String> {
     };
     // ssh expands %-tokens in ProxyCommand.
     let mut command = format!("{} {ARG}", quoted.replace('%', "%%"));
-    if windows_worker {
+    if platform == "windows" {
         command.push(' ');
         command.push_str(WINDOWS_ARG);
+    } else if platform == "macos" {
+        command.push(' ');
+        command.push_str(MACOS_ARG);
     }
     Some(command)
 }

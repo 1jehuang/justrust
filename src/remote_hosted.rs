@@ -41,10 +41,10 @@ pub const DEFAULT_API_BASE: &str = "https://api.jcode.sh/v1";
 pub const DEFAULT_BUILD_BASE: &str = "https://build.jcode.sh/v1";
 
 fn host_status_path() -> Result<&'static str> {
-    Ok(if crate::remote_windows::selected()? {
-        "build/host?platform=windows&target=x86_64-pc-windows-msvc"
-    } else {
-        "build/host"
+    Ok(match crate::remote_windows::selected_platform()? {
+        "windows" => "build/host?platform=windows&target=x86_64-pc-windows-msvc",
+        "macos" => "build/host?platform=macos&target=aarch64-apple-darwin",
+        _ => "build/host",
     })
 }
 const ENV_FILE: &str = "jcode-subscription.env";
@@ -265,10 +265,17 @@ impl Creds {
     /// The 443 relay to this account's own build machine (`remote_tunnel`).
     /// The server chooses the destination from the key, never the client.
     pub(crate) fn tunnel_request(&self, windows: bool) -> (String, tungstenite::http::HeaderValue) {
-        let url = self.url(if windows {
-            "build/tunnel?platform=windows"
-        } else {
-            "build/tunnel"
+        self.tunnel_request_platform(if windows { "windows" } else { "linux" })
+    }
+
+    pub(crate) fn tunnel_request_platform(
+        &self,
+        platform: &str,
+    ) -> (String, tungstenite::http::HeaderValue) {
+        let url = self.url(match platform {
+            "windows" => "build/tunnel?platform=windows",
+            "macos" => "build/tunnel?platform=macos",
+            _ => "build/tunnel",
         });
         let url = if let Some(rest) = url.strip_prefix("https://") {
             format!("wss://{rest}")
@@ -1892,7 +1899,12 @@ fn parse_ready(b: &Value) -> Result<Ready> {
 }
 
 fn parse_ready_for(b: &Value, windows: bool) -> Result<Ready> {
-    let expected = if windows { "windows" } else { "linux" };
+    parse_ready_for_platform(b, if windows { "windows" } else { "linux" })
+}
+
+fn parse_ready_for_platform(b: &Value, expected: &str) -> Result<Ready> {
+    let windows = expected == "windows";
+    let macos = expected == "macos";
     if b.get("platform")
         .is_some_and(|p| p.as_str() != Some(expected))
         || (windows
@@ -1903,7 +1915,15 @@ fn parse_ready_for(b: &Value, windows: bool) -> Result<Ready> {
                 || b["ssh_certificate"]
                     .as_str()
                     .is_none_or(|c| c.is_empty() || c.contains(['\r', '\n']))))
+        || (macos
+            && (b["platform"] != "macos"
+                || b["transport"] != crate::remote_windows::MACOS_TRANSPORT
+                || b["target"] != crate::remote_windows::MACOS_TARGET
+                || b["ssh_certificate"]
+                    .as_str()
+                    .is_none_or(|c| c.is_empty() || c.contains(['\r', '\n']))))
         || (!windows
+            && !macos
             && b.get("transport")
                 .is_some_and(|t| !matches!(t.as_str(), Some("ssh" | "linux"))))
     {
@@ -1999,9 +2019,13 @@ fn connect_with_mode(
     mut progress: impl FnMut(&str),
 ) -> Result<Ready> {
     let start = Instant::now();
-    let windows = crate::remote_windows::selected()?;
+    let platform = crate::remote_windows::selected_platform()?;
+    let windows = platform == "windows";
+    let macos = platform == "macos";
     let mut body = if windows {
         json!({ "public_key": public_key.trim(), "platform": "windows", "target": crate::remote_windows::TARGET })
+    } else if macos {
+        json!({ "public_key": public_key.trim(), "platform": "macos", "target": crate::remote_windows::MACOS_TARGET })
     } else {
         json!({ "public_key": public_key.trim(), "platform": "linux", "native_transport": native_mode != Some(false), "native_only": native_only_requested(native_mode) })
     };
@@ -2033,7 +2057,7 @@ fn connect_with_mode(
         }
         match r.code {
             200 if r.body["ready"].as_bool() != Some(false) => {
-                let ready = parse_ready_for(&r.body, windows)?;
+                let ready = parse_ready_for_platform(&r.body, platform)?;
                 if windows {
                     crate::remote_windows::verify_certificate(
                         ready
@@ -2145,10 +2169,10 @@ pub fn dev_mode() -> bool {
 }
 
 pub fn dir() -> Result<PathBuf> {
-    let d = if crate::remote_windows::selected()? {
-        crate::remote::dir()?.join("hosted/windows/x86_64-pc-windows-msvc")
-    } else {
-        crate::remote::dir()?.join("hosted")
+    let d = match crate::remote_windows::selected_platform()? {
+        "windows" => crate::remote::dir()?.join("hosted/windows/x86_64-pc-windows-msvc"),
+        "macos" => crate::remote::dir()?.join("hosted/macos/aarch64-apple-darwin"),
+        _ => crate::remote::dir()?.join("hosted"),
     };
     std::fs::create_dir_all(&d)?;
     set_mode(&d, 0o700);
@@ -2279,7 +2303,9 @@ fn proxy_for(tunnel: bool) -> Option<String> {
     if !tunnel {
         return None;
     }
-    crate::remote_tunnel::proxy_command(crate::remote_windows::selected().unwrap_or(false))
+    crate::remote_tunnel::proxy_command_platform(
+        crate::remote_windows::selected_platform().unwrap_or("linux"),
+    )
 }
 
 fn now() -> u64 {
