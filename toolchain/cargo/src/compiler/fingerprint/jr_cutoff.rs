@@ -195,10 +195,12 @@ fn read_record(record: &Path) -> Option<Record> {
                 if val.len() != 32 || !val.bytes().all(|b| b.is_ascii_hexdigit()) {
                     return None;
                 }
-                r.deps.push((PathBuf::from(path), DepExpect::Iface(val.to_string())));
+                r.deps
+                    .push((PathBuf::from(path), DepExpect::Iface(val.to_string())));
             }
             "mtime" => {
-                r.deps.push((PathBuf::from(path), DepExpect::Mtime(val.to_string())));
+                r.deps
+                    .push((PathBuf::from(path), DepExpect::Mtime(val.to_string())));
             }
             "out" => r.outs.push((PathBuf::from(path), val.to_string())),
             _ => return None,
@@ -272,7 +274,8 @@ impl CutoffPlan {
             return false;
         }
         // Lazily loaded per-item dependency requirements from our own `.rmeta.jrdeps`.
-        let mut jrdeps: Option<Option<std::collections::HashMap<String, Option<DepItemReqs>>>> = None;
+        let mut jrdeps: Option<Option<std::collections::HashMap<String, Option<DepItemReqs>>>> =
+            None;
         for (p, expect) in &r.deps {
             match expect {
                 DepExpect::Iface(h) => {
@@ -411,7 +414,10 @@ fn read_jritems(rmeta: &Path) -> Option<CrateItemHashes> {
         items.push((dph, h));
     }
     items.sort_unstable_by_key(|&(k, _)| k);
-    Some(CrateItemHashes { crate_iface_hash, items })
+    Some(CrateItemHashes {
+        crate_iface_hash,
+        items,
+    })
 }
 
 fn read_jrdeps(rmeta: &Path) -> Option<std::collections::HashMap<String, Option<DepItemReqs>>> {
@@ -429,7 +435,9 @@ fn read_jrdeps(rmeta: &Path) -> Option<std::collections::HashMap<String, Option<
     for _ in 0..dep_count {
         let name_len = read_u32_le(&bytes, &mut off)? as usize;
         let name_end = off.checked_add(name_len)?;
-        let name = std::str::from_utf8(bytes.get(off..name_end)?).ok()?.to_string();
+        let name = std::str::from_utf8(bytes.get(off..name_end)?)
+            .ok()?
+            .to_string();
         off = name_end;
         let has_reqs = *bytes.get(off)?;
         off += 1;
@@ -444,7 +452,11 @@ fn read_jrdeps(rmeta: &Path) -> Option<std::collections::HashMap<String, Option<
                 let h = read_16(&bytes, &mut off)?;
                 items.push((dph, h));
             }
-            Some(DepItemReqs { read_crate_level, crate_iface_hash, items })
+            Some(DepItemReqs {
+                read_crate_level,
+                crate_iface_hash,
+                items,
+            })
         } else {
             None
         };
@@ -649,9 +661,16 @@ mod tests {
         let item_other = ([0x02; 16], [0x22; 16]);
         write_fake_jritems(&dep_used, crate_h, &[item_used, item_other]);
         // `libme` only loaded `libused` (reading `item_used`, plus crate-level) and never loaded `libunused`.
-        write_fake_jrdeps(&out, &[("libused.rmeta", Some((true, crate_h, &[item_used])))]);
+        write_fake_jrdeps(
+            &out,
+            &[("libused.rmeta", Some((true, crate_h, &[item_used])))],
+        );
 
-        write_record(&record, &[dep_used.clone(), dep_unused.clone()], &[out.clone()]);
+        write_record(
+            &record,
+            &[dep_used.clone(), dep_unused.clone()],
+            &[out.clone()],
+        );
         let plan = CutoffPlan {
             record: record.clone(),
             rmeta_deps: vec![dep_used.clone(), dep_unused.clone()],
@@ -678,10 +697,17 @@ mod tests {
 
         // 4. Re-record, then change crate_iface_hash (e.g. new trait impl) -> MUST REBUILD!
         write_fake_jritems(&dep_used, crate_h, &[item_used, item_other]);
-        write_record(&record, &[dep_used.clone(), dep_unused.clone()], &[out.clone()]);
+        write_record(
+            &record,
+            &[dep_used.clone(), dep_unused.clone()],
+            &[out.clone()],
+        );
         fake_rmeta(&dir, "libused.rmeta", 4);
         write_fake_jritems(&dep_used, [0xBB; 16], &[item_used, item_other]);
-        assert!(!plan.probe(), "crate-level hash change must rebuild when read_crate_level=true");
+        assert!(
+            !plan.probe(),
+            "crate-level hash change must rebuild when read_crate_level=true"
+        );
 
         fs::remove_dir_all(&dir).unwrap();
     }
