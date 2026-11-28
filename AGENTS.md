@@ -159,6 +159,20 @@ work behind opt-in flags, canaries that never graduate, or later releases.
   in one step. There is no separate unpromoted candidate step and no nightly
   pipeline, on purpose. Do not let hosted fall behind `stable`.
 
+## Minimize flags and opt-ins: good optimizations are on by default
+
+Do not accumulate opt-in flags, config knobs, or permanent experiment switches.
+
+- **Good optimizations are on by default.** Once an optimization is measurably
+  faster and correct, enable it by default in the same session. Do not leave
+  useful optimizations parked behind `JUSTRUST_*=1` opt-ins.
+- **Delete what does not pay off.** If an experiment does not win or is
+  superseded, remove the code and its flag instead of keeping it around as an
+  opt-in.
+- **Keep kill switches rare and temporary.** Only keep an opt-out env var when
+  needed for fast rollback or controlled A/B measurement, and prune obsolete
+  flags once the default is proven stable.
+
 ## Git workflow
 
 - Work directly on `stable` in this checkout. No feature branches, no git
