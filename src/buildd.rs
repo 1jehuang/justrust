@@ -33,7 +33,7 @@
 //! daemon from another justrust build before any output arrived means the
 //! build runs in the client as before. On by default for non-terminal
 //! agent builds on Linux; `JUSTRUST_BUILDD=0` disables the daemon,
-//! `JUSTRUST_BUILDD_PREBUILD=0` only prebuilds (FINDINGS.md, build daemon).
+//! `JUSTRUST_BUILDD_PREBUILD=1` opts into speculative prebuilds (off by default).
 //! Experimental `JUSTRUST_BUILDD_NATIVE_EMPTY=1` skips source validation only
 //! when no active or finished candidate exists. Native Cargo still runs, and
 //! the unvalidated execution can never be attached to or replayed.
@@ -1254,7 +1254,7 @@ struct State {
     last_request: Option<Instant>,
 }
 
-/// A request to prebuild when its sources change (`JUSTRUST_BUILDD_PREBUILD=0` disables).
+/// A request to prebuild when its sources change (`JUSTRUST_BUILDD_PREBUILD=1` enables).
 struct Recent {
     req: Request,
     roots: Vec<PathBuf>,
@@ -2094,11 +2094,11 @@ fn cancel_stale_prebuild(dm: &Daemon, key: &str, stamp: &str) {
     }
 }
 
-/// On by default; `JUSTRUST_BUILDD_PREBUILD=0` turns it off.
+/// Off by default; `JUSTRUST_BUILDD_PREBUILD=1` opts in.
 fn wants_prebuild(req: &Request) -> bool {
-    !req.env.iter().any(|(k, v)| {
-        k == "JUSTRUST_BUILDD_PREBUILD" && matches!(v.as_str(), "0" | "off" | "false")
-    })
+    req.env
+        .iter()
+        .any(|(k, v)| k == "JUSTRUST_BUILDD_PREBUILD" && matches!(v.as_str(), "1" | "on" | "true"))
 }
 
 fn is_test(argv: &[String]) -> bool {
