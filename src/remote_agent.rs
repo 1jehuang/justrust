@@ -1485,6 +1485,14 @@ fn hosted_warm_resident_dir(cwd: &Path, env: &[(String, String)]) -> Option<Path
         }) {
             return None;
         }
+        // Resident Cargo RPC requires an owned `jr-*` toolchain; skip when
+        // the caller explicitly pinned `system` or a stock nightly toolchain.
+        if env
+            .iter()
+            .any(|(k, v)| k == "JUSTRUST_TOOLCHAIN" && !v.starts_with("jr-"))
+        {
+            return None;
+        }
         if !workspace_has_warm_target(cwd, env) {
             return None;
         }
