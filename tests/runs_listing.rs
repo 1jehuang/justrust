@@ -87,8 +87,9 @@ fn history_cli_filters_and_limits_the_latest_row_per_run() {
                 let mut expected: Vec<_> = entries
                     // Only the second receipt in each pair is authoritative,
                     // even when the first receipt would match a filter.
-                    .chunks_exact(2)
-                    .map(|pair| &pair[1])
+                    .iter()
+                    .skip(1)
+                    .step_by(2)
                     .filter(|e| {
                         if here
                             && !e["cwd"]
