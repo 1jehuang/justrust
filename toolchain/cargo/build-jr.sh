@@ -20,7 +20,12 @@ echo "jr-cargo: building as cargo $release ($channel) to match $tc" >&2
 # libgit2.so.1.9 and failed on Ubuntu 24.04 build hosts). Set
 # JR_CARGO_FEATURES= to link the system libraries instead.
 features=${JR_CARGO_FEATURES-all-static}
-justrust build --release --bin cargo --locked \
+if command -v justrust >/dev/null 2>&1; then
+  builder=justrust
+else
+  builder=cargo
+fi
+"$builder" build --release --bin cargo --locked \
   --config "env.CFG_RELEASE=\"$release\"" --config "env.CFG_RELEASE_CHANNEL=\"$channel\"" \
   ${features:+--features "$features"}
 binary=${CARGO_TARGET_DIR:-target}/release/cargo
