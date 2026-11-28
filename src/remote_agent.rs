@@ -1222,12 +1222,6 @@ fn start_run(
     if !env.iter().any(|(k, _)| k == "JUSTRUST_LOCALCACHE_PORTABLE") {
         c.env("JUSTRUST_LOCALCACHE_PORTABLE", "1");
     }
-    // Auto-provision the resident compiler directory on warm hosted builds so
-    // incremental edits reuse in-memory rustc state without bypassing shim
-    // depcache on cold builds. Opt out with JUSTRUST_CARGO_RESIDENT=0/off.
-    if let Some(dir) = hosted_warm_resident_dir(cwd, env) {
-        c.env("JUSTRUST_CARGO_RESIDENT_DIR", dir);
-    }
     // cargo and rustup live in ~/.cargo/bin, and Homebrew tools (zstd, git)
     // live in /opt/homebrew/bin or /usr/local/bin on macOS, which a non-login
     // ssh shell may not have on PATH.
@@ -1466,90 +1460,8 @@ fn own_run_lifetime(command: &mut Command) {
     let _ = command;
 }
 
-/// Auto-provision a private resident-compiler socket directory on warm Linux
-/// hosted builds so incremental edits reuse in-memory `jr-rustc` state without
-/// bypassing `shim` depcache on cold builds.
-fn hosted_warm_resident_dir(cwd: &Path, env: &[(String, String)]) -> Option<PathBuf> {
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (cwd, env);
-        None
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if env.iter().any(|(k, _)| k == "JUSTRUST_CARGO_RESIDENT_DIR") {
-            return None;
-        }
-        if env.iter().any(|(k, v)| {
-            k == "JUSTRUST_CARGO_RESIDENT" && matches!(v.as_str(), "0" | "off" | "false" | "no")
-        }) {
-            return None;
-        }
-        // Resident Cargo RPC requires an owned `jr-*` toolchain; skip when
-        // the caller explicitly pinned `system` or a stock nightly toolchain.
-        if env
-            .iter()
-            .any(|(k, v)| k == "JUSTRUST_TOOLCHAIN" && !v.starts_with("jr-"))
-        {
-            return None;
-        }
-        if !workspace_has_warm_target(cwd, env) {
-            return None;
-        }
-        let dir = crate::paths::home().ok()?.join("resident-cargo");
-        std::fs::create_dir_all(&dir).ok()?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-        }
-        Some(dir)
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn workspace_has_warm_target(cwd: &Path, env: &[(String, String)]) -> bool {
-    if let Some((_, t)) = env.iter().find(|(k, _)| k == "CARGO_TARGET_DIR") {
-        let p = Path::new(t);
-        return p.join("debug").is_dir() || p.join("release").is_dir();
-    }
-    let Some(root) = cwd
-        .ancestors()
-        .find(|d| d.join("Cargo.lock").is_file())
-        .or_else(|| cwd.ancestors().find(|d| d.join("Cargo.toml").is_file()))
-    else {
-        return false;
-    };
-    let target = root.join("target");
-    target.join("debug").is_dir()
-        || target.join("release").is_dir()
-        || target.join("justrust-slots").is_dir()
-}
-
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn hosted_warm_resident_dir_respects_warmth_and_kill_switch() {
-        let dir = std::env::temp_dir().join(format!("jr-warm-res-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("Cargo.toml"), "[package]\nname=\"x\"\n").unwrap();
-
-        let empty: Vec<(String, String)> = Vec::new();
-        // Cold workspace: stays None so shim depcache runs.
-        assert!(super::hosted_warm_resident_dir(&dir, &empty).is_none());
-
-        // Warm workspace: provisions resident-cargo dir.
-        std::fs::create_dir_all(dir.join("target/debug")).unwrap();
-        assert!(super::hosted_warm_resident_dir(&dir, &empty).is_some());
-
-        // Kill switch disables it.
-        let off = vec![("JUSTRUST_CARGO_RESIDENT".to_string(), "0".to_string())];
-        assert!(super::hosted_warm_resident_dir(&dir, &off).is_none());
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
     #[test]
     fn hosted_early_defaults_respect_client_and_kill_switch() {
         use super::hosted_early_env;
