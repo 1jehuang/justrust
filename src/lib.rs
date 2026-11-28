@@ -31,7 +31,6 @@ mod findings;
 mod gaps;
 mod hints;
 mod history;
-mod hybrid;
 mod incr_gc;
 mod install;
 mod ios_tools;
@@ -48,7 +47,6 @@ mod memgov;
 #[path = "memgov_stub.rs"]
 mod memgov;
 mod msvc_tools;
-mod native;
 mod nolocal;
 mod paths;
 mod peercache;
@@ -191,12 +189,6 @@ enum Command {
         #[command(subcommand)]
         command: InteractiveCommand,
     },
-    /// Experimental local Blaze-derived compiler. Cargo remains the default.
-    #[command(disable_help_flag = true)]
-    Native(Passthrough),
-    /// Experimental ready-resident execution with an explicit Cargo fallback.
-    #[command(disable_help_flag = true)]
-    Hybrid(Passthrough),
     /// Pack or execute portable, trusted test executable bundles.
     TestBundle {
         #[command(subcommand)]
@@ -935,9 +927,6 @@ pub fn main() -> anyhow::Result<()> {
     {
         buildscript::main(PathBuf::from(real), rest.collect());
     }
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__hybrid-prewarm")) {
-        return hybrid::background(std::env::args_os().skip(2).collect());
-    }
     // `justrust __test-runner <binary> ...`: cargo's runner during `test`.
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(test_runner::SUBCOMMAND))
     {
@@ -1005,30 +994,6 @@ pub fn main() -> anyhow::Result<()> {
         let spec = toolchain::Spec::parse(&std::env::args().nth(2).unwrap_or_default())?;
         println!("{}", toolchain::probe_location(&spec)?);
         return Ok(());
-    }
-    // Native is explicit and bypasses Cargo-specific defaults, account polling
-    // and update notices. Preserve argv, particularly the test runner separator.
-    if name != "cargo"
-        && std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("native"))
-    {
-        return native::main(std::env::args_os().skip(2).collect());
-    }
-    if name != "cargo"
-        && std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("hybrid"))
-    {
-        return hybrid::main(std::env::args_os().skip(2).collect());
-    }
-    if name != "cargo"
-        && std::env::var_os("JUSTRUST_HYBRID").as_deref() == Some(std::ffi::OsStr::new("ready"))
-        && matches!(
-            std::env::args_os()
-                .nth(1)
-                .as_deref()
-                .and_then(|a| a.to_str()),
-            Some("build" | "test" | "check" | "run")
-        )
-    {
-        return hybrid::main(std::env::args_os().skip(1).collect());
     }
     if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new("setup")) {
         platform_config::apply_defaults()?;
@@ -1099,9 +1064,7 @@ pub fn main() -> anyhow::Result<()> {
 /// build commands (recorded as runs) and for `telemetry` itself.
 fn command_name(c: &Command) -> Option<&'static str> {
     Some(match c {
-        Command::Native(_)
-        | Command::Hybrid(_)
-        | Command::Check(_)
+        Command::Check(_)
         | Command::Test(_)
         | Command::Build(_)
         | Command::Zigbuild(_)
@@ -1164,8 +1127,6 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
         Command::Interactive {
             command: InteractiveCommand::Dashboard,
         } => dashboard::run()?,
-        Command::Native(p) => native::main(p.args)?,
-        Command::Hybrid(p) => hybrid::main(p.args)?,
         Command::TestBundle { cmd } => test_bundle::main(cmd),
         Command::Check(p) => agent("check", p.args),
         Command::Test(p) => agent("test", p.args),
