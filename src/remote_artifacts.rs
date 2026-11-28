@@ -94,6 +94,9 @@ enum Frame {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         prediction_v2: bool,
         len: u64,
+        /// Host snapshot through completed encoding. May overlap the previous transfer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pack_us: Option<u64>,
         /// Delta base: an earlier file of this stream (its name), when there
         /// is no previous copy of this one. Test binaries of one crate share
         /// most of their code: this halves a fresh `test --no-run` transfer.
@@ -658,6 +661,7 @@ fn produce_files(
         if scratch.is_none() && !needed(h, &rid, mtime_of(&m), req.start) {
             continue;
         }
+        let packing = Instant::now();
         let path = dir.join(&name);
         let key = path.display().to_string().replace('/', "%");
         let mut sent = sent_root.join(&key);
@@ -795,6 +799,7 @@ fn produce_files(
                 patch,
                 prediction_v1: predicted,
                 prediction_v2: predicted_v2,
+                pack_us: Some(packing.elapsed().as_micros() as u64),
                 len,
                 base: base.map(|(n, _, _)| n.clone()),
             },
@@ -1155,13 +1160,27 @@ enum Basis<'a> {
     PredictedV2(&'a Path),
 }
 
+struct TimedInput<R> {
+    inner: R,
+    reads: std::time::Duration,
+}
+
+impl<R: Read> Read for TimedInput<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let start = Instant::now();
+        let result = self.inner.read(buf);
+        self.reads += start.elapsed();
+        result
+    }
+}
+
 fn apply_frame(
     dir: &Path,
     name: &str,
     mode: u32,
     size: u64,
     from: Option<Basis<'_>>,
-    mut frame: std::io::Take<impl Read>,
+    frame: std::io::Take<impl Read>,
     validation: Validation<'_>,
 ) -> Result<PathBuf> {
     let patch = from.is_some();
@@ -1190,6 +1209,12 @@ fn apply_frame(
     }
     let res = (|| {
         let receiving = Instant::now();
+        let len = frame.limit();
+        let mut input = TimedInput {
+            inner: frame,
+            reads: Default::default(),
+        };
+        let mut frame = (&mut input).take(len);
         // The whole-file digest check of a version 2 recipe is verification.
         let mut checked = 0.0;
         if let Some(Basis::PredictedV2(old)) = from {
@@ -1227,11 +1252,14 @@ fn apply_frame(
         if got != size {
             bail!("{name}: {got} bytes, expected {size}");
         }
-        // Decoding is streamed: it ends when the last payload byte arrived.
-        crate::e2e::note(
-            "artifacts.receive",
-            (receiving.elapsed().as_secs_f64() - checked).max(0.0),
-        );
+        // Client-wall partition, not network transit or decoder CPU time. The
+        // decoder works concurrently with reads. Its exposed work includes
+        // pipe backpressure, startup, file I/O and its tail after the last byte.
+        let receive = (receiving.elapsed().as_secs_f64() - checked).max(0.0);
+        let read = input.reads.as_secs_f64().min(receive);
+        crate::e2e::note("artifacts.receive", receive);
+        crate::e2e::note("artifacts.wire_read", read);
+        crate::e2e::note("artifacts.unpack_exposed", receive - read);
         let verifying = Instant::now();
         crate::sys::set_mode(&tmp, mode)?;
         match validation {
@@ -1460,8 +1488,8 @@ fn fetch_inner(
         let mut line = String::new();
         loop {
             line.clear();
-            // Nothing flows while the machine snapshots and encodes a file:
-            // its frame header arrives only once the payload is ready.
+            // Header wait includes unhidden pack work and transport latency.
+            // The next file may already have been encoded during this one.
             let waiting = Instant::now();
             if r.read_line(&mut line)? == 0 {
                 bail!("the machine closed the artifact stream early");
@@ -1543,8 +1571,12 @@ fn fetch_inner(
                     prediction_v1,
                     prediction_v2,
                     len,
+                    pack_us,
                     base,
                 } => {
+                    if let Some(us) = pack_us {
+                        crate::e2e::note("artifacts.pack", us as f64 / 1e6);
+                    }
                     if test_run.is_some()
                         && !selected.as_ref().is_some_and(|artifacts| {
                             artifacts
@@ -2381,6 +2413,7 @@ mod tests {
                         patch,
                         prediction_v1: _,
                         prediction_v2: _,
+                        pack_us: _,
                         len,
                         base,
                     } => {
@@ -2468,7 +2501,11 @@ mod tests {
                 &root.0,
                 Some(scratch),
                 files,
-                &mut |frame, mut data| {
+                &mut |mut frame, mut data| {
+                    // Compare deterministic protocol fields, not this run's wall clock.
+                    if let Frame::File { pack_us, .. } = &mut frame {
+                        assert!(pack_us.take().is_some());
+                    }
                     if mixed {
                         assert!(!path.join("0.new").exists());
                         if !frames.is_empty() {

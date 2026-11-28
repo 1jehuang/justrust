@@ -1,6 +1,70 @@
 //! Transfer regression tests, separate from platform/format validation fixtures.
 use super::*;
 
+#[cfg(unix)]
+#[test]
+#[ignore = "measures a real executable through a local stream, run alone with --nocapture"]
+fn measure_streamed_executable() {
+    let executable = std::env::current_exe().unwrap();
+    let mut f = Fixture::new("timed-executable", b"placeholder");
+    std::fs::copy(&executable, f.remote.join("app")).unwrap();
+    f.req.have.clear();
+    let (socket, sink) = std::os::unix::net::UnixStream::pair().unwrap();
+    let mut input = BufReader::new(socket);
+    let before = |k| crate::e2e::noted(k);
+    let keys = [
+        "artifacts.receive",
+        "artifacts.wire_read",
+        "artifacts.unpack_exposed",
+        "artifacts.verify",
+    ];
+    let initial = keys.map(before);
+    let start = Instant::now();
+    std::thread::scope(|scope| {
+        let sender = scope.spawn(|| serve_dir(&f.remote, &f.req, &f.sent, sink));
+        let mut measured = None;
+        loop {
+            let mut line = String::new();
+            input.read_line(&mut line).unwrap();
+            match serde_json::from_str(&line).unwrap() {
+                Frame::File {
+                    size,
+                    len,
+                    pack_us: Some(pack),
+                    mode,
+                    ..
+                } => {
+                    let output = apply_frame(
+                        &f.root,
+                        "received",
+                        mode,
+                        size,
+                        None,
+                        (&mut input).take(len),
+                        Validation::NativeBuild,
+                    )
+                    .unwrap();
+                    measured = Some((output, size, len, pack));
+                }
+                Frame::End => break,
+                Frame::Hello { .. } => (),
+                frame => panic!("unexpected frame: {frame:?}"),
+            }
+        }
+        sender.join().unwrap().unwrap();
+        let wall = start.elapsed().as_secs_f64();
+        let (output, size, len, pack) = measured.unwrap();
+        let [receive, read, unpack, verify] = std::array::from_fn(|i| before(keys[i]) - initial[i]);
+        assert!((receive - read - unpack).abs() < 1e-8);
+        assert!(pack > 0 && read > 0.0 && unpack > 0.0);
+        assert!(identical_artifact(&output, &executable).unwrap());
+        println!(
+            "artifact loopback: {size} bytes, {len} on wire, {wall:.3}s wall, {:.3}s host pack, {read:.3}s stream reads, {unpack:.3}s exposed unpack, {verify:.3}s verify",
+            pack as f64 / 1e6
+        );
+    });
+}
+
 #[test]
 fn streamed_frame_stops_at_next_header_and_rejects_short_payload_before_install() {
     if !available() {
@@ -228,6 +292,7 @@ fn legacy_request_and_frame_do_not_negotiate_prediction() {
         frame,
         Frame::File {
             prediction_v1: false,
+            pack_us: None,
             ..
         }
     ));
@@ -661,11 +726,16 @@ fn selected_pipeline_preserves_order_modes_and_stops_on_broken_output() {
     );
     for (i, (frame, data)) in frames[2..5].iter().enumerate() {
         let Frame::File {
-            name, mode, base, ..
+            name,
+            mode,
+            base,
+            pack_us,
+            ..
         } = frame
         else {
             panic!("expected file")
         };
+        assert!(pack_us.is_some_and(|us| us > 0));
         assert_eq!(name.as_str(), names[i]);
         assert_eq!(*mode, 0o701 + i as u32);
         assert_eq!(base.as_deref(), (i != 0).then_some(names[0]));
