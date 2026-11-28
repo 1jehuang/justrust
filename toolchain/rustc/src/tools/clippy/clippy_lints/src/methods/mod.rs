@@ -169,7 +169,7 @@ use clippy_utils::{contains_return, iter_input_pats, peel_blocks, sym};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir::{self as hir, Expr, ExprKind, Node, Stmt, StmtKind, TraitItem, TraitItemKind};
 use rustc_lint::{LateContext, LateLintPass, LintContext as _, impl_lint_pass};
-use rustc_middle::ty::TraitRef;
+use rustc_middle::ty::{TraitRef, TyCtxt};
 use rustc_span::{Span, Symbol};
 
 use crate::matches::manual_filter;
@@ -5251,15 +5251,27 @@ pub struct Methods {
     allow_unwrap_in_consts: bool,
     allowed_dotfiles: FxHashSet<&'static str>,
     format_args: FormatArgsStorage,
-    allow_unwrap_types: Vec<String>,
     unwrap_allowed_ids: FxHashSet<rustc_hir::def_id::DefId>,
     unwrap_allowed_aliases: Vec<rustc_hir::def_id::DefId>,
 }
 
 impl Methods {
-    pub fn new(conf: &'static Conf, format_args: FormatArgsStorage) -> Self {
+    pub fn new(tcx: TyCtxt<'_>, conf: &'static Conf, format_args: FormatArgsStorage) -> Self {
         let mut allowed_dotfiles: FxHashSet<_> = conf.allowed_dotfiles.iter().map(|s| &**s).collect();
         allowed_dotfiles.extend(DEFAULT_ALLOWED_DOTFILES);
+
+        let mut unwrap_allowed_ids = FxHashSet::default();
+        let mut unwrap_allowed_aliases = Vec::new();
+        for s in &conf.allow_unwrap_types {
+            let def_ids = clippy_utils::paths::lookup_path_str(tcx, clippy_utils::paths::PathNS::Type, s);
+            for def_id in def_ids {
+                if tcx.def_kind(def_id) == rustc_hir::def::DefKind::TyAlias {
+                    unwrap_allowed_aliases.push(def_id);
+                } else {
+                    unwrap_allowed_ids.insert(def_id);
+                }
+            }
+        }
 
         Self {
             avoid_breaking_exported_api: conf.avoid_breaking_exported_api,
@@ -5270,9 +5282,8 @@ impl Methods {
             allow_unwrap_in_consts: conf.allow_unwrap_in_consts,
             allowed_dotfiles,
             format_args,
-            allow_unwrap_types: conf.allow_unwrap_types.clone(),
-            unwrap_allowed_ids: FxHashSet::default(),
-            unwrap_allowed_aliases: Vec::new(),
+            unwrap_allowed_ids,
+            unwrap_allowed_aliases,
         }
     }
 }
@@ -5292,19 +5303,6 @@ pub fn method_call<'tcx>(recv: &'tcx Expr<'tcx>) -> Option<(Symbol, &'tcx Expr<'
 }
 
 impl<'tcx> LateLintPass<'tcx> for Methods {
-    fn check_crate(&mut self, cx: &LateContext<'tcx>) {
-        for s in &self.allow_unwrap_types {
-            let def_ids = clippy_utils::paths::lookup_path_str(cx.tcx, clippy_utils::paths::PathNS::Type, s);
-            for def_id in def_ids {
-                if cx.tcx.def_kind(def_id) == rustc_hir::def::DefKind::TyAlias {
-                    self.unwrap_allowed_aliases.push(def_id);
-                } else {
-                    self.unwrap_allowed_ids.insert(def_id);
-                }
-            }
-        }
-    }
-
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx Expr<'_>) {
         if let ExprKind::Call(func, _) = expr.kind {
             // The functions from this block perform their own macro context checks

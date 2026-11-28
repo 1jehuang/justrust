@@ -22,9 +22,49 @@
 macro_rules! run_combined_late_lint_pass_field {
     ($self:ident, $field:ident, $name:ident, ($($arg:expr),* $(,)?)) => {
         if let Some(pass) = &mut $self.$field {
-            rustc_lint::LateLintPass::$name(pass, $($arg),*);
+            if $crate::combined_late_pass::PASS_TIMES {
+                let start = std::time::Instant::now();
+                rustc_lint::LateLintPass::$name(pass, $($arg),*);
+                $crate::combined_late_pass::record_pass_time(stringify!($field), start.elapsed());
+            } else {
+                rustc_lint::LateLintPass::$name(pass, $($arg),*);
+            }
         }
     };
+}
+
+/// Per-pass timing is a measurement build only: compile `clippy_lints` with
+/// `JR_CLIPPY_PASS_TIMES=1` in the environment. Otherwise this is `false` and the
+/// timing branch is removed at compile time, so the shipping pass is unchanged.
+pub const PASS_TIMES: bool = option_env!("JR_CLIPPY_PASS_TIMES").is_some();
+
+thread_local! {
+    static PASS_TIME_TABLE: std::cell::RefCell<std::collections::BTreeMap<&'static str, (u64, u64)>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+#[inline(never)]
+pub fn record_pass_time(pass: &'static str, elapsed: std::time::Duration) {
+    PASS_TIME_TABLE.with(|table| {
+        let mut table = table.borrow_mut();
+        let entry = table.entry(pass).or_insert((0, 0));
+        entry.0 += elapsed.as_nanos() as u64;
+        entry.1 += 1;
+    });
+}
+
+/// Print and clear this thread's table: `jr-clippy-pass-time <label> <pass> <nanos> <calls>`.
+pub fn dump_pass_times(label: &str) {
+    if !PASS_TIMES {
+        return;
+    }
+    PASS_TIME_TABLE.with(|table| {
+        let mut rows: Vec<_> = std::mem::take(&mut *table.borrow_mut()).into_iter().collect();
+        rows.sort_by_key(|&(name, (nanos, _))| (std::cmp::Reverse(nanos), name));
+        for (name, (nanos, calls)) in rows {
+            eprintln!("jr-clippy-pass-time {label} {name} {nanos} {calls}");
+        }
+    });
 }
 
 /// Forward one `check_*` method to every field of the combined pass.
@@ -83,6 +123,12 @@ macro_rules! combined_late_lint_pass {
                 let mut lints = Vec::with_capacity(${count($field)});
                 $(lints.extend(<$fty>::lint_vec());)*
                 lints
+            }
+        }
+
+        impl<'tcx> Drop for $name<'tcx> {
+            fn drop(&mut self) {
+                $crate::combined_late_pass::dump_pass_times(stringify!($name));
             }
         }
 
