@@ -682,12 +682,17 @@ fn serve_requests(
                 // compiler arena and SessionGlobals outlive every admitted RPC.
                 // Incremental control uses fresh query state with the active
                 // source revision view, never external live typed queries.
+                #[allow(rustc::bad_opt_access)]
+                let live_queries = !macro_helpers && config.opts.incremental.is_some();
                 return crate::catch_fatal_errors(|| {
                     rustc_interface::resident::with_resident_compiler_batch_options_and_decoders(
                         config,
                         rustc_interface::resident::ResidentBatchOptions {
                             incremental_control: true,
-                            ..Default::default()
+                            live_queries,
+                            selective_leaf: live_queries,
+                            lexer_cache: true,
+                            ast_cache: true,
                         },
                         owned_selection(
                             std::env::var_os("JUSTRUST_CARGO_RESIDENT_DECODERS").as_deref(),
@@ -790,6 +795,11 @@ fn serve_requests(
                 } else {
                     None
                 };
+                let live_invocation = if !macro_helpers && batch.is_some() {
+                    super::resident::frozen_semantic_invocation(&argv).ok()
+                } else {
+                    None
+                };
                 let result = crate::catch_fatal_errors(|| {
                     if let Some(batch) = batch {
                         let (prepared, initial_callbacks) =
@@ -811,7 +821,7 @@ fn serve_requests(
                                     prepared.has_input,
                                     prepared.help_only,
                                     prepared.registered_lints,
-                                    None,
+                                    live_invocation.as_deref(),
                                 );
                             },
                         );
@@ -870,8 +880,10 @@ fn serve_requests(
             let (revisions, contexts) = batch.counts();
             let live = batch.live_stats();
             json!({"enabled":true,"revisions":revisions,"contexts":contexts,
-                "live_queries":false,"shared_type_interners":!macro_helpers,
+                "live_queries":!macro_helpers,"shared_type_interners":!macro_helpers,
                 "external_decoders":decoder_enabled,"incremental_control":true,
+                "typeck_hits":live.typeck_hits,"typeck_misses":live.typeck_misses,
+                "mir_hits":live.mir_hits,"mir_leaf_hits":live.mir_leaf_hits,"mir_misses":live.mir_misses,
                 "retained_entries":live.retained_entries,
                 "retained_estimated_bytes":live.retained_estimated_bytes})
         });

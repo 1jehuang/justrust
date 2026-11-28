@@ -527,7 +527,7 @@ fn serve_owned(mut response: File) -> Result<(), String> {
 /// cannot outlive this executable/LLVM owner, and requests already freeze argv.
 /// Recheck cwd and the complete OS environment before every controlled request.
 /// These bytes remain private RAM state, never protocol diagnostics or records.
-fn frozen_semantic_invocation(args: &[String]) -> Result<Vec<u8>, String> {
+pub(super) fn frozen_semantic_invocation(args: &[String]) -> Result<Vec<u8>, String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
     let mut environment: Vec<_> = std::env::vars_os()
         .map(|(key, value)| (key.as_encoded_bytes().to_vec(), value.as_encoded_bytes().to_vec()))
