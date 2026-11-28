@@ -531,6 +531,7 @@ mod tests {
                 trace: vec![],
                 derived,
                 parts: vec![],
+                artifact_times: None,
             },
         )
     }

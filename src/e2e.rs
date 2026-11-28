@@ -42,6 +42,10 @@ pub struct E2e {
     /// more than it, and what they leave is the segment's unmeasured rest.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<Part>,
+    /// Raw artifact observations. Host pack may overlap client work, and
+    /// receive contains wire_read + unpack_exposed. Not additive waterfall parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_times: Option<ArtifactTimes>,
 }
 
 /// A measured piece of one segment.
@@ -227,6 +231,7 @@ impl Waterfall {
             trace: Vec::new(),
             derived,
             parts: self.parts,
+            artifact_times: None,
         }
     }
 }
@@ -310,14 +315,21 @@ pub struct RemoteTimes {
 }
 
 /// The artifact return as the client's stream reader saw it. Seconds.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ArtifactTimes {
     /// Request sent until the machine answered: connection and its start.
     pub connect: f64,
-    /// Waiting for the machine to snapshot and encode, with no bytes flowing.
-    pub encode: f64,
+    /// Client wall waiting for frame headers, not total host encoding work.
+    pub header_wait: f64,
     /// Receiving and decoding payload bytes (they overlap: decode is streamed).
     pub receive: f64,
+    /// Sum of host preparation times of emitted payloads. Absent on legacy hosts.
+    pub pack: Option<f64>,
+    /// Wall spent reading compressed payload from the client stream.
+    pub wire_read: f64,
+    /// Remaining receive wall outside stream reads, excluding verification.
+    pub unpack_exposed: f64,
     /// Checking each decoded file and moving it into place.
     pub verify: f64,
     /// Encoded payload bytes received (what crossed the link).
@@ -329,8 +341,11 @@ impl ArtifactTimes {
     pub fn noted() -> Self {
         Self {
             connect: noted("artifacts.connect"),
-            encode: noted("artifacts.encode"),
+            header_wait: noted("artifacts.encode"),
             receive: noted("artifacts.receive"),
+            pack: Some(noted("artifacts.pack")).filter(|s| *s > 0.),
+            wire_read: noted("artifacts.wire_read"),
+            unpack_exposed: noted("artifacts.unpack_exposed"),
             verify: noted("artifacts.verify"),
             bytes: noted("artifacts.bytes") as u64,
         }
@@ -464,24 +479,37 @@ pub fn remote(m: &Marks, now: f64, r: &RemoteTimes) -> E2e {
     }
     split_owned(&mut w, m.get("exit"), &host, "remote.host_overhead");
     w.until("remote.artifacts", m.get("artifacts"));
+    let split_stream = r.artifacts.wire_read > 0. || r.artifacts.unpack_exposed > 0.;
     w.parts(
         "remote.artifacts",
         &[
             ("connect", r.artifacts.connect),
-            ("encode", r.artifacts.encode),
-            ("receive", r.artifacts.receive),
+            ("header_wait", r.artifacts.header_wait),
+            (
+                "receive",
+                if split_stream {
+                    0.
+                } else {
+                    r.artifacts.receive
+                },
+            ),
+            ("wire_read", r.artifacts.wire_read),
+            ("unpack_exposed", r.artifacts.unpack_exposed),
             ("verify", r.artifacts.verify),
         ],
     );
     if let Some(p) = w
         .parts
         .iter_mut()
-        .find(|p| p.of == "remote.artifacts" && p.what == "receive")
+        .find(|p| p.of == "remote.artifacts" && matches!(p.what.as_str(), "receive" | "wire_read"))
     {
         p.bytes = r.artifacts.bytes;
     }
     w.until("client.report", Some(now));
     let mut e = w.finish(now, false);
+    if r.artifacts != ArtifactTimes::default() {
+        e.artifact_times = Some(r.artifacts);
+    }
     let mut start = Some(0.);
     for (key, end) in [
         ("client.route", m.get("routed")),
@@ -598,7 +626,9 @@ pub fn part_label<'a>(of: &str, what: &'a str) -> &'a str {
         ("sync.link", "install") => "host client, mirror path",
         ("sync.link", "session") => "session start, handshake",
         ("remote.artifacts", "connect") => "request, host answers",
-        ("remote.artifacts", "encode") => "host snapshot, encode",
+        ("remote.artifacts", "encode" | "header_wait") => "wait for frame header",
+        ("remote.artifacts", "wire_read") => "payload stream reads",
+        ("remote.artifacts", "unpack_exposed") => "unpack outside reads",
         ("remote.artifacts", "receive") => "download, decode",
         ("remote.artifacts", "verify") => "verify, move into place",
         (_, what) => what,
@@ -651,8 +681,11 @@ pub fn render(e: &E2e) -> String {
             "█".repeat(bar_n.min(24))
         );
         for p in e.parts.iter().filter(|p| p.of == s.key && p.secs >= 0.005) {
-            // The rate says whether the link or the size made it slow.
-            let size = if p.bytes > 0 {
+            // Stream read time excludes concurrent decode and buffered arrivals,
+            // so bytes per read second is not a network throughput measurement.
+            let size = if p.what == "wire_read" && p.bytes > 0 {
+                format!("  {:.1} MB payload", p.bytes as f64 / 1e6)
+            } else if p.bytes > 0 {
                 let mb = p.bytes as f64 / 1e6;
                 format!("  {mb:.1} MB, {:.1} MB/s", mb / p.secs)
             } else {
@@ -666,6 +699,12 @@ pub fn render(e: &E2e) -> String {
                 p.secs
             );
         }
+    }
+    if let Some(pack) = e.artifact_times.and_then(|a| a.pack) {
+        let _ = writeln!(
+            o,
+            "  Host pack (emitted files): {pack:.3}s, may overlap client wait; not added to wall"
+        );
     }
     o
 }
@@ -765,10 +804,11 @@ mod tests {
             }),
             artifacts: ArtifactTimes {
                 connect: 1.0,
-                encode: 2.0,
+                header_wait: 2.0,
                 receive: 4.0,
                 verify: 1.0,
                 bytes: 6_000_000,
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -802,6 +842,55 @@ mod tests {
         let plain = remote(&m, 9.0, &RemoteTimes::default());
         assert!(plain.parts.is_empty());
         assert!(!serde_json::to_string(&plain).unwrap().contains("parts"));
+    }
+
+    #[test]
+    fn artifact_observations_round_trip_without_adding_overlapping_work() {
+        let marks = Marks(vec![("exit", 1.), ("artifacts", 5.)]);
+        let raw = ArtifactTimes {
+            header_wait: 0.5,
+            pack: Some(3.75),
+            receive: 3.,
+            wire_read: 2.,
+            unpack_exposed: 1.,
+            verify: 0.5,
+            bytes: 2_000_000,
+            ..Default::default()
+        };
+        let e = remote(
+            &marks,
+            5.,
+            &RemoteTimes {
+                artifacts: raw,
+                ..Default::default()
+            },
+        );
+        let saved = serde_json::to_string(&e).unwrap();
+        let restored: E2e = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.artifact_times, Some(raw));
+        assert_eq!(
+            restored
+                .parts
+                .iter()
+                .filter(|p| p.of == "remote.artifacts")
+                .map(|p| p.secs)
+                .sum::<f64>(),
+            4.
+        );
+        let shown = render(&restored);
+        for label in [
+            "wait for frame header",
+            "payload stream reads",
+            "unpack outside reads",
+            "2.0 MB payload",
+            "3.750s, may overlap",
+        ] {
+            assert!(shown.contains(label), "{shown}");
+        }
+        assert!(!shown.contains("download, decode") && !shown.contains("MB/s"));
+        let old: E2e = serde_json::from_str(r#"{"wall":1,"segments":[{"key":"remote.artifacts","secs":1}],"parts":[{"of":"remote.artifacts","what":"encode","secs":1}]}"#).unwrap();
+        assert!(old.artifact_times.is_none());
+        assert!(render(&old).contains("wait for frame header"));
     }
 
     #[test]
