@@ -1558,7 +1558,10 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
                 let t = Instant::now();
                 let roots: Vec<PathBuf> = roots.into_iter().map(PathBuf::from).collect();
                 let mut files = 0usize;
-                if let Ok(mut st) = d.sync.foreground_lock()
+                // Speculative pre-sync must never queue behind an active or
+                // waiting foreground build: otherwise concurrent builds double-
+                // queue (once for PreSync, then again for RunSync).
+                if let Ok(mut st) = d.sync.try_background_lock()
                     && !d.draining.load(Ordering::SeqCst)
                     && let Some(link) = st.link.as_ref().filter(|l| l.alive()).cloned()
                 {

@@ -2292,18 +2292,16 @@ fn run_remote_inner(
         && crate::remote_hosted::creds()
             .ok()
             .is_some_and(|c| c.warm_admit_ready());
-    let pre_sync_handle = if !overlap_admit
+    if !overlap_admit
         && admitted.is_none()
         && remote_backend::load() == Some(remote_backend::Backend::Hosted)
         && !matches!(crate::remote_windows::selected(), Ok(true))
     {
         let pre_roots = roots.clone();
-        Some(std::thread::spawn(move || {
+        std::thread::spawn(move || {
             let _ = crate::remote_daemon::pre_sync(&pre_roots);
-        }))
-    } else {
-        None
-    };
+        });
+    }
     if admitted.is_none() {
         if overlap_admit {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -2328,9 +2326,6 @@ fn run_remote_inner(
         return Err(RemoteCancelled.into());
     }
     if crate::remote_windows::selected()? {
-        if let Some(h) = pre_sync_handle {
-            let _ = h.join();
-        }
         let hosted_run = admitted.as_mut().expect("windows run admitted above");
         if remote_backend::load() != Some(remote_backend::Backend::Hosted) {
             return infra(format!(
@@ -2385,9 +2380,9 @@ fn run_remote_inner(
         Err(e) => return infra(format!("{e:#}")),
     };
     crate::e2e::mark("daemon_connected");
-    if let Some(h) = pre_sync_handle {
-        let _ = h.join();
-    }
+    // Do not join the speculative PreSync thread here: if it is still holding
+    // the daemon sync lock, RunSync will wait on the lock (attributed to
+    // sync.lock_wait, not unattributed sync: relay) and reuse its PreSyncStamp.
     let mut env = Vec::new();
     env.push((crate::remote_proto::CLIENT_LIVE_CPU.into(), "1".into()));
     env.extend(forwarded_env(|name| std::env::var(name).ok()));
