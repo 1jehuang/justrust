@@ -1751,44 +1751,6 @@ mod relay_tests {
         assert_eq!(relay.pull_new_while(0, || true), (0, 0, 0));
     }
 
-    /// A relay whose peer answers `CacheKeys` with `keys` and every
-    /// `CacheQuery` with one line, counting the queries it sees.
-    fn relay_with_peer(keys: &'static str) -> (Arc<Relay>, Arc<AtomicU32>) {
-        let queries = Arc::new(AtomicU32::new(0));
-        let slot: Arc<Mutex<Option<Arc<Relay>>>> = Arc::default();
-        let (s2, q2) = (slot.clone(), queries.clone());
-        let relay = Relay::new(true, move |m, _| {
-            let me = s2.lock().unwrap().clone().unwrap();
-            let reply = match m {
-                Msg::CacheKeys { id } => {
-                    Some((Msg::CacheKeySet { id: *id }, keys.as_bytes().to_vec()))
-                }
-                Msg::CacheQuery { id, .. } => {
-                    q2.fetch_add(1, Ordering::SeqCst);
-                    Some((
-                        Msg::CacheLines {
-                            id: *id,
-                            lines: vec!["l".into()],
-                            outs: vec![],
-                            busy: 0,
-                            bw: 0.0,
-                        },
-                        vec![],
-                    ))
-                }
-                _ => None,
-            };
-            if let Some((m, p)) = reply {
-                std::thread::spawn(move || {
-                    me.on_frame(&m, &p);
-                });
-            }
-            true
-        });
-        *slot.lock().unwrap() = Some(relay.clone());
-        (relay, queries)
-    }
-
     /// Chunks of a put are assembled in arrival order, synchronously: with
     /// a thread per chunk (the old code) earlier chunks could land after
     /// later ones. Checked before the last chunk, so no serving thread runs.
@@ -1815,35 +1777,43 @@ mod relay_tests {
     }
 
     #[test]
-    fn fresh_key_set_rules_out_misses_but_stale_one_never_does() {
-        let (r, q) = relay_with_peer("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    fn peer_key_set_rules_out_misses_only_within_max_stale() {
+        let cache = CacheFixture::new();
+        let (started, refreshing) = std::sync::mpsc::channel();
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let gate = Mutex::new(gate);
+        let r = scripted_relay(&cache.0, move |me, msg, _| match msg {
+            Msg::CacheKeys { .. } => {
+                started.send(()).unwrap();
+                let _ = gate.lock().unwrap().recv();
+                false
+            }
+            Msg::CacheQuery { id, .. } => me.on_frame(
+                &Msg::CacheLines {
+                    id: *id,
+                    lines: vec!["peer hit".into()],
+                    outs: vec![],
+                    busy: 0,
+                    bw: 0.0,
+                },
+                &[],
+            ),
+            _ => panic!("unexpected frame: {msg:?}"),
+        });
         let other = "b".repeat(32);
-        // No key set yet: ask the peer.
-        assert_eq!(r.query(&other).0.len(), 1);
-        for _ in 0..100 {
-            if r.keys.lock().unwrap().is_some() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        // Fresh set without the key: answered locally, no round trip.
-        let before = q.load(Ordering::SeqCst);
+        let seed =
+            |age: Duration| *r.keys.lock().unwrap() = Some((Instant::now() - age, Arc::default()));
+        seed(Duration::ZERO);
         assert!(r.query(&other).0.is_empty());
-        assert_eq!(q.load(Ordering::SeqCst), before);
-        // Stale set (the peer may have gained the key since): ask again.
-        r.keys.lock().unwrap().as_mut().unwrap().0 -= KEYSET_TTL * 2;
-        assert_eq!(r.query(&other).0.len(), 1);
-        // That query started a background refresh. Let it land first, or it
-        // can store a fresh set right after the invalidation below (seen on
-        // a slow macOS CI runner).
-        for _ in 0..400 {
-            if !r.keys_loading.load(Ordering::SeqCst) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        // Invalidated after a push: ask again.
+        seed(KEYSET_TTL + Duration::from_secs(1));
+        assert!(r.query(&other).0.is_empty());
+        refreshing.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Keep the refresh in flight while checking expired and invalidated snapshots.
+        seed(KEYSET_MAX_STALE + Duration::from_secs(1));
+        assert_eq!(r.query(&other).0, ["peer hit"]);
+        seed(Duration::ZERO);
         r.invalidate_keys();
-        assert_eq!(r.query(&other).0.len(), 1);
+        assert_eq!(r.query(&other).0, ["peer hit"]);
+        drop(release);
     }
 }

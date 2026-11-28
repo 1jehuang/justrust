@@ -1237,11 +1237,11 @@ mod tests {
         let objects: Vec<(String, Vec<u8>)> = (0..8)
             .map(|i| (format!("/v1/m/{}.jsonl", key(i)), b"{}\n".to_vec()))
             .collect();
-        // The store answers slowly, the replica at once but has nothing.
-        let (store, store_hits) = fake_store(objects, Duration::from_millis(30));
+        // Isolate manifest routing from unrelated group prefetch and index traffic.
+        let (store, store_hits) = fake_store(objects, Duration::ZERO);
         let (replica, replica_hits) = fake_store(Vec::new(), Duration::ZERO);
         let tmp = test_dir("replica");
-        let base = start_with(
+        let state = state_for(
             vec![
                 Source {
                     base: store,
@@ -1253,14 +1253,16 @@ mod tests {
                 },
             ],
             tmp.clone(),
-        )
-        .unwrap();
+        );
         for i in 0..8 {
-            let dst = tmp.join(format!("out{i}"));
+            // Fix the latency ranking, not scheduler-dependent loopback timings.
+            state.upstreams[0].ttfb_us.store(100, Ordering::Relaxed);
+            state.upstreams[1].ttfb_us.store(1, Ordering::Relaxed);
+            let rel = format!("m/{}.jsonl", key(i));
             // The replica's "missing" never reaches the build.
             assert!(matches!(
-                depcache_prebuilt::get(&base, &format!("m/{}.jsonl", key(i)), &dst, 5, 1024),
-                depcache_prebuilt::Got::Ok
+                fetch_cached(&state, &rel, validate_rel(&rel).unwrap()),
+                FetchResult::Hit(_)
             ));
         }
         assert_eq!(store_hits.load(Ordering::Relaxed), 8);
@@ -1269,14 +1271,13 @@ mod tests {
 
         // Missing in the store is final, and is remembered.
         let gone = format!("m/{}.jsonl", key(99));
-        let dst = tmp.join("gone");
         assert!(matches!(
-            depcache_prebuilt::get(&base, &gone, &dst, 5, 1024),
-            depcache_prebuilt::Got::Missing
+            fetch_cached(&state, &gone, validate_rel(&gone).unwrap()),
+            FetchResult::Missing
         ));
         assert!(matches!(
-            depcache_prebuilt::get(&base, &gone, &dst, 5, 1024),
-            depcache_prebuilt::Got::Missing
+            fetch_cached(&state, &gone, validate_rel(&gone).unwrap()),
+            FetchResult::Missing
         ));
         assert_eq!(store_hits.load(Ordering::Relaxed), 9);
         let _ = std::fs::remove_dir_all(&tmp);
