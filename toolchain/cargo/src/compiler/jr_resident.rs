@@ -65,6 +65,14 @@ mod linux {
     ];
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+    fn flag_enabled(cmd: &ProcessBuilder, name: &str, default: bool) -> bool {
+        match cmd.get_env(name).as_deref().and_then(OsStr::to_str) {
+            Some("0" | "off" | "false" | "no") => false,
+            Some("1" | "on" | "true" | "yes") => true,
+            _ => default,
+        }
+    }
+
     pub(super) fn candidate(cmd: &ProcessBuilder) -> bool {
         cmd.get_env("JUSTRUST_CARGO_RESIDENT_DIR").is_some()
             && Path::new(cmd.get_program()).is_absolute()
@@ -77,7 +85,7 @@ mod linux {
                 &cmd.get_args()
                     .map(|a| a.to_string_lossy().into_owned())
                     .collect::<Vec<_>>(),
-                cmd.get_env("JUSTRUST_CARGO_RESIDENT_EXTERNAL").as_deref() == Some(OsStr::new("1")),
+                flag_enabled(cmd, "JUSTRUST_CARGO_RESIDENT_EXTERNAL", true),
             )
             && cmd.get_args().all(|a| a.to_str().is_some())
             && matches!(
@@ -227,17 +235,14 @@ mod linux {
             cwd.join(sysroot)
         })?;
         let env = effective_env(cmd);
-        let external = if cmd.get_env("JUSTRUST_CARGO_RESIDENT_EXTERNAL").as_deref()
-            == Some(OsStr::new("1"))
-        {
+        let external = if flag_enabled(cmd, "JUSTRUST_CARGO_RESIDENT_EXTERNAL", true) {
             let args = args
                 .iter()
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect::<Vec<_>>();
-            if cmd.get_env("JUSTRUST_CARGO_RESIDENT_MACROS").as_deref() == Some(OsStr::new("1")) {
+            if flag_enabled(cmd, "JUSTRUST_CARGO_RESIDENT_MACROS", true) {
                 ensure!(
-                    cmd.get_env("JUSTRUST_CARGO_RESIDENT_OWNED").as_deref()
-                        == Some(OsStr::new("1")),
+                    flag_enabled(cmd, "JUSTRUST_CARGO_RESIDENT_OWNED", true),
                     "macro helpers require the owned compiler batch"
                 );
                 ensure!(
@@ -424,7 +429,7 @@ mod linux {
         if !candidate(cmd) {
             return None;
         }
-        if cmd.get_env("JUSTRUST_CARGO_RESIDENT").as_deref() == Some(OsStr::new("off")) {
+        if !flag_enabled(cmd, "JUSTRUST_CARGO_RESIDENT", true) {
             trace(cmd, serde_json::json!({"event":"disabled"}));
             return None;
         }
