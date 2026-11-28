@@ -1,6 +1,3 @@
-#![allow(internal_features, reason = "proc macro internals")]
-#![feature(proc_macro_internals)]
-
 use rustc_middle::ty::TyCtxt;
 
 mod attr;
