@@ -32,6 +32,8 @@ use std::time::Instant;
 
 #[path = "remote_artifact_prediction.rs"]
 mod prediction;
+#[path = "remote_artifact_stream.rs"]
+mod stream;
 
 /// Hidden subcommand the machine runs (`justrust __artifacts`).
 pub const ARG: &str = "__artifacts";
@@ -53,6 +55,8 @@ struct Request {
     /// stream (`Frame::File::base`). Older hosts ignore it.
     #[serde(default)]
     anchors: bool,
+    #[serde(default)]
+    stream_full_v1: bool,
     /// Client understands aligned 8 KiB residual blocks with an output digest.
     #[serde(default)]
     prediction_v1: bool,
@@ -94,7 +98,8 @@ enum Frame {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         prediction_v2: bool,
         len: u64,
-        /// Host snapshot through completed encoding. May overlap the previous transfer.
+        /// Host snapshot through completed encoding for spooled files. For a
+        /// live stream this stops at first encoder output, before any wire write.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pack_us: Option<u64>,
         /// Delta base: an earlier file of this stream (its name), when there
@@ -598,9 +603,13 @@ fn serve_selected_dir(
         produce_files(dir, req, sent_root, scratch, files, emit)
     };
     let mut send = |frame: Frame, mut data: std::fs::File| -> Result<()> {
-        let Frame::File { len, .. } = &frame else {
+        let Frame::File { len, size, .. } = &frame else {
             unreachable!()
         };
+        if *len == stream::TAG {
+            let size = *size;
+            return stream::send(&mut out, frame, data, size);
+        }
         write_frame(&mut out, &frame, &[])?;
         if std::io::copy(&mut (&mut data).take(*len), &mut out)? != *len {
             bail!("truncated compressed artifact on the build machine");
@@ -672,7 +681,11 @@ fn produce_files(
             && sent.is_file();
         // Snapshot first: the build tree may be rewritten under us, and the
         // delta base must be exactly what was sent.
-        let snap = scratch.as_ref().map_or_else(
+        let stream_scratch =
+            (scratch.is_none() && req.stream_full_v1 && !patch && m.len() >= stream::MIN_SIZE)
+                .then(|| TestScratch::new(sent_root))
+                .transpose()?;
+        let snap = scratch.as_ref().or(stream_scratch.as_ref()).map_or_else(
             || sent_root.join(format!("{key}.new")),
             |s| s.0.join(format!("{index}.new")),
         );
@@ -741,6 +754,34 @@ fn produce_files(
         } else {
             base.map(|(_, _, from)| from.as_path())
         };
+        if stream_scratch.is_some() && reference.is_none() {
+            let data = std::fs::File::open(&snap)?;
+            let result = emit(
+                Frame::File {
+                    name: name.clone(),
+                    id: rid.clone(),
+                    mode: crate::sys::mode(&m, &path) & 0o7777,
+                    size: m.len(),
+                    patch: false,
+                    prediction_v1: false,
+                    prediction_v2: false,
+                    len: stream::TAG,
+                    pack_us: Some(packing.elapsed().as_micros() as u64),
+                    base: None,
+                },
+                data,
+            );
+            match result {
+                Ok(()) => {
+                    std::fs::rename(&snap, &sent)?;
+                    std::fs::write(&sent_id, &rid)?;
+                    streamed.push((name, m.len(), sent));
+                    continue;
+                }
+                Err(e) if e.is::<stream::BeforeHeader>() => (), // legacy encoder, same snapshot
+                Err(e) => return Err(e),
+            }
+        }
         // A short match table forgets much of a large previous executable.
         // Limit the denser encoder to measured same-file deltas. Two workers
         // bound its per-worker tables even on very wide hosted machines.
@@ -1195,9 +1236,10 @@ fn apply_frame(
         bail!("selected test destination escapes target directory");
     }
     let file = dst.file_name().context("no file name")?.to_string_lossy();
-    let scratch = matches!(from, Some(Basis::Predicted(_) | Basis::PredictedV2(_)))
-        .then(|| TestScratch::new(parent))
-        .transpose()?;
+    let scratch = (frame.limit() == stream::TAG
+        || matches!(from, Some(Basis::Predicted(_) | Basis::PredictedV2(_))))
+    .then(|| TestScratch::new(parent))
+    .transpose()?;
     let tmp = scratch.as_ref().map_or_else(
         || parent.join(format!(".{file}.jrtmp")),
         |s| s.0.join("output"),
@@ -1244,7 +1286,7 @@ fn apply_frame(
                 );
             }
             copied.context("copy compressed artifact frame")?;
-            if frame.limit() != 0 {
+            if len != stream::TAG && frame.limit() != 0 {
                 bail!("truncated compressed artifact frame for {name}");
             }
         }
@@ -1262,18 +1304,29 @@ fn apply_frame(
         crate::e2e::note("artifacts.unpack_exposed", receive - read);
         let verifying = Instant::now();
         crate::sys::set_mode(&tmp, mode)?;
+        let mapped;
+        let owned;
+        let bytes: &[u8] = if matches!(validation, Validation::NativeBuild) {
+            &[]
+        } else if len == stream::TAG {
+            // The decoder has exited. This is our private scratch inode, not
+            // a mutable build output or the published destination.
+            mapped = unsafe { memmap2::Mmap::map(&std::fs::File::open(&tmp)?)? };
+            &mapped
+        } else {
+            owned = std::fs::read(&tmp)?;
+            &owned
+        };
         match validation {
-            Validation::Glibc217 => check_glibc_217(&std::fs::read(&tmp)?)?,
-            Validation::Test => check_native_test(&std::fs::read(&tmp)?)?,
-            Validation::Musl(target) => check_static_musl(&std::fs::read(&tmp)?, target)?,
+            Validation::Glibc217 => check_glibc_217(bytes)?,
+            Validation::Test => check_native_test(bytes)?,
+            Validation::Musl(target) => check_static_musl(bytes, target)?,
             Validation::WindowsBuild(target) => {
-                check_windows_for_target(&std::fs::read(&tmp)?, name.ends_with(".exe"), target)?
+                check_windows_for_target(bytes, name.ends_with(".exe"), target)?
             }
-            Validation::WindowsTest(target) => {
-                check_windows_for_target(&std::fs::read(&tmp)?, true, target)?
-            }
-            Validation::Darwin(target) => check_darwin(&std::fs::read(&tmp)?, target)?,
-            Validation::Arm64 => crate::arm64_tools::validate_artifact(&std::fs::read(&tmp)?)?,
+            Validation::WindowsTest(target) => check_windows_for_target(bytes, true, target)?,
+            Validation::Darwin(target) => check_darwin(bytes, target)?,
+            Validation::Arm64 => crate::arm64_tools::validate_artifact(bytes)?,
             Validation::NativeBuild
                 if mode & 0o111 != 0 || name.contains(".so") || name.ends_with(".dylib") =>
             {
@@ -1320,6 +1373,9 @@ fn retry_full<T>(mut f: impl FnMut() -> Result<T>) -> Result<T> {
 static FORCE_FULL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn is_delta_failure(e: &anyhow::Error) -> bool {
+    if e.is::<stream::TransferFailure>() {
+        return false;
+    }
     let s = format!("{e:#}");
     s.contains("(delta)") || s.contains("artifact delta against unknown base")
 }
@@ -1461,6 +1517,7 @@ fn fetch_inner(
         prediction_v1: !FORCE_FULL.load(std::sync::atomic::Ordering::Relaxed)
             && crate::procfs::meminfo().is_some_and(|mem| mem.available_mb >= 1024),
         prediction_v2: !FORCE_FULL.load(std::sync::atomic::Ordering::Relaxed),
+        stream_full_v1: test_run.is_none(),
         anchors: !FORCE_FULL.load(std::sync::atomic::Ordering::Relaxed),
     };
     let command = artifact_command(std::env::var("JUSTRUST_TOOLCHAIN").ok().as_deref());
@@ -1574,6 +1631,17 @@ fn fetch_inner(
                     pack_us,
                     base,
                 } => {
+                    if len == stream::TAG
+                        && (!req.stream_full_v1
+                            || patch
+                            || base.is_some()
+                            || prediction_v1
+                            || prediction_v2
+                            || size < stream::MIN_SIZE)
+                    {
+                        return Err(anyhow::anyhow!("unexpected streaming artifact")
+                            .context(stream::TransferFailure));
+                    }
                     if let Some(us) = pack_us {
                         crate::e2e::note("artifacts.pack", us as f64 / 1e6);
                     }
@@ -1626,23 +1694,41 @@ fn fetch_inner(
                     {
                         bail!("unnegotiated or unoffered artifact prediction (delta)");
                     }
-                    let dst = apply_frame(
-                        &dir,
-                        &name,
-                        mode,
-                        size,
-                        from.as_deref().map(|p| {
-                            if prediction_v2 {
-                                Basis::PredictedV2(p)
-                            } else if prediction_v1 {
-                                Basis::Predicted(p)
-                            } else {
-                                Basis::Zstd(p)
-                            }
-                        }),
-                        (&mut *r).take(len),
-                        validation,
-                    )?;
+                    let (dst, len) = if len == stream::TAG {
+                        let mut chunks = stream::Chunks::new(&mut *r, size)?;
+                        let dst = apply_frame(
+                            &dir,
+                            &name,
+                            mode,
+                            size,
+                            None,
+                            (&mut chunks).take(stream::TAG),
+                            validation,
+                        )
+                        .map_err(|e| e.context(stream::TransferFailure))?;
+                        (dst, chunks.total)
+                    } else {
+                        (
+                            apply_frame(
+                                &dir,
+                                &name,
+                                mode,
+                                size,
+                                from.as_deref().map(|p| {
+                                    if prediction_v2 {
+                                        Basis::PredictedV2(p)
+                                    } else if prediction_v1 {
+                                        Basis::Predicted(p)
+                                    } else {
+                                        Basis::Zstd(p)
+                                    }
+                                }),
+                                (&mut *r).take(len),
+                                validation,
+                            )?,
+                            len,
+                        )
+                    };
                     streamed.insert(name.clone());
                     let m = std::fs::metadata(&dst)?;
                     records.insert(
@@ -2393,6 +2479,7 @@ mod tests {
                 prediction_v1: false,
                 prediction_v2: false,
                 anchors: true,
+                stream_full_v1: false,
             };
             let mut out = Vec::new();
             serve_dir(&remote, &req, &sent, &mut out).unwrap();
@@ -2484,6 +2571,7 @@ mod tests {
             have: vec![],
             test_run: Some("fixture".into()),
             anchors: true,
+            stream_full_v1: false,
             prediction_v1: false,
             prediction_v2: false,
         };
@@ -2603,6 +2691,7 @@ mod tests {
             prediction_v1: false,
             prediction_v2: false,
             anchors: true,
+            stream_full_v1: false,
         };
         let mut out = Vec::new();
         serve_dir(&remote, &req, &sent, &mut out).unwrap();

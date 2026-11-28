@@ -577,6 +577,7 @@ impl Fixture {
             prediction_v1: false,
             prediction_v2: false,
             anchors: false,
+            stream_full_v1: false,
         };
         Self {
             root,
@@ -620,6 +621,84 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
     }
+}
+
+#[test]
+fn negotiated_large_regular_file_commits_only_after_verified_trailer() {
+    if !available() {
+        return;
+    }
+    let mut fixture = Fixture::new("full-stream", b"app");
+    fixture.req.have.clear();
+    let src = fixture.remote.join("app");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&src)
+        .unwrap()
+        .set_len(stream::MIN_SIZE)
+        .unwrap();
+    assert!(
+        fixture
+            .frames()
+            .iter()
+            .any(|(f, _)| matches!(f,Frame::File{len,..} if *len!=stream::TAG))
+    );
+    fixture.req.stream_full_v1 = true;
+    let mut wire = Vec::new();
+    serve_dir(&fixture.remote, &fixture.req, &fixture.sent, &mut wire).unwrap();
+    let mut reader = wire.as_slice();
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    assert!(matches!(
+        serde_json::from_str::<Frame>(&line).unwrap(),
+        Frame::File {
+            len: stream::TAG,
+            base: None,
+            patch: false,
+            ..
+        }
+    ));
+    let mut remaining = reader;
+    let mut chunks = stream::Chunks::new(&mut remaining, stream::MIN_SIZE).unwrap();
+    std::io::copy(&mut chunks, &mut std::io::sink()).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Frame>(remaining).unwrap(),
+        Frame::End
+    );
+    let payload = &reader[..reader.len() - remaining.len()];
+    let dest = fixture.root.join("received");
+    std::fs::write(&dest, b"original").unwrap();
+    let install = |bytes: &[u8], size, v| {
+        apply_frame(
+            &fixture.root,
+            "received",
+            0o644,
+            size,
+            None,
+            stream::Chunks::new(bytes, size).unwrap().take(stream::TAG),
+            v,
+        )
+    };
+    for cut in [1, 6, payload.len() - 12, payload.len() - 1] {
+        assert!(install(&payload[..cut], stream::MIN_SIZE, Validation::NativeBuild).is_err());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"original");
+    }
+    let mut corrupt = payload.to_vec();
+    *corrupt.last_mut().unwrap() ^= 1;
+    assert!(install(&corrupt, stream::MIN_SIZE, Validation::NativeBuild).is_err());
+    assert!(install(payload, stream::MIN_SIZE + 1, Validation::NativeBuild).is_err());
+    assert!(install(payload, stream::MIN_SIZE, Validation::Glibc217).is_err());
+    assert_eq!(std::fs::read(&dest).unwrap(), b"original");
+    install(payload, stream::MIN_SIZE, Validation::NativeBuild).unwrap();
+    assert_eq!(dest.metadata().unwrap().len(), stream::MIN_SIZE);
+    let mut prefix = [0; 3];
+    std::fs::File::open(dest)
+        .unwrap()
+        .read_exact(&mut prefix)
+        .unwrap();
+    assert_eq!(&prefix, b"app");
 }
 
 #[test]
