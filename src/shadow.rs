@@ -1,4 +1,4 @@
-//! Shadow leaf crates (`JUSTRUST_SHADOW=1`, opt-in, FINDINGS 47).
+//! Shadow leaf crates (default on; `JUSTRUST_SHADOW=0` to disable, FINDINGS 47).
 //!
 //! `justrust test -p <big> --lib -- <m>` where `<m>` is a top-level module
 //! of a big crate compiles and links the whole crate's test binary to run a
@@ -35,8 +35,15 @@ use std::process::Command;
 
 pub const ENV: &str = "JUSTRUST_SHADOW";
 
+fn enabled_from(val: Option<&str>) -> bool {
+    match val {
+        Some(v) => !matches!(v, "0" | "off" | "false" | "no"),
+        None => true,
+    }
+}
+
 pub fn enabled() -> bool {
-    std::env::var(ENV).is_ok_and(|v| matches!(v.as_str(), "1" | "on" | "true"))
+    enabled_from(std::env::var(ENV).ok().as_deref())
 }
 
 /// The routable command: `test -p <pkg> --lib -- <filter> [libtest flags]`.
@@ -1041,5 +1048,16 @@ mod tests {
         );
         assert_eq!(doc["build"]["target-dir"].as_str(), Some("/t"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enabled_by_default_and_respects_opt_out() {
+        assert!(enabled_from(None));
+        assert!(enabled_from(Some("1")));
+        assert!(enabled_from(Some("on")));
+        assert!(!enabled_from(Some("0")));
+        assert!(!enabled_from(Some("off")));
+        assert!(!enabled_from(Some("false")));
+        assert!(!enabled_from(Some("no")));
     }
 }
