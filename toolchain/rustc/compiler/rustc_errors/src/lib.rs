@@ -368,6 +368,12 @@ struct DiagCtxtInner {
 
     /// Controlled by `-Z hint-msrv`; this allows avoiding emitting lints which would raise MSRV.
     msrv: Option<RustcVersion>,
+
+    /// When `Some`, diagnostics emitted via `emit_diagnostic` are buffered here instead of
+    /// written immediately to `emitter`, then stably sorted by primary span on flush.
+    /// Used by `rustc_lint::late::check_crate` so parallel/cached `lint_mod` and `crate_lints`
+    /// interleave deterministically in source order.
+    sorted_buffer: Option<Vec<DiagInner>>,
 }
 
 /// A key denoting where from a diagnostic was stashed.
@@ -539,6 +545,7 @@ impl<'a> DiagCtxtHandle<'a> {
             fulfilled_expectations,
             ice_file: _,
             msrv: _,
+            sorted_buffer: _,
         } = inner.deref_mut();
 
         // For the `Vec`s and `HashMap`s, we overwrite with an empty container to free the
@@ -867,6 +874,32 @@ impl<'a> DiagCtxtHandle<'a> {
         self.dcx.inner.borrow_mut().emit_diagnostic(diagnostic, self.tainted_with_errors)
     }
 
+    /// Buffer diagnostics emitted until [`Self::flush_sorted_buffer`] is called, then emit them
+    /// in stable source-span order.
+    pub fn start_buffering_sorted(&self) {
+        let mut inner = self.dcx.inner.borrow_mut();
+        if inner.sorted_buffer.is_none() {
+            inner.sorted_buffer = Some(Vec::new());
+        }
+    }
+
+    /// Flush diagnostics buffered since [`Self::start_buffering_sorted`], stably sorted by
+    /// primary span `(lo, hi)`.
+    pub fn flush_sorted_buffer(&self) {
+        let mut inner = self.dcx.inner.borrow_mut();
+        if let Some(mut buf) = inner.sorted_buffer.take() {
+            buf.sort_by_key(|d| {
+                d.span.primary_span().map(|s| {
+                    let cs = s.source_callsite();
+                    (cs.lo(), std::cmp::Reverse(cs.hi()))
+                })
+            });
+            for diag in buf {
+                inner.emitter.emit_diagnostic(diag);
+            }
+        }
+    }
+
     pub fn emit_artifact_notification(&self, path: &Path, artifact_type: &str) {
         self.dcx.inner.borrow_mut().emitter.emit_artifact_notification(path, artifact_type);
     }
@@ -1176,6 +1209,7 @@ impl DiagCtxtInner {
             fulfilled_expectations: Default::default(),
             ice_file: None,
             msrv: None,
+            sorted_buffer: None,
         }
     }
 
@@ -1345,7 +1379,11 @@ impl DiagCtxtInner {
                 }
                 self.has_printed = true;
 
-                self.emitter.emit_diagnostic(diagnostic);
+                if let Some(buf) = &mut self.sorted_buffer {
+                    buf.push(diagnostic);
+                } else {
+                    self.emitter.emit_diagnostic(diagnostic);
+                }
             }
 
             if is_error {

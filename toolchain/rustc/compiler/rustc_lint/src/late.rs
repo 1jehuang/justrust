@@ -360,7 +360,7 @@ pub fn late_lint_mod<'tcx, T: LateLintPass<'tcx> + 'tcx>(
         enclosing_body: None,
         typeck_results: None,
         param_env: ty::ParamEnv::empty(),
-        effective_visibilities: tcx.effective_visibilities(()),
+        effective_visibilities: crate::context::LintEffectiveVisibilities::new(tcx),
         last_node_with_lint_attrs: tcx.local_def_id_to_hir_id(mod_id),
         generics: None,
         only_module: true,
@@ -438,7 +438,7 @@ fn late_lint_crate<'tcx>(tcx: TyCtxt<'tcx>) {
         enclosing_body: None,
         typeck_results: None,
         param_env: ty::ParamEnv::empty(),
-        effective_visibilities: tcx.effective_visibilities(()),
+        effective_visibilities: crate::context::LintEffectiveVisibilities::new(tcx),
         last_node_with_lint_attrs: hir::CRATE_HIR_ID,
         generics: None,
         only_module: false,
@@ -460,6 +460,7 @@ fn late_lint_crate<'tcx>(tcx: TyCtxt<'tcx>) {
 
 /// Performs lint checking on a crate.
 pub fn check_crate<'tcx>(tcx: TyCtxt<'tcx>) {
+    tcx.dcx().start_buffering_sorted();
     par_join(
         || {
             tcx.sess.time("crate_lints", || {
@@ -474,4 +475,5 @@ pub fn check_crate<'tcx>(tcx: TyCtxt<'tcx>) {
             });
         },
     );
+    tcx.dcx().flush_sorted_buffer();
 }

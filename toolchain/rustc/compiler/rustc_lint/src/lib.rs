@@ -154,7 +154,13 @@ pub fn provide(providers: &mut Providers) {
     levels::provide(providers);
     expect::provide(providers);
     foreign_modules::provide(providers);
-    *providers = Providers { lint_mod, ..*providers };
+    *providers = Providers {
+        lint_mod,
+        local_effective_visibility: |tcx, def_id| {
+            tcx.effective_visibilities(()).effective_vis(def_id).copied()
+        },
+        ..*providers
+    };
 }
 
 fn lint_mod(tcx: TyCtxt<'_>, mod_id: LocalModId) {

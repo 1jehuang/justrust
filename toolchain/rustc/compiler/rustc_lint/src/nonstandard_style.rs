@@ -504,7 +504,7 @@ impl NonUpperCaseGlobals {
             // If the item is exported, suggesting changing its name would be a breaking change
             // and could break users without a "nice" applicable fix, so let's avoid it.
             let can_change_usages = if let Some(did) = did {
-                !cx.tcx.effective_visibilities(()).is_exported(did)
+                !cx.effective_visibilities.is_exported(did)
             } else {
                 false
             };

@@ -87,7 +87,7 @@ use crate::middle::debugger_visualizer::DebuggerVisualizerFile;
 use crate::middle::deduced_param_attrs::DeducedParamAttrs;
 use crate::middle::exported_symbols::{ExportedSymbol, SymbolExportInfo};
 use crate::middle::lib_features::LibFeatures;
-use crate::middle::privacy::EffectiveVisibilities;
+use crate::middle::privacy::{EffectiveVisibilities, EffectiveVisibility};
 use crate::middle::resolve::{
     AstOwner, DocLinkResMap, ModChild, ResolverAstLowering, ResolverGlobalCtxt,
 };
@@ -1248,6 +1248,13 @@ rustc_queries! {
         cache_on_disk
         handle_cycle_error
         separate_provide_extern
+    }
+
+    /// Effective visibility of one local definition, projected out of
+    /// `effective_visibilities(())`. Per-module lints read this instead of the whole
+    /// table, so `lint_mod` stays green when an edit adds or removes unrelated items.
+    query local_effective_visibility(def_id: LocalDefId) -> Option<EffectiveVisibility> {
+        desc { "getting the effective visibility of `{}`", tcx.def_path_str(def_id) }
     }
 
     /// Performs lint checking for the module.

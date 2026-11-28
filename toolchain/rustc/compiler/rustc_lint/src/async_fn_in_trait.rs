@@ -100,7 +100,7 @@ impl<'tcx> LateLintPass<'tcx> for AsyncFnInTrait {
             }
 
             // Only need to think about library implications of reachable traits
-            if !cx.tcx.effective_visibilities(()).is_reachable(item.owner_id.def_id) {
+            if !cx.effective_visibilities.is_reachable(item.owner_id.def_id) {
                 return;
             }
 

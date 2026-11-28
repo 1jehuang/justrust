@@ -1157,11 +1157,11 @@ impl UnreachablePub {
         // except when `pub(super) == pub(crate)`
         let new_vis = if let Some(ty::Visibility::Restricted(restricted_did)) =
             cx.effective_visibilities.effective_vis(def_id).map(|effective_vis| {
-                effective_vis.at_level(rustc_middle::middle::privacy::Level::Reachable)
+                *effective_vis.at_level(rustc_middle::middle::privacy::Level::Reachable)
             })
             && let parent_parent =
                 cx.tcx.parent_module_from_def_id(cx.tcx.parent_module_from_def_id(def_id).into())
-            && *restricted_did == parent_parent
+            && restricted_did == parent_parent
             && !restricted_did.to_def_id().is_crate_root()
         {
             "pub(super)"
