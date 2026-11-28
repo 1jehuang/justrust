@@ -33,7 +33,7 @@
 //! daemon from another justrust build before any output arrived means the
 //! build runs in the client as before. On by default for non-terminal
 //! agent builds on Linux; `JUSTRUST_BUILDD=0` disables the daemon,
-//! `JUSTRUST_BUILDD_PREBUILD=1` opts into speculative prebuilds (off by default).
+//! `JUSTRUST_BUILDD_PREBUILD=0` disables speculative prebuilds.
 //! Experimental `JUSTRUST_BUILDD_NATIVE_EMPTY=1` skips source validation only
 //! when no active or finished candidate exists. Native Cargo still runs, and
 //! the unvalidated execution can never be attached to or replayed.
@@ -1225,6 +1225,8 @@ struct Build {
     units_key: Mutex<Option<String>>,
     /// Agent session that asked (`JUSTRUST_SLOT_SESSION`).
     session: String,
+    /// Workspace directory (`req.cwd`).
+    cwd: String,
     run_id: Option<String>,
     started: Instant,
     finished: Mutex<Option<Instant>>,
@@ -1248,17 +1250,28 @@ struct State {
     finished: HashMap<String, Arc<Build>>,
     /// Requests to prebuild when their sources change, by request key.
     recent: HashMap<String, Recent>,
+    /// Per-workspace (`cwd`) adaptive backoff after wasted/cancelled prebuilds.
+    prebuild_backoff: HashMap<String, PrebuildBackoff>,
     served: u64,
     coalesced: u64,
     prebuilt: u64,
     last_request: Option<Instant>,
 }
 
-/// A request to prebuild when its sources change (`JUSTRUST_BUILDD_PREBUILD=1` enables).
+#[derive(Default)]
+struct PrebuildBackoff {
+    misses: u32,
+    cooldown_until: Option<Instant>,
+}
+
+/// A request to prebuild when its sources change (`JUSTRUST_BUILDD_PREBUILD=0` disables).
 struct Recent {
     req: Request,
     roots: Vec<PathBuf>,
     used: Instant,
+    /// Number of real requests seen for this key. Prebuilds only start once
+    /// an edit-build loop is established (`seen >= MIN_REQUESTS_TO_PREBUILD`).
+    seen: u32,
     /// Prebuilds left until the agent asks again. Bounds the loop of a
     /// build that writes into its own sources (snapshot tests, generated
     /// files): each of its writes would otherwise start another prebuild.
@@ -1266,6 +1279,9 @@ struct Recent {
 }
 
 const PREBUILDS_PER_REQUEST: u8 = 3;
+/// Require at least two real requests for the same command before firing
+/// speculative prebuilds, so one-off commands don't waste build slots.
+const MIN_REQUESTS_TO_PREBUILD: u32 = 2;
 
 /// Prebuild only what was asked for lately: each agent session's last
 /// request (right for 53% of 3,436 mined post-edit build calls, 0.47
@@ -1665,12 +1681,14 @@ fn wrong_guess_candidate(build_key: &str, b: &Build, key: &str, session: &str) -
 
 fn remember_request(st: &mut State, req: &Request, key: &str, roots: &[PathBuf]) {
     if !req.prebuild && wants_prebuild(req) {
+        let seen = st.recent.get(key).map_or(1, |r| r.seen.saturating_add(1));
         st.recent.insert(
             key.to_owned(),
             Recent {
                 req: req.clone(),
                 roots: roots.to_vec(),
                 used: Instant::now(),
+                seen,
                 budget: PREBUILDS_PER_REQUEST,
             },
         );
@@ -1987,6 +2005,7 @@ fn start(req: &Request, stamp: Option<String>, cwd: &Path) -> Result<Arc<Build>>
         compile_only: Mutex::default(),
         units_key: Mutex::default(),
         session: session_of(req),
+        cwd: req.cwd.clone(),
         run_id: req
             .env
             .iter()
@@ -2094,11 +2113,88 @@ fn cancel_stale_prebuild(dm: &Daemon, key: &str, stamp: &str) {
     }
 }
 
-/// Off by default; `JUSTRUST_BUILDD_PREBUILD=1` opts in.
+/// On by default; `JUSTRUST_BUILDD_PREBUILD=0` turns it off.
 fn wants_prebuild(req: &Request) -> bool {
-    req.env
-        .iter()
-        .any(|(k, v)| k == "JUSTRUST_BUILDD_PREBUILD" && matches!(v.as_str(), "1" | "on" | "true"))
+    !req.env.iter().any(|(k, v)| {
+        k == "JUSTRUST_BUILDD_PREBUILD" && matches!(v.as_str(), "0" | "off" | "false")
+    })
+}
+
+fn backoff_duration(misses: u32) -> Duration {
+    match misses {
+        0 => Duration::ZERO,
+        1 => Duration::from_secs(15),
+        2 => Duration::from_secs(60),
+        3 => Duration::from_secs(300),
+        _ => Duration::from_secs(900),
+    }
+}
+
+fn record_prebuild_hit(st: &mut State, cwd: &str) {
+    st.prebuild_backoff.remove(cwd);
+}
+
+fn record_prebuild_miss(st: &mut State, cwd: &str, now: Instant) {
+    let entry = st.prebuild_backoff.entry(cwd.to_owned()).or_default();
+    entry.misses = entry.misses.saturating_add(1);
+    entry.cooldown_until = Some(now + backoff_duration(entry.misses));
+}
+
+fn in_prebuild_cooldown(st: &State, cwd: &str, now: Instant) -> bool {
+    st.prebuild_backoff
+        .get(cwd)
+        .and_then(|b| b.cooldown_until)
+        .is_some_and(|until| now < until)
+}
+
+/// Pick at most one eligible prebuild candidate per workspace (`cwd`),
+/// preferring the most recently used command. Skips workspaces that already
+/// have an in-flight build, are in adaptive backoff cooldown, or haven't
+/// established a real edit-build loop yet (`seen < MIN_REQUESTS_TO_PREBUILD`,
+/// unless explicitly queued by `warm`).
+fn select_prebuild_candidates(
+    st: &State,
+    dirty: &[PathBuf],
+    retry: &[String],
+    queued: &[String],
+    now: Instant,
+) -> Vec<(String, Request, Vec<PathBuf>)> {
+    let mut best_by_cwd: HashMap<&str, (&String, &Recent)> = HashMap::new();
+    for (k, r) in &st.recent {
+        if r.budget == 0 {
+            continue;
+        }
+        let is_queued = queued.contains(k);
+        if !is_queued && r.seen < MIN_REQUESTS_TO_PREBUILD {
+            continue;
+        }
+        if !is_queued && in_prebuild_cooldown(st, &r.req.cwd, now) {
+            continue;
+        }
+        if st.builds.values().any(|b| b.cwd == r.req.cwd) {
+            continue;
+        }
+        let triggered = retry.contains(k)
+            || is_queued
+            || dirty
+                .iter()
+                .any(|d| r.roots.iter().any(|x| d.starts_with(x)));
+        if !triggered {
+            continue;
+        }
+        best_by_cwd
+            .entry(r.req.cwd.as_str())
+            .and_modify(|cur| {
+                if r.used > cur.1.used {
+                    *cur = (k, r);
+                }
+            })
+            .or_insert((k, r));
+    }
+    best_by_cwd
+        .into_values()
+        .map(|(k, r)| (k.clone(), r.req.clone(), r.roots.clone()))
+        .collect()
 }
 
 fn is_test(argv: &[String]) -> bool {
@@ -2377,21 +2473,20 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
         let queued = dm.warm.take_ready();
         let wanted: Vec<(String, Request, Vec<PathBuf>)> = {
             let mut st = dm.state.lock().unwrap();
+            let now = Instant::now();
             prune_recent(&mut st.recent);
-            st.finished
-                .retain(|_, b| b.started.elapsed() < FINISHED_MAX_AGE);
-            st.recent
-                .iter()
-                .filter(|(k, r)| {
-                    r.budget > 0
-                        && (retry.contains(k)
-                            || queued.contains(k)
-                            || dirty
-                                .iter()
-                                .any(|d| r.roots.iter().any(|x| d.starts_with(x))))
-                })
-                .map(|(k, r)| (k.clone(), r.req.clone(), r.roots.clone()))
-                .collect()
+            let mut expired_cwds = Vec::new();
+            st.finished.retain(|_, b| {
+                let keep = b.started.elapsed() < FINISHED_MAX_AGE;
+                if !keep && *b.prebuild.lock().unwrap() && !b.log.lock().unwrap().claimed {
+                    expired_cwds.push(b.cwd.clone());
+                }
+                keep
+            });
+            for cwd in expired_cwds {
+                record_prebuild_miss(&mut st, &cwd, now);
+            }
+            select_prebuild_candidates(&st, &dirty, &retry, &queued, now)
         };
         dirty.clear();
         retry.clear();
@@ -2501,11 +2596,16 @@ fn reap(dm: &Daemon, key: &str, b: &Arc<Build>) {
     }
     // Nobody saw it: keep it for the request it was started for.
     let l = b.log.lock().unwrap();
-    let (claimed, early_served) = (l.claimed, l.early_served);
+    let (claimed, early_served, sharers) = (l.claimed, l.early_served, l.sharers);
     let dropped = no_result(b, &l);
     drop(l);
-    if b.stamp.is_some() && !dropped && ((!claimed && *b.prebuild.lock().unwrap()) || early_served)
-    {
+    let was_prebuild = *b.prebuild.lock().unwrap();
+    if was_prebuild && (claimed || sharers > 0) {
+        record_prebuild_hit(&mut st, &b.cwd);
+    } else if was_prebuild && !claimed && dropped {
+        record_prebuild_miss(&mut st, &b.cwd, Instant::now());
+    }
+    if b.stamp.is_some() && !dropped && ((!claimed && was_prebuild) || early_served) {
         st.finished.insert(key.to_owned(), b.clone());
     }
     st.last_request = Some(Instant::now());
@@ -3476,6 +3576,7 @@ mod tests {
             compile_only: Mutex::default(),
             units_key: Mutex::default(),
             session: String::new(),
+            cwd: "/ws".into(),
             run_id: None,
             started: Instant::now(),
             finished: Mutex::default(),
@@ -3917,5 +4018,73 @@ mod tests {
         assert_eq!(resolve_live_exe(&deleted), deleted);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prebuild_selection_enforces_loop_cap_and_backoff() {
+        let mut st = State::default();
+        let now = Instant::now();
+        let root = PathBuf::from("/ws");
+        let dirty = vec![PathBuf::from("/ws/src/lib.rs")];
+        let queued: Vec<String> = Vec::new();
+
+        let make_req = |session: &str, argv: &[&str]| Request {
+            build: String::new(),
+            cwd: "/ws".into(),
+            argv: argv.iter().map(|s| (*s).to_owned()).collect(),
+            env: vec![("JUSTRUST_SLOT_SESSION".into(), session.into())],
+            prebuild: false,
+        };
+
+        // 1. Loop detection: first request (seen == 1) does not trigger prebuild.
+        let r_check = make_req("s1", &["check"]);
+        let k_check = request_key(&r_check);
+        remember_request(&mut st, &r_check, &k_check, std::slice::from_ref(&root));
+        assert!(select_prebuild_candidates(&st, &dirty, &[], &queued, now).is_empty());
+
+        // Second request for the same command establishes a loop (seen == 2).
+        remember_request(&mut st, &r_check, &k_check, std::slice::from_ref(&root));
+        let got = select_prebuild_candidates(&st, &dirty, &[], &queued, now);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, k_check);
+
+        // 2. Single-prebuild cap per workspace: two eligible commands in /ws -> only most recent.
+        let r_test = make_req("s2", &["test", "--lib"]);
+        let k_test = request_key(&r_test);
+        remember_request(&mut st, &r_test, &k_test, std::slice::from_ref(&root));
+        remember_request(&mut st, &r_test, &k_test, std::slice::from_ref(&root));
+        st.recent.get_mut(&k_check).unwrap().used = now - Duration::from_secs(10);
+        st.recent.get_mut(&k_test).unwrap().used = now;
+        let got = select_prebuild_candidates(&st, &dirty, &[], &queued, now);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, k_test);
+
+        // In-flight build in /ws blocks any prebuild for /ws.
+        st.builds.insert("active".into(), Arc::new(fake_build()));
+        assert!(select_prebuild_candidates(&st, &dirty, &[], &queued, now).is_empty());
+        st.builds.clear();
+
+        // 3. Adaptive backoff: miss puts workspace in cooldown; hit clears it.
+        record_prebuild_miss(&mut st, "/ws", now);
+        assert!(in_prebuild_cooldown(
+            &st,
+            "/ws",
+            now + Duration::from_secs(5)
+        ));
+        assert!(
+            select_prebuild_candidates(&st, &dirty, &[], &queued, now + Duration::from_secs(5))
+                .is_empty()
+        );
+        assert!(!in_prebuild_cooldown(
+            &st,
+            "/ws",
+            now + Duration::from_secs(20)
+        ));
+        record_prebuild_hit(&mut st, "/ws");
+        assert!(!in_prebuild_cooldown(&st, "/ws", now));
+        assert_eq!(
+            select_prebuild_candidates(&st, &dirty, &[], &queued, now).len(),
+            1
+        );
     }
 }

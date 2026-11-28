@@ -286,6 +286,7 @@ fn inherit(dm: &Daemon, policy: Option<&str>) {
                     req: i.req,
                     roots: roots.clone(),
                     used,
+                    seen: MIN_REQUESTS_TO_PREBUILD,
                     budget: i.budget,
                 },
             );
@@ -530,6 +531,7 @@ mod tests {
                 req: r,
                 roots: Vec::new(),
                 used: Instant::now(),
+                seen: MIN_REQUESTS_TO_PREBUILD,
                 budget: 0,
             },
         );
@@ -551,25 +553,12 @@ mod tests {
             version: 1,
             toolchain: Some("jr-aaaaaaa".into()),
             entries: vec![
-                entry(&ws, now - 60.0, &[("JUSTRUST_BUILDD_PREBUILD", "1")]),
-                // Default (not opted in), too old, from the future, deleted, relative, opted out.
                 entry(&ws, now - 60.0, &[]),
-                entry(
-                    &ws,
-                    now - RECENT_MAX_AGE.as_secs_f64() - 1.0,
-                    &[("JUSTRUST_BUILDD_PREBUILD", "1")],
-                ),
-                entry(&ws, now + 60.0, &[("JUSTRUST_BUILDD_PREBUILD", "1")]),
-                entry(
-                    &d.join("gone"),
-                    now - 60.0,
-                    &[("JUSTRUST_BUILDD_PREBUILD", "1")],
-                ),
-                entry(
-                    Path::new("ws"),
-                    now - 60.0,
-                    &[("JUSTRUST_BUILDD_PREBUILD", "1")],
-                ),
+                // Too old, from the future, deleted, relative, opted out.
+                entry(&ws, now - RECENT_MAX_AGE.as_secs_f64() - 1.0, &[]),
+                entry(&ws, now + 60.0, &[]),
+                entry(&d.join("gone"), now - 60.0, &[]),
+                entry(Path::new("ws"), now - 60.0, &[]),
                 entry(&ws, now - 60.0, &[("JUSTRUST_BUILDD_PREBUILD", "0")]),
             ],
         };
@@ -684,6 +673,7 @@ mod tests {
             compile_only: Mutex::default(),
             units_key: Mutex::default(),
             session: String::new(),
+            cwd: String::new(),
             run_id: None,
             started: Instant::now(),
             finished: Mutex::default(),
