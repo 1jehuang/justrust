@@ -131,6 +131,8 @@ pub(super) struct EncodeContext<'a, 'tcx> {
     shallow_item_hashers: Arc<Mutex<FxHashMap<DefIndex, XxHash3_128>>>,
     /// justrust (`-Zjr-iface-hash`): currently active DefIndex being encoded in `encode_def_ids`.
     active_item: Arc<Mutex<Option<DefIndex>>>,
+    /// justrust (`-Zjr-iface-hash`): additional owning DefIndexes for shared constant allocations.
+    active_extra_items: Arc<Mutex<Vec<DefIndex>>>,
     /// justrust (`-Zjr-iface-hash`): when true, also feed `shallow_item_hashers`.
     active_shallow: Arc<std::sync::atomic::AtomicBool>,
     /// justrust (`-Zjr-iface-hash`): when true, `crate_iface_hasher` skips incoming bytes
@@ -687,6 +689,23 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         if self.crate_iface_hasher.is_some() {
             self.opaque.iface_flush_pending();
             *self.active_item.lock().unwrap() = item;
+            self.active_extra_items.lock().unwrap().clear();
+        }
+    }
+
+    #[inline]
+    fn set_active_items(&mut self, items: &[DefIndex]) {
+        if self.crate_iface_hasher.is_some() {
+            self.opaque.iface_flush_pending();
+            if let Some((&first, rest)) = items.split_first() {
+                *self.active_item.lock().unwrap() = Some(first);
+                let mut extra = self.active_extra_items.lock().unwrap();
+                extra.clear();
+                extra.extend_from_slice(rest);
+            } else {
+                *self.active_item.lock().unwrap() = None;
+                self.active_extra_items.lock().unwrap().clear();
+            }
         }
     }
 
@@ -994,14 +1013,17 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                     let id = self.interpret_allocs[idx];
                     let pos = self.position() as u64;
                     interpret_alloc_index.push(pos);
-                    // justrust: route each allocation's bytes to its owning item hasher
-                    // (when referenced by a single item), or to `crate_iface_hasher` if
-                    // shared across multiple items or referenced at crate level.
-                    let single_item = match self.alloc_readers[idx].as_slice() {
-                        [Some(def_idx)] => Some(*def_idx),
-                        _ => None,
-                    };
-                    self.set_active_item(single_item);
+                    // justrust: route each allocation's bytes to its owning item hasher(s)
+                    // when referenced only by specific items, or to `crate_iface_hasher` if
+                    // referenced at crate level (or unattributed).
+                    let readers = &self.alloc_readers[idx];
+                    if !readers.is_empty() && readers.iter().all(|r| r.is_some()) {
+                        let items: Vec<DefIndex> =
+                            readers.iter().filter_map(|&r| r).collect();
+                        self.set_active_items(&items);
+                    } else {
+                        self.set_active_item(None);
+                    }
                     interpret::specialized_encode_alloc_id(self, tcx, id);
                 }
                 n = new_n;
@@ -3135,6 +3157,7 @@ fn with_encode_metadata_header(
     let item_hashers: Arc<Mutex<FxHashMap<DefIndex, XxHash3_128>>> = Default::default();
     let shallow_item_hashers: Arc<Mutex<FxHashMap<DefIndex, XxHash3_128>>> = Default::default();
     let active_item: Arc<Mutex<Option<DefIndex>>> = Default::default();
+    let active_extra_items: Arc<Mutex<Vec<DefIndex>>> = Default::default();
     let active_shallow = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let crate_iface_skip = Arc::new(std::sync::atomic::AtomicBool::new(false));
     // `JUSTRUST_RUSTC_IFACE_DUMP=<path>`: also write the hashed byte stream, to
@@ -3151,6 +3174,7 @@ fn with_encode_metadata_header(
         let item_hashers = Arc::clone(&item_hashers);
         let shallow_item_hashers = Arc::clone(&shallow_item_hashers);
         let active_item = Arc::clone(&active_item);
+        let active_extra_items = Arc::clone(&active_extra_items);
         let active_shallow = Arc::clone(&active_shallow);
         let crate_iface_skip = Arc::clone(&crate_iface_skip);
         move |bytes: &[u8]| {
@@ -3162,20 +3186,25 @@ fn with_encode_metadata_header(
             {
                 if let Some(def_idx) = *active_item.lock().unwrap() {
                     let mut map = item_hashers.lock().unwrap();
-                    let h = map.entry(def_idx).or_insert_with(|| {
-                        let mut h = XxHash3_128::new();
-                        h.write(&def_idx.as_u32().to_le_bytes());
-                        h
-                    });
-                    h.write(bytes);
-                    if active_shallow.load(std::sync::atomic::Ordering::Relaxed) {
-                        let mut smap = shallow_item_hashers.lock().unwrap();
-                        let sh = smap.entry(def_idx).or_insert_with(|| {
+                    let feed = |map: &mut FxHashMap<DefIndex, XxHash3_128>, idx: DefIndex| {
+                        let h = map.entry(idx).or_insert_with(|| {
                             let mut h = XxHash3_128::new();
-                            h.write(&def_idx.as_u32().to_le_bytes());
+                            h.write(&idx.as_u32().to_le_bytes());
                             h
                         });
-                        sh.write(bytes);
+                        h.write(bytes);
+                    };
+                    feed(&mut map, def_idx);
+                    let extra = active_extra_items.lock().unwrap();
+                    for &extra_idx in extra.iter() {
+                        feed(&mut map, extra_idx);
+                    }
+                    if active_shallow.load(std::sync::atomic::Ordering::Relaxed) {
+                        let mut smap = shallow_item_hashers.lock().unwrap();
+                        feed(&mut smap, def_idx);
+                        for &extra_idx in extra.iter() {
+                            feed(&mut smap, extra_idx);
+                        }
                     }
                 } else {
                     crate_h.lock().unwrap().write(bytes);
@@ -3235,6 +3264,7 @@ fn with_encode_metadata_header(
         item_hashers,
         shallow_item_hashers,
         active_item,
+        active_extra_items,
         active_shallow,
         crate_iface_skip,
         shorthand_content_hashes: Default::default(),
