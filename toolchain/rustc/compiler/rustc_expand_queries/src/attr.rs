@@ -8,10 +8,9 @@
 use rustc_ast::tokenstream::TokenStream;
 use rustc_expand::base::ExtCtxt;
 use rustc_middle::ty::{TyCtxt, tls};
-use rustc_proc_macro as pm;
 use rustc_span::LocalExpnId;
 
-type Client = pm::bridge::client::Client;
+type Client = rustc_expand::proc_macro_client::ProcMacroClient;
 
 struct QueryAttrExpandCtx {
     /// Type-erased `&mut ExtCtxt`.

@@ -1,10 +1,9 @@
 use rustc_ast::tokenstream::TokenStream;
 use rustc_expand::base::ExtCtxt;
 use rustc_middle::ty::{TyCtxt, tls};
-use rustc_proc_macro as pm;
 use rustc_span::LocalExpnId;
 
-type DeriveClient = pm::bridge::client::Client;
+type DeriveClient = rustc_expand::proc_macro_client::ProcMacroClient;
 
 /// Stores the context necessary to expand a derive proc macro via a query.
 struct QueryDeriveExpandCtx {

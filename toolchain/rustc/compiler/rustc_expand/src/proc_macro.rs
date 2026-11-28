@@ -77,10 +77,9 @@ impl base::AttrProcMacro for AttrProcMacro {
         if ecx.sess.opts.incremental.is_some()
             && ecx.sess.opts.unstable_opts.cache_proc_macros
             && std::env::var_os("JUSTRUST_RUSTC_ATTR_CACHE").is_none_or(|v| v != "0")
-            && let Some(client) = self.client.local()
         {
             let invoc_id = ecx.current_expansion.id;
-            return (*EXPAND_ATTR_MACRO_CACHED)(invoc_id, annotation, annotated, ecx, client)
+            return (*EXPAND_ATTR_MACRO_CACHED)(invoc_id, annotation, annotated, ecx, self.client)
                 .map_err(|()| {
                     // The error was emitted when the macro ran (possibly in an
                     // earlier session, then replayed with the query result).
@@ -96,9 +95,9 @@ pub fn expand_attr_macro(
     span: Span,
     annotation: TokenStream,
     annotated: TokenStream,
-    client: pm::bridge::client::Client,
+    client: ProcMacroClient,
 ) -> Result<TokenStream, ErrorGuaranteed> {
-    expand_attr_macro_owned(ecx, span, annotation, annotated, client.into())
+    expand_attr_macro_owned(ecx, span, annotation, annotated, client)
 }
 
 fn expand_attr_macro_owned(
@@ -130,7 +129,7 @@ pub static EXPAND_ATTR_MACRO_CACHED: AtomicRef<
         TokenStream,
         TokenStream,
         &mut ExtCtxt<'_>,
-        pm::bridge::client::Client,
+        ProcMacroClient,
     ) -> Result<TokenStream, ()>,
 > = AtomicRef::new(
     &(|_, _, _, _: &mut ExtCtxt<'_>, _| -> Result<_, _> {
@@ -165,9 +164,8 @@ impl MultiItemModifier for DeriveProcMacro {
 
         let res = if ecx.sess.opts.incremental.is_some()
             && ecx.sess.opts.unstable_opts.cache_proc_macros
-            && let Some(client) = self.client.local()
         {
-            (*EXPAND_DERIVE_MACRO_CACHED)(invoc_id, input, ecx, client)
+            (*EXPAND_DERIVE_MACRO_CACHED)(invoc_id, input, ecx, self.client)
         } else {
             expand_derive_macro_owned(invoc_id, input, ecx, self.client)
         };
@@ -210,7 +208,7 @@ impl MultiItemModifier for DeriveProcMacro {
     }
 }
 
-type DeriveClient = pm::bridge::client::Client;
+type DeriveClient = ProcMacroClient;
 
 pub fn expand_derive_macro(
     invoc_id: LocalExpnId,
@@ -218,7 +216,7 @@ pub fn expand_derive_macro(
     ecx: &mut ExtCtxt<'_>,
     client: DeriveClient,
 ) -> Result<TokenStream, ()> {
-    expand_derive_macro_owned(invoc_id, input, ecx, client.into())
+    expand_derive_macro_owned(invoc_id, input, ecx, client)
 }
 
 fn expand_derive_macro_owned(
