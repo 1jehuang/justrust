@@ -409,7 +409,7 @@ def run_swarm4(stacks: list[str], rounds: int) -> list[dict]:
     return samples
 
 
-def run_warm(category: str, cases: list[tuple], stacks: list[str], rounds: int) -> list[dict]:
+def run_warm(category: str, cases: list[tuple], stacks: list[str], rounds: int, think_gap_s: float = 0.0) -> list[dict]:
     samples = []
     for name, repo, sub, args, need_tests in cases:
         checkouts: dict[str, Path] = {}
@@ -429,6 +429,8 @@ def run_warm(category: str, cases: list[tuple], stacks: list[str], rounds: int) 
                 marker = f'holistic_w_{uuid.uuid4().hex[:8]}'
                 path, orig = inject_marker(co, repo, marker)
                 try:
+                    if think_gap_s > 0:
+                        time.sleep(think_gap_s)
                     print(f'  [{category:10s}] {name:16s} r{r+1} {st:6s} ...', end=' ', flush=True)
                     rec = run_cmd(st, co, sub, args)
                     verify_marker(rec, marker)
@@ -437,6 +439,8 @@ def run_warm(category: str, cases: list[tuple], stacks: list[str], rounds: int) 
                 finally:
                     path.write_text(orig)
                 rec.update({'category': category, 'scenario': name, 'round': r})
+                if think_gap_s > 0:
+                    rec['think_gap_s'] = think_gap_s
                 print(f"{rec['wall']:6.2f}s" + (f"  ERR={rec['errors']}" if rec['errors'] else ''))
                 samples.append(strip_private(rec))
     return samples
@@ -492,10 +496,11 @@ def summarize(samples: list[dict]) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument('--only', default='cold-clone,worktree,swarm-4,warm-heavy,warm-tiny')
+    ap.add_argument('--only', default='cold-clone,worktree,swarm-4,warm-heavy,warm-tiny,agent-paced')
     ap.add_argument('--stacks', default='stock,remote')
     ap.add_argument('--rounds', type=int, default=3)
     ap.add_argument('--cold-rounds', type=int, default=1)
+    ap.add_argument('--think-gap', type=float, default=5.0)
     ap.add_argument('--result', default='')
     args = ap.parse_args()
 
@@ -529,7 +534,7 @@ def main() -> None:
         doc['updated'] = time.strftime('%Y%m%d-%H%M%S')
         out_path.write_text(json.dumps(doc, indent=2) + '\n')
 
-    ordered_cats = [c for c in ('warm-tiny', 'warm-heavy', 'swarm-4', 'worktree', 'cold-clone') if c in cats]
+    ordered_cats = [c for c in ('warm-tiny', 'warm-heavy', 'agent-paced', 'swarm-4', 'worktree', 'cold-clone') if c in cats]
     total_steps = max(1, len(ordered_cats))
     done_steps = 0
 
@@ -550,6 +555,14 @@ def main() -> None:
             ('warm-jcode-test', 'jcode', 'test', ['-p', 'jcode-tui', '--lib', 'jarvis_listen', '--locked'], True),
             ('warm-jcode-bin', 'jcode', 'check', ['-p', 'jcode', '--bin', 'jcode', '--locked'], False),
         ], stacks, args.rounds))
+        save()
+        done_steps += 1
+    if 'agent-paced' in cats:
+        emit_progress('agent-paced')
+        doc['samples'].extend(run_warm('agent-paced', [
+            ('paced-uv-check', 'uv', 'check', ['-p', 'uv-resolver', '--locked'], False),
+            ('paced-jcode-test', 'jcode', 'test', ['-p', 'jcode-tui', '--lib', 'jarvis_listen', '--locked'], True),
+        ], stacks, args.rounds, think_gap_s=args.think_gap))
         save()
         done_steps += 1
     if 'swarm-4' in cats:
