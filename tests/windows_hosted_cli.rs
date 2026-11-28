@@ -128,7 +128,7 @@ fn malformed_saved_platform_and_unknown_setup_platform_fail_before_cargo() {
     );
     for args in [
         vec!["check", "--host-platform=win"],
-        vec!["remote", "use", "hosted", "--platform=macos"],
+        vec!["remote", "use", "hosted", "--platform=freebsd"],
         vec![
             "remote",
             "use",
