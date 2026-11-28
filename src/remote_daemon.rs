@@ -54,8 +54,18 @@ use sync_queue::SyncQueue;
 const IDLE_EXIT: Duration = Duration::from_secs(3600);
 const BARRIER_TIMEOUT: Duration = Duration::from_secs(60);
 
+fn daemon_file(name: &str) -> Result<PathBuf> {
+    let dir = crate::remote::dir()?;
+    let platform = crate::remote_windows::selected_platform().unwrap_or("linux");
+    if platform == "linux" {
+        Ok(dir.join(name))
+    } else {
+        Ok(dir.join(format!("{platform}-{name}")))
+    }
+}
+
 pub fn sock_path() -> Result<PathBuf> {
-    Ok(crate::remote::dir()?.join("daemon.sock"))
+    daemon_file("daemon.sock")
 }
 
 /// Content identity, cached once so reinstalling identical bytes keeps the daemon.
@@ -377,7 +387,7 @@ pub fn connect() -> Result<UnixStream> {
         .create(true)
         .truncate(false)
         .write(true)
-        .open(crate::remote::dir()?.join("daemon.lock"))?;
+        .open(daemon_file("daemon.lock")?)?;
     if let Some(s) = wait_for_daemon_lock(
         &lock,
         Duration::from_secs(30),
@@ -1081,7 +1091,7 @@ fn daemon() -> Result<()> {
         .create(true)
         .truncate(false)
         .write(true)
-        .open(crate::remote::dir()?.join("daemon.lock"))?;
+        .open(daemon_file("daemon.lock")?)?;
     if lock.try_lock().is_err() {
         bail!("another daemon is running");
     }

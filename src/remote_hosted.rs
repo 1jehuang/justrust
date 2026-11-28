@@ -2680,10 +2680,11 @@ fn ensure_ready_mode(refresh: bool, native_mode: Option<bool>) -> Result<Target>
                     "native hosted transport was required, but this worker does not advertise it"
                 );
             }
-            let mut tunnel = native.is_none()
-                && use_tunnel(setting("JUSTRUST_HOSTED_TUNNEL").as_deref(), || {
-                    direct_reachable(&r.address, r.port)
-                });
+            let mut tunnel = crate::remote_windows::selected_platform().unwrap_or("linux") == "macos"
+                || (native.is_none()
+                    && use_tunnel(setting("JUSTRUST_HOSTED_TUNNEL").as_deref(), || {
+                        direct_reachable(&r.address, r.port)
+                    }));
             let proxy = proxy_for(tunnel);
             tunnel = proxy.is_some();
             let mut t = if tunnel {
