@@ -1643,7 +1643,12 @@ fn fetch_inner(
                             .context(stream::TransferFailure));
                     }
                     if let Some(us) = pack_us {
-                        crate::e2e::note("artifacts.pack", us as f64 / 1e6);
+                        let key = if len == stream::TAG {
+                            "artifacts.stream_startup"
+                        } else {
+                            "artifacts.pack"
+                        };
+                        crate::e2e::note(key, us as f64 / 1e6);
                     }
                     if test_run.is_some()
                         && !selected.as_ref().is_some_and(|artifacts| {
@@ -1706,6 +1711,7 @@ fn fetch_inner(
                             validation,
                         )
                         .map_err(|e| e.context(stream::TransferFailure))?;
+                        crate::e2e::note("artifacts.streamed_full_files", 1.);
                         (dst, chunks.total)
                     } else {
                         (

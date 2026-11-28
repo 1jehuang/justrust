@@ -324,8 +324,13 @@ pub struct ArtifactTimes {
     pub header_wait: f64,
     /// Receiving and decoding payload bytes (they overlap: decode is streamed).
     pub receive: f64,
-    /// Sum of host preparation times of emitted payloads. Absent on legacy hosts.
+    /// Sum of host preparation times of completed, spooled payloads.
     pub pack: Option<f64>,
+    /// Snapshot and encoder startup through first output, not full encoding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_startup: Option<f64>,
+    #[serde(skip_serializing_if = "is_zero_bytes")]
+    pub streamed_full_files: u64,
     /// Wall spent reading compressed payload from the client stream.
     pub wire_read: f64,
     /// Remaining receive wall outside stream reads, excluding verification.
@@ -344,6 +349,8 @@ impl ArtifactTimes {
             header_wait: noted("artifacts.encode"),
             receive: noted("artifacts.receive"),
             pack: Some(noted("artifacts.pack")).filter(|s| *s > 0.),
+            stream_startup: Some(noted("artifacts.stream_startup")).filter(|s| *s > 0.),
+            streamed_full_files: noted("artifacts.streamed_full_files") as u64,
             wire_read: noted("artifacts.wire_read"),
             unpack_exposed: noted("artifacts.unpack_exposed"),
             verify: noted("artifacts.verify"),
@@ -703,8 +710,20 @@ pub fn render(e: &E2e) -> String {
     if let Some(pack) = e.artifact_times.and_then(|a| a.pack) {
         let _ = writeln!(
             o,
-            "  Host pack (emitted files): {pack:.3}s, may overlap client wait; not added to wall"
+            "  Host pack (spooled files): {pack:.3}s, may overlap client wait; not added to wall"
         );
+    }
+    if let Some(a) = e.artifact_times
+        && a.streamed_full_files > 0
+    {
+        let _ = write!(o, "  Streamed full artifacts: {}", a.streamed_full_files);
+        if let Some(s) = a.stream_startup {
+            let _ = write!(
+                o,
+                ", host time to first payload: {s:.3}s (sum, not added to wall)"
+            );
+        }
+        o.push('\n');
     }
     o
 }
@@ -850,6 +869,8 @@ mod tests {
         let raw = ArtifactTimes {
             header_wait: 0.5,
             pack: Some(3.75),
+            stream_startup: Some(0.125),
+            streamed_full_files: 2,
             receive: 3.,
             wire_read: 2.,
             unpack_exposed: 1.,
@@ -884,6 +905,7 @@ mod tests {
             "unpack outside reads",
             "2.0 MB payload",
             "3.750s, may overlap",
+            "Streamed full artifacts: 2, host time to first payload: 0.125s",
         ] {
             assert!(shown.contains(label), "{shown}");
         }
