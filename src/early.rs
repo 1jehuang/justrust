@@ -123,12 +123,20 @@ pub fn split_exit_marker(chunk: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((&chunk[..i], &chunk[i + EXIT_MARKER.len()..]))
 }
 
-/// `JUSTRUST_EARLY_EXIT=1`: return rust-analyzer's errors in the changed
-/// files at once, before rustc confirms them. Needs the build daemon, which
-/// keeps cargo running so the next identical request and `justrust log`
-/// get rustc's verdict. Turns early diagnostics on (`JUSTRUST_EARLY`
-/// defaults to on with it).
+/// `JUSTRUST_EARLY_EXIT` (default on; `0` disables): return rust-analyzer's
+/// errors in the changed files at once, before rustc confirms them. Needs the
+/// build daemon, which keeps cargo running so the next identical request and
+/// `justrust log` get rustc's verdict. Setting `JUSTRUST_EARLY_EXIT=1`
+/// explicitly also turns `JUSTRUST_EARLY` on (`Mode::On`) when unset.
 pub fn exit_wanted() -> bool {
+    parse_exit_wanted(std::env::var("JUSTRUST_EARLY_EXIT").ok().as_deref())
+}
+
+fn parse_exit_wanted(value: Option<&str>) -> bool {
+    !matches!(value, Some("0" | "off" | "false" | "no"))
+}
+
+fn exit_explicit() -> bool {
     matches!(
         std::env::var("JUSTRUST_EARLY_EXIT").as_deref(),
         Ok("1") | Ok("on") | Ok("true") | Ok("yes")
@@ -159,7 +167,7 @@ pub enum Mode {
 pub fn mode() -> Mode {
     parse_mode(
         std::env::var("JUSTRUST_EARLY").ok().as_deref(),
-        exit_wanted(),
+        exit_explicit(),
     )
 }
 
@@ -1937,6 +1945,17 @@ mod tests {
         assert_eq!(parse_mode(None, true), Mode::On);
         assert_eq!(parse_mode(Some("auto"), false), Mode::Auto);
         assert_eq!(parse_mode(Some("0"), true), Mode::Off);
+    }
+
+    #[test]
+    fn early_exit_defaults_on_and_respects_disable_values() {
+        assert!(parse_exit_wanted(None));
+        assert!(parse_exit_wanted(Some("1")));
+        assert!(parse_exit_wanted(Some("on")));
+        assert!(!parse_exit_wanted(Some("0")));
+        assert!(!parse_exit_wanted(Some("off")));
+        assert!(!parse_exit_wanted(Some("false")));
+        assert!(!parse_exit_wanted(Some("no")));
     }
 
     #[test]
