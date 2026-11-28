@@ -163,6 +163,7 @@ impl Agent {
             .env("JUSTRUST_NO_UPDATE", "1")
             .env("JUSTRUST_PREBUILT", "off")
             .env_remove("JUSTRUST_DEPCACHE_DIR")
+            .env_remove("JUSTRUST_CARGO_RESIDENT_DIR")
             .env_remove("JUSTRUST_RUN_DIR")
             .env_remove("JUSTRUST_DISABLE")
             .env_remove("RUSTC")

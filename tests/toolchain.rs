@@ -155,6 +155,7 @@ fn justrust(home: &Path, server: &str, cwd: &Path) -> Command {
         )
         .env("JUSTRUST_DEPCACHE", "0")
         .env_remove("JUSTRUST_TOOLCHAIN")
+        .env_remove("JUSTRUST_CARGO_RESIDENT_DIR")
         .env_remove("JUSTRUST_RUN_DIR")
         .env_remove("JUSTRUST_DISABLE")
         .env_remove("CARGO_TARGET_DIR");
